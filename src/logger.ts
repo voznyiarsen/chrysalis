@@ -15,6 +15,8 @@ interface UIBackend {
 export class Logger {
   private _debugMode = false;
   private _backend: UIBackend;
+  /** Optional bot number for multi-bot tagging. 0 = no tag (single-bot mode). */
+  public botNumber: number = 0;
 
   constructor() {
     this._backend = createTerminalUI() as unknown as UIBackend;
@@ -25,13 +27,36 @@ export class Logger {
     this._backend.setDebugMode(enabled);
   }
 
+  /**
+   * Create a child logger that prefixes all output with a bot number.
+   */
+  forBot(botNumber: number): Logger {
+    const child = new Logger();
+    child._debugMode = this._debugMode;
+    child._backend = this._backend; // share the same backend
+    child.botNumber = botNumber;
+    return child;
+  }
+
+  /**
+   * Build the bot tag prefix string.
+   * Returns a format suitable for prepending to tags, e.g., "[bot1] " or "".
+   */
+  private _botPrefix(): string {
+    return this.botNumber > 0 ? `[bot${this.botNumber}]` : "";
+  }
+
   // ── Low-level call ────────────────────────────────────────────
 
   /**
    * Log a structured entry through the backend.
    */
   private _log(message: unknown, tag: string, level: LogLevel): void {
-    this._backend.log(message, tag, level);
+    const botTag = this._botPrefix();
+    // If we have a bot tag, integrate it with the tag for cleaner output
+    // e.g., "[bot1 Status]" instead of "[bot1] [Status]"
+    const combinedTag = botTag && tag ? `${botTag} ${tag}` : (botTag || tag);
+    this._backend.log(message, combinedTag, level);
   }
 
   // ── Level-based API ───────────────────────────────────────────

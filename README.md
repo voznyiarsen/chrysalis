@@ -142,6 +142,23 @@ logger.exception(msg);
 logger.warning(msg);
 ```
 
+### Multi-Bot Logging
+
+In multi-bot mode, each bot's logs are prefixed with a bot identifier integrated into the tag:
+
+```
+# Single bot (no prefix):
+[Client] Successfully logged into account
+[Status] Health: 20.0, Food: 20
+
+# Multi-bot (bot number integrated into tag):
+[bot1 Status] Health: 20.0, Food: 20
+[bot2 Combat] Fall: Mitigating with Enchanted Golden Apple
+[bot1 Client] Connecting to localhost:25565 as Bot1...
+```
+
+This makes it immediately clear which bot each status message belongs to.
+
 ## Development
 
 - `npm run build`: Compile TypeScript to JavaScript (output in `dist/`).

@@ -106,6 +106,27 @@ class DebugManager {
       },
     });
 
+    cm.registerCommand("e2e_attack", {
+      description: "Test basic attack flow (attack nearest player)",
+      handler: async (_args: string[]) => {
+        await this.e2eAttack();
+      },
+    });
+
+    cm.registerCommand("e2e_goal", {
+      description: "Test goal-directed movement while in combat",
+      handler: async (_args: string[]) => {
+        await this.e2eGoal();
+      },
+    });
+
+    cm.registerCommand("e2e_strafe_goal", {
+      description: "Test strafing while moving toward a goal",
+      handler: async (_args: string[]) => {
+        await this.e2eStrafeGoal();
+      },
+    });
+
     cm.registerCommand("pdb", {
       description: "Debug info for a player",
       subcommands: {
@@ -345,8 +366,10 @@ class DebugManager {
 
       utils.applyImpulse(impulse, "set", true);
 
+      // Wait a tick for velocity to apply
       await this.bot.waitForTicks!(1);
-      // Wait a few ticks for the jump to resolve, then log post-jump state
+
+      // Wait for the entity to land after applying impulse
       while (!this.bot.entity.onGround) {
         await this.bot.waitForTicks!(1);
       }
@@ -381,6 +404,79 @@ class DebugManager {
     } else {
       logger.error(new Error("Cannot calculate jump velocity for test7"));
     }
+  }
+
+  /**
+   * E2E: Test basic attack flow.
+   * Attacks the nearest player, waits 40 ticks, then stops.
+   */
+  async e2eAttack(): Promise<void> {
+    const filter = (e: any) =>
+      e.type === "player" && e.username !== this.bot.username;
+    const target = this.bot.nearestEntity!(filter);
+    if (!target) {
+      logger.error(new Error("No player found for e2e_attack"));
+      return;
+    }
+
+    logger.debug(`e2e_attack: attacking ${target.username}`);
+    await (this.bot as any).pvp.attack(target);
+    await this.bot.waitForTicks!(40);
+    await (this.bot as any).pvp.stop();
+    logger.debug("e2e_attack: complete");
+  }
+
+  /**
+   * E2E: Test goal-directed movement while in combat.
+   * Attacks nearest player, sets a goal 10 blocks east, waits 100 ticks.
+   */
+  async e2eGoal(): Promise<void> {
+    const filter = (e: any) =>
+      e.type === "player" && e.username !== this.bot.username;
+    const target = this.bot.nearestEntity!(filter);
+    if (!target) {
+      logger.error(new Error("No player found for e2e_goal"));
+      return;
+    }
+
+    logger.debug(`e2e_goal: attacking ${target.username} with goal`);
+    await (this.bot as any).pvp.attack(target);
+
+    const goalPos = this.bot.entity!.position.offset(10, 0, 0);
+    logger.debug(`e2e_goal: set goal to ${goalPos.toString().slice(0, 30)}`);
+    (this.bot as any).pvp.setGoal(goalPos);
+
+    await this.bot.waitForTicks!(100);
+    (this.bot as any).pvp.clearGoal();
+    await (this.bot as any).pvp.stop();
+    logger.debug("e2e_goal: complete");
+  }
+
+  /**
+   * E2E: Test strafing while moving toward a goal.
+   * Attacks nearest player, sets a nearby goal, waits 80 ticks.
+   */
+  async e2eStrafeGoal(): Promise<void> {
+    const filter = (e: any) =>
+      e.type === "player" && e.username !== this.bot.username;
+    const target = this.bot.nearestEntity!(filter);
+    if (!target) {
+      logger.error(new Error("No player found for e2e_strafe_goal"));
+      return;
+    }
+
+    logger.debug(`e2e_strafe_goal: attacking ${target.username} with nearby goal`);
+    await (this.bot as any).pvp.attack(target);
+
+    // Set a goal just a few blocks away to test combined strafe+goal behavior
+    const goalPos = this.bot.entity!.position.offset(4, 0, 3);
+    logger.debug(`e2e_strafe_goal: goal=${goalPos.toString().slice(0, 30)}`);
+    (this.bot as any).pvp.setGoal(goalPos);
+
+    await this.bot.waitForTicks!(80);
+    (this.bot as any).pvp.clearGoal();
+    await (this.bot as any).pvp.stop();
+    logger.debug("e2e_strafe_goal: complete");
   }
 
   /**
