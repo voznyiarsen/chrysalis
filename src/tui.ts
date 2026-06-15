@@ -396,11 +396,7 @@ function createHeadlessUI(): UIBackend {
       const tagStr = tag ? `[${tag}]` : "";
       const levelStr = `[${level}]`;
       const timestamp = new Date().toISOString().substring(11, 19);
-      const parts: string[] = [];
-      if (tagStr) parts.push(tagStr);
-      parts.push(levelStr);
-      parts.push(formatted);
-      const line = `${timestamp} ${parts.join(" ")}`;
+      const line = `${timestamp} ${tagStr} ${levelStr} ${formatted}`;
       if (level === "ERROR") {
         // eslint-disable-next-line no-console
         console.error(line);
