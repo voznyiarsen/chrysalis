@@ -1,0 +1,318 @@
+/**
+ * Unit tests for pupa/src/utils.ts
+ * Tests AABB collision detection, projectile trajectory prediction, and fall damage calculations.
+ */
+
+import { AABB, UtilsManager } from "../src/utils";
+
+describe("AABB - Collision Detection", () => {
+  describe("constructor and basic properties", () => {
+    test("creates an AABB with correct bounds", () => {
+      const box = new AABB(0, 0, 0, 1, 2, 1);
+      expect(box.minX).toBe(0);
+      expect(box.minY).toBe(0);
+      expect(box.minZ).toBe(0);
+      expect(box.maxX).toBe(1);
+      expect(box.maxY).toBe(2);
+      expect(box.maxZ).toBe(1);
+    });
+  });
+
+  describe("offset", () => {
+    test("translates the AABB by given deltas", () => {
+      const box = new AABB(0, 0, 0, 1, 1, 1);
+      const moved = box.offset(2, 3, 4);
+      expect(moved.minX).toBe(2);
+      expect(moved.minY).toBe(3);
+      expect(moved.minZ).toBe(4);
+      expect(moved.maxX).toBe(3);
+      expect(moved.maxY).toBe(4);
+      expect(moved.maxZ).toBe(5);
+    });
+
+    test("does not mutate original AABB", () => {
+      const box = new AABB(0, 0, 0, 1, 1, 1);
+      box.offset(5, 5, 5);
+      expect(box.minX).toBe(0);
+    });
+  });
+
+  describe("extend", () => {
+    test("extends AABB in positive direction", () => {
+      const box = new AABB(0, 0, 0, 1, 1, 1);
+      const ext = box.extend(2, 0, 0);
+      expect(ext.minX).toBe(0);
+      expect(ext.maxX).toBe(3);
+    });
+
+    test("extends AABB in negative direction", () => {
+      const box = new AABB(0, 0, 0, 1, 1, 1);
+      const ext = box.extend(-2, 0, 0);
+      expect(ext.minX).toBe(-2);
+      expect(ext.maxX).toBe(1);
+    });
+
+    test("extends in all directions", () => {
+      const box = new AABB(0, 0, 0, 1, 1, 1);
+      const ext = box.extend(-1, 1, -1);
+      expect(ext.minX).toBe(-1);
+      expect(ext.maxX).toBe(1);
+      expect(ext.minY).toBe(0);
+      expect(ext.maxY).toBe(2);
+      expect(ext.minZ).toBe(-1);
+      expect(ext.maxZ).toBe(1);
+    });
+  });
+
+  describe("expand", () => {
+    test("expands uniformly on all sides", () => {
+      const box = new AABB(1, 1, 1, 3, 3, 3);
+      const expanded = box.expand(0.5);
+      expect(expanded.minX).toBe(0.5);
+      expect(expanded.minY).toBe(0.5);
+      expect(expanded.minZ).toBe(0.5);
+      expect(expanded.maxX).toBe(3.5);
+      expect(expanded.maxY).toBe(3.5);
+      expect(expanded.maxZ).toBe(3.5);
+    });
+  });
+
+  describe("intersects", () => {
+    test("two overlapping AABBs intersect", () => {
+      const a = new AABB(0, 0, 0, 2, 2, 2);
+      const b = new AABB(1, 1, 1, 3, 3, 3);
+      expect(a.intersects(b)).toBe(true);
+    });
+
+    test("two non-overlapping AABBs do not intersect", () => {
+      const a = new AABB(0, 0, 0, 1, 1, 1);
+      const b = new AABB(2, 2, 2, 3, 3, 3);
+      expect(a.intersects(b)).toBe(false);
+    });
+
+    test("adjacent AABBs with exact boundary do not intersect (EPS threshold)", () => {
+      const a = new AABB(0, 0, 0, 1, 1, 1);
+      const b = new AABB(1, 0, 0, 2, 1, 1);
+      expect(a.intersects(b)).toBe(false);
+    });
+
+    test("identical AABBs intersect", () => {
+      const a = new AABB(0, 0, 0, 1, 1, 1);
+      const b = new AABB(0, 0, 0, 1, 1, 1);
+      expect(a.intersects(b)).toBe(true);
+    });
+
+    test("one AABB fully inside another intersects", () => {
+      const outer = new AABB(0, 0, 0, 5, 5, 5);
+      const inner = new AABB(1, 1, 1, 2, 2, 2);
+      expect(outer.intersects(inner)).toBe(true);
+    });
+  });
+
+  describe("calculateXOffset", () => {
+    test("returns dx unchanged when no Y overlap", () => {
+      const player = new AABB(0, 0, 0, 0.6, 1.8, 0.6);
+      const block = new AABB(0, 2, 0, 1, 3, 1);
+      expect(player.calculateXOffset(block, 0.5)).toBe(0.5);
+    });
+
+    test("returns dx unchanged when no Z overlap", () => {
+      const player = new AABB(0, 0, 0, 0.6, 1.8, 0.6);
+      const block = new AABB(0.6, 0, 2, 1.6, 1, 3);
+      expect(player.calculateXOffset(block, 0.5)).toBe(0.5);
+    });
+
+    test("stops at block edge when moving right into block", () => {
+      const player = new AABB(0, 0, 0, 0.6, 1.8, 0.6);
+      const block = new AABB(0.6, 0, 0, 1.6, 1, 1);
+      const dx = player.calculateXOffset(block, 0.5);
+      expect(dx).toBeCloseTo(0);
+    });
+
+    test("stops at block edge when moving left into block", () => {
+      const player = new AABB(1, 0, 0, 1.6, 1.8, 0.6);
+      const block = new AABB(0, 0, 0, 1, 1, 1);
+      const dx = player.calculateXOffset(block, -0.5);
+      expect(dx).toBeCloseTo(0);
+    });
+
+    test("returns full dx when no collision", () => {
+      const player = new AABB(0, 0, 0, 0.6, 1.8, 0.6);
+      const block = new AABB(3, 0, 0, 4, 1, 1);
+      expect(player.calculateXOffset(block, 0.5)).toBe(0.5);
+    });
+
+    test("respects margin parameter", () => {
+      const player = new AABB(0, 0, 0, 0.6, 1.8, 0.6);
+      const block = new AABB(0.6, 0.1, 0, 1.6, 1, 1);
+      const dx = player.calculateXOffset(block, 0.5, 0);
+      expect(dx).toBeCloseTo(0);
+    });
+  });
+
+  describe("calculateYOffset", () => {
+    test("returns dy unchanged when no X overlap", () => {
+      const player = new AABB(0, 0, 0, 0.6, 1.8, 0.6);
+      const block = new AABB(3, 0, 0, 4, 1, 1);
+      expect(player.calculateYOffset(block, -0.5)).toBe(-0.5);
+    });
+
+    test("returns dy unchanged when no Z overlap", () => {
+      const player = new AABB(0, 0, 0, 0.6, 1.8, 0.6);
+      const block = new AABB(0, 0, 3, 1, 1, 4);
+      expect(player.calculateYOffset(block, -0.5)).toBe(-0.5);
+    });
+
+    test("stops at block floor when falling onto block", () => {
+      const player = new AABB(0, 1, 0, 0.6, 2.8, 0.6);
+      const block = new AABB(0, 0, 0, 1, 1, 1);
+      const dy = player.calculateYOffset(block, -0.5);
+      expect(dy).toBeCloseTo(0);
+    });
+
+    test("stops at block ceiling when jumping into block", () => {
+      const player = new AABB(0, 0, 0, 0.6, 1.8, 0.6);
+      const block = new AABB(0, 1.8, 0, 1, 2.8, 1);
+      const dy = player.calculateYOffset(block, 0.5);
+      expect(dy).toBeCloseTo(0);
+    });
+  });
+
+  describe("calculateZOffset", () => {
+    test("returns dz unchanged when no X overlap", () => {
+      const player = new AABB(0, 0, 0, 0.6, 1.8, 0.6);
+      const block = new AABB(3, 0, 0, 4, 1, 1);
+      expect(player.calculateZOffset(block, 0.5)).toBe(0.5);
+    });
+
+    test("returns dz unchanged when no Y overlap", () => {
+      const player = new AABB(0, 0, 0, 0.6, 1.8, 0.6);
+      const block = new AABB(0, 3, 0, 1, 4, 1);
+      expect(player.calculateZOffset(block, 0.5)).toBe(0.5);
+    });
+
+    test("stops at block edge when moving positive Z into block", () => {
+      const player = new AABB(0, 0, 0, 0.6, 1.8, 0.6);
+      const block = new AABB(0, 0, 0.6, 1, 1, 1.6);
+      const dz = player.calculateZOffset(block, 0.5);
+      expect(dz).toBeCloseTo(0);
+    });
+
+    test("stops at block edge when moving negative Z into block", () => {
+      const player = new AABB(0, 0, 1, 0.6, 1.8, 1.6);
+      const block = new AABB(0, 0, 0, 1, 1, 1);
+      const dz = player.calculateZOffset(block, -0.5);
+      expect(dz).toBeCloseTo(0);
+    });
+  });
+});
+
+describe("Fall Damage Calculations", () => {
+  let utilsManager: any;
+
+  beforeAll(() => {
+    const mockBot: any = {
+      version: "1.12.2",
+      registry: { blocksByName: {} },
+      entity: { effects: {} },
+      blockAt: () => null,
+    };
+    utilsManager = new UtilsManager(mockBot);
+  });
+
+  test("falls of 3 blocks or less deal 0 damage", () => {
+    expect(utilsManager.getFallDamage(0)).toBe(0);
+    expect(utilsManager.getFallDamage(1)).toBe(0);
+    expect(utilsManager.getFallDamage(2)).toBe(0);
+    expect(utilsManager.getFallDamage(3)).toBe(0);
+  });
+
+  test("falls of 4 blocks deal 1 damage", () => {
+    expect(utilsManager.getFallDamage(4)).toBe(1);
+  });
+
+  test("falls of 10 blocks deal 7 damage", () => {
+    expect(utilsManager.getFallDamage(10)).toBe(7);
+  });
+
+  test("falls of 23 blocks deal 20 damage (typically fatal)", () => {
+    expect(utilsManager.getFallDamage(23)).toBe(20);
+  });
+
+  test("falls of 100 blocks deal 97 damage", () => {
+    expect(utilsManager.getFallDamage(100)).toBe(97);
+  });
+
+  test("falls at exactly safe distance (3.0) deal 0 damage", () => {
+    expect(utilsManager.getFallDamage(3.0)).toBe(0);
+  });
+
+  test("falls slightly above safe distance (3.1) deal 0 damage due to floor", () => {
+    expect(utilsManager.getFallDamage(3.1)).toBe(0);
+  });
+
+  test("falls at 4.0 deal exactly 1 damage", () => {
+    expect(utilsManager.getFallDamage(4.0)).toBe(1);
+  });
+
+  test("negative fall distance returns 0 damage", () => {
+    expect(utilsManager.getFallDamage(-1)).toBe(0);
+    expect(utilsManager.getFallDamage(-100)).toBe(0);
+  });
+});
+
+describe("Projectile Trajectory Prediction", () => {
+  let utilsManager: any;
+
+  beforeAll(() => {
+    const mockBot: any = {
+      version: "1.12.2",
+      registry: { blocksByName: {} },
+      entity: { effects: {} },
+      blockAt: () => null,
+    };
+    utilsManager = new UtilsManager(mockBot);
+  });
+
+  test("return empty array for unreachable target (too far/steep)", () => {
+    const source = { x: 0, y: 0, z: 0 };
+    const target = { x: 100, y: 50, z: 0 };
+    const pitches = utilsManager.getProjectilePitch(source, target, 1.5, 0.03);
+    expect(pitches).toEqual([]);
+  });
+
+  test("returns two pitches for reachable target with ender pearl params", () => {
+    const source = { x: 0, y: 0, z: 0 };
+    const target = { x: 10, y: 0, z: 0 };
+    const pitches = utilsManager.getProjectilePitch(source, target, 1.5, 0.03, 0.99);
+    expect(pitches.length).toBe(2);
+    expect(pitches[0]).toBeGreaterThan(pitches[1]);
+  });
+
+  test("returns two distinct arcs for reachable target", () => {
+    const source = { x: 0, y: 0, z: 0 };
+    const target = { x: 10, y: 0, z: 0 };
+    const pitches = utilsManager.getProjectilePitch(source, target, 1.5, 0.03, 0.99);
+    expect(pitches.length).toBe(2);
+    expect(pitches[0]).not.toBe(pitches[1]);
+  });
+
+  test("handles vertical target (dx = 0) correctly", () => {
+    const source = { x: 0, y: 0, z: 0 };
+    const target = { x: 0, y: 5, z: 0 };
+    const pitches = utilsManager.getProjectilePitch(source, target, 5, 0.03);
+    expect(Array.isArray(pitches)).toBe(true);
+  });
+
+  test("drag parameter affects refined pitch values", () => {
+    const source = { x: 0, y: 0, z: 0 };
+    const target = { x: 10, y: 0, z: 0 };
+
+    const pitchesNoDrag = utilsManager.getProjectilePitch(source, target, 1.5, 0.03, 1.0);
+    const pitchesWithDrag = utilsManager.getProjectilePitch(source, target, 1.5, 0.03, 0.99);
+
+    if (pitchesNoDrag.length > 0 && pitchesWithDrag.length > 0) {
+      expect(pitchesNoDrag[0]).not.toBeCloseTo(pitchesWithDrag[0], 1);
+    }
+  });
+});
