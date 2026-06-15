@@ -4,15 +4,6 @@
  * Multi-bot registry: supports 1-4 bots via --bot1 through --bot4 flags.
  * Each bot operates independently with its own connection, plugins, and
  * command execution, sharing a single logger/TUI instance.
- *
- * verification CHECKLIST
- * INDEX - with listener management
- * COMBAT - with decision framework
- * INVENTORY - with generic equipment helper
- * COMMANDS - with command registry
- * UI - TUI with safe initialization
- * UTILS - with caching and debouncing
- * PVP-MANAGER - in-house PVP module
  */
 
 import "dotenv/config";
@@ -329,6 +320,7 @@ class BotRegistry {
             } catch (error: unknown) {
               botLog.error(`Headless command failed: ${(error as Error).message}`);
             } finally {
+              bot.end();
               this._countCompletion();
             }
           });

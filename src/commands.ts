@@ -588,9 +588,7 @@ export class CommandManager {
 
     logger.command(`Running '${cmd}' ${n} times (${m} tick gap)`);
 
-    this._runLoop(cmd, n, m).catch((err: unknown) =>
-      logger.error(`Run loop error: ${err instanceof Error ? err.message : String(err)}`),
-    );
+    await this._runLoop(cmd, n, m);
   }
 
   /**

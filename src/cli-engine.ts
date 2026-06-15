@@ -90,29 +90,46 @@ export function flattenTree(
  * Traverse the tree following the given tokens, returning the deepest matching node
  * and the unused token tail.
  */
+/**
+ * Return the effective lookup table for a node — its subcommands if they exist,
+ * or the node itself if treated as a flat map (for the root tree).
+ */
+function getSubcommandTable(node: Record<string, any> | CommandNode): Record<string, any> {
+  if ((node as CommandNode).subcommands) {
+    return (node as CommandNode).subcommands!;
+  }
+  return node as Record<string, any>;
+}
+
+/**
+ * Traverse the tree following the given tokens, returning the deepest matching node
+ * and the unused token tail.
+ */
 export function resolve(
   tree: Record<string, CommandNode>,
   tokens: string[],
 ): ResolveResult {
-  let current: Record<string, CommandNode | undefined> | CommandNode = tree;
+  let current: Record<string, any> = tree;
   const matched: string[] = [];
   let remaining = [...tokens];
 
   for (const token of tokens) {
-    if (current[token]) {
+    const table = getSubcommandTable(current);
+
+    if (table[token]) {
       matched.push(token);
-      current = current[token] as CommandNode;
+      current = table[token];
       remaining = remaining.slice(1);
       continue;
     }
 
-    // Check for positional parameter
-    const pos = Object.keys(current).find(
-      (k) => isPositional(k) && (current[k] as CommandNode | undefined)?.positional,
+    // Check for positional parameter inside subcommands
+    const pos = Object.keys(table).find(
+      (k) => isPositional(k) && (table[k] as CommandNode | undefined)?.positional,
     );
     if (pos) {
       matched.push(token);
-      current = current[pos] as CommandNode;
+      current = table[pos];
       remaining = remaining.slice(1);
       continue;
     }
@@ -121,7 +138,7 @@ export function resolve(
   }
 
   return {
-    node: current as CommandNode ?? null,
+    node: (current as CommandNode) ?? null,
     matched,
     remaining,
   };
