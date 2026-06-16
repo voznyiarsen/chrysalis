@@ -37,38 +37,32 @@ npm run build
 npm start
 ```
 
-Or run directly from source (requires `ts-node` or similar):
-
-```bash
-node dist/src/index.js
-```
-
 ## Commands
 
 Commands use a hierarchical Cisco IOS-style CLI. Type `?` (Shift-/) at any prompt to see available commands and subcommands in the current context. Press **Tab** to auto-complete tokens or show completions when ambiguous.
 
-| Command | Description |
-|---------|-------------|
-| `as` | Toggle autosend (sends unrecognized commands as chat) |
-| `v` | Show version and connection info |
-| `pos` | Show current position |
-| `com` | Toggle combat mode on/off |
-| `cm [0-3]` | Change combat mode (0=Mobs, 1=Players Survival, 2=Players All, 3=All Entities) |
-| `s` | Pacify bot — stop combat and any active run loop |
-| `q` | Quit the bot |
-| `ts <item> [count]` | Toss a single item or stack |
-| `tsall` | Toss all items from inventory |
-| `eq <item> <slot>` | Equip an item to a slot (hand, off-hand, head, torso, legs, feet) |
-| `uneq <slot>` | Unequip an item from a slot |
-| `uneqall` | Unequip all items |
-| `rec [slot]` | Record inventory to a JSON file (default slot 0) |
-| `res [slot]` | Restore inventory from a recorded JSON file |
-| `clear` | Clear inventory via creative mode |
-| `pause <ticks>` | Pause the bot for N ticks |
-| `run <cmd> <N> <M>` | Run a command N times with M ticks between each execution |
-| `cfg` | List all active runtime configuration overrides |
-| `cfg <CATEGORY.KEY>` | View a specific config value (e.g., `cfg COMBAT.STRAFE_RANGE`) |
-| `cfg <CATEGORY.KEY> <value>` | Set a runtime override (e.g., `cfg COMBAT.ATTACK_RANGE 4.0`) |
+| Command                      | Description                                                                    |
+| ---------------------------- | ------------------------------------------------------------------------------ |
+| `as`                         | Toggle autosend (sends unrecognized commands as chat)                          |
+| `v`                          | Show version and connection info                                               |
+| `pos`                        | Show current position                                                          |
+| `com`                        | Toggle combat mode on/off                                                      |
+| `cm [0-3]`                   | Change combat mode (0=Mobs, 1=Players Survival, 2=Players All, 3=All Entities) |
+| `s`                          | Pacify bot — stop combat and any active run loop                               |
+| `q`                          | Quit the bot                                                                   |
+| `ts <item> [count]`          | Toss a single item or stack                                                    |
+| `tsall`                      | Toss all items from inventory                                                  |
+| `eq <item> <slot>`           | Equip an item to a slot (hand, off-hand, head, torso, legs, feet)              |
+| `uneq <slot>`                | Unequip an item from a slot                                                    |
+| `uneqall`                    | Unequip all items                                                              |
+| `rec [slot]`                 | Record inventory to a JSON file (default slot 0)                               |
+| `res [slot]`                 | Restore inventory from a recorded JSON file                                    |
+| `clear`                      | Clear inventory via creative mode                                              |
+| `pause <ticks>`              | Pause the bot for N ticks                                                      |
+| `run <cmd> <N> <M>`          | Run a command N times with M ticks between each execution                      |
+| `cfg`                        | List all active runtime configuration overrides                                |
+| `cfg <CATEGORY.KEY>`         | View a specific config value (e.g., `cfg COMBAT.STRAFE_RANGE`)                 |
+| `cfg <CATEGORY.KEY> <value>` | Set a runtime override (e.g., `cfg COMBAT.ATTACK_RANGE 4.0`)                   |
 
 ### Variable Substitution
 
@@ -98,16 +92,19 @@ The following constants can be adjusted at runtime via the `cfg` command:
 
 ### Debug Commands
 
-| Command | Description |
-|---------|-------------|
-| `t0` | Single strafe test at (+3, 0, 0) |
-| `t1` | Loop strafe test (call again to stop) |
-| `t2 <mode> <x> <y> <z>` | Throw pearl at nearest player with arc mode (`low`/`high`/`auto`) and per-axis offset (e.g., `t2 auto x+2.5 y-1.0 z+0.75`) |
-| `t5` | Test jump path to nearest player |
-| `t6` | Run 9 jump-path obstacle scenarios |
-| `t7` | Jump test to (+3, 0, 0) with pre/post state logging and tolerance check |
-| `pdb <username>` | Debug info for a player |
-| `sdb <slot>` | Debug info for an inventory slot |
+| Command                                | Description                                                                                                                               |
+| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `debug_strafe_once`                    | Single strafe test at (+3, 0, 0)                                                                                                          |
+| `debug_strafe_loop`                    | Loop the strafe test (call again to stop)                                                                                                 |
+| `debug_pearl_throw <mode> <x> <y> <z>` | Throw pearl at nearest player with arc mode (`low`/`high`/`auto`) and per-axis offset (e.g., `debug_pearl_throw auto x+2.5 y-1.0 z+0.75`) |
+| `debug_jump_path`                      | Test isJumpPathClear against nearest player's current position                                                                            |
+| `debug_collision_stress`               | Run 9 jump-path obstacle scenarios                                                                                                        |
+| `debug_jump_test`                      | Jump test to (+3, 0, 0) with pre/post state logging and tolerance check                                                                   |
+| `debug_player <username>`              | Debug info for a player                                                                                                                   |
+| `debug_slot <slot>`                    | Debug info for an inventory slot                                                                                                          |
+| `debug_e2e_attack`                     | E2E: Basic attack flow                                                                                                                    |
+| `debug_e2e_goal`                       | E2E: Goal-directed movement while in combat                                                                                               |
+| `debug_e2e_strafe_goal`                | E2E: Strafing while moving toward a goal                                                                                                  |
 
 ## Log Levels
 
@@ -181,41 +178,41 @@ npx jest --verbose
 The bot can run in headless mode for automated testing without a TUI:
 
 ```bash
-# Run from compiled output
-node dist/src/index.js --headless "dud"
+# Run headless (requires prior build)
+npm start -- --headless "dud"
 
 # Chain multiple commands
-node dist/src/index.js --headless "cmd1; cmd2; cmd3;"
+npm start -- --headless "cmd1; cmd2; cmd3;"
 
 # Repeat a command N times with M tick gap
-node dist/src/index.js --headless "run t0 10 5" --timeout 30
+npm start -- --headless "run t0 10 5" --timeout 30
 
 # Test inventory recording/restoring
-node dist/src/index.js --headless "rec 1; clear; res 1" --timeout 30
+npm start -- --headless "rec 1; clear; res 1" --timeout 30
 
 # Flags can appear in any order
-node dist/src/index.js --timeout 60 --headless "eq 1 boots; v"
+npm start -- --timeout 60 --headless "eq 1 boots; v"
 ```
 
 The headless mode defaults to a 10-second timeout. Use `--timeout <seconds>` to customize.
 
 ## Project Structure
 
-| File | Purpose |
-|------|---------|
-| `src/index.ts` | Entry point, listener management, plugin loading |
-| `src/tui.ts` | Terminal UI (blessed) or headless console logger with log levels |
-| `src/logger.ts` | Unified logging facade — all modules must use this |
-| `src/commands.ts` | Hierarchical command tree with context-sensitive CLI support |
+| File                | Purpose                                                                                     |
+| ------------------- | ------------------------------------------------------------------------------------------- |
+| `src/index.ts`      | Entry point, listener management, plugin loading                                            |
+| `src/tui.ts`        | Terminal UI (blessed) or headless console logger with log levels                            |
+| `src/logger.ts`     | Unified logging facade — all modules must use this                                          |
+| `src/commands.ts`   | Hierarchical command tree with context-sensitive CLI support                                |
 | `src/cli-engine.ts` | CLI engine — tokenization, resolution, suggestions, abbreviation expansion, help generation |
-| `src/pvp.ts` | Combat manager, strafing, targeting, decision tree |
-| `src/inventory.ts` | Inventory manager, equipment, item caching |
-| `src/utils.ts` | Physics (AABB, trajectory, collision), movement utilities, LRU block cache |
-| `src/config.ts` | Runtime configuration manager for mutable constants |
-| `src/debug.ts` | Debug/test commands for development |
-| `src/constants.ts` | Centralized constants (physics, combat, materials, timing) |
-| `tests/` | Unit tests for utils and pvp modules |
-| `dist/` | Compiled JavaScript output (generated by `npm run build`) |
+| `src/pvp.ts`        | Combat manager, strafing, targeting, decision tree                                          |
+| `src/inventory.ts`  | Inventory manager, equipment, item caching                                                  |
+| `src/utils.ts`      | Physics (AABB, trajectory, collision), movement utilities, LRU block cache                  |
+| `src/config.ts`     | Runtime configuration manager for mutable constants                                         |
+| `src/debug.ts`      | Debug/test commands for development                                                         |
+| `src/constants.ts`  | Centralized constants (physics, combat, materials, timing)                                  |
+| `tests/`            | Unit tests for utils and pvp modules                                                        |
+| `dist/`             | Compiled JavaScript output (generated by `npm run build`)                                   |
 
 ## License
 
