@@ -13,7 +13,9 @@ let uiInstance: UIBackend | null = null;
 // ── Headless mode detection ────────────────────────────────────────
 // Check argv before blessed is even required
 // Also detect Jest test environment
-const HEADLESS = process.argv.includes("--headless") || process.env.JEST_WORKER_ID !== undefined;
+const HEADLESS =
+  process.argv.includes("--headless") ||
+  process.env.JEST_WORKER_ID !== undefined;
 
 // ── Interface definitions ──────────────────────────────────────────
 
@@ -52,10 +54,14 @@ const CRASH_LOG_DIR = (() => {
 
 function getLevelPrefix(level: string): string {
   switch (level) {
-    case "DEBUG": return "{gray-fg}[DEBUG]{/}";
-    case "WARN":  return "{yellow-fg}[WARN]{/}";
-    case "ERROR": return "{red-fg}[ERROR]{/}";
-    default:      return "{cyan-fg}[INFO]{/}";
+    case "DEBUG":
+      return "{gray-fg}[DEBUG]{/}";
+    case "WARN":
+      return "{yellow-fg}[WARN]{/}";
+    case "ERROR":
+      return "{red-fg}[ERROR]{/}";
+    default:
+      return "{cyan-fg}[INFO]{/}";
   }
 }
 
@@ -130,7 +136,9 @@ function createTerminalUI(): UIBackend {
       try {
         cb(text);
       } catch (error: unknown) {
-        logBox.log(`{red-fg}[Input Handler Error]{/} ${(error as Error).message}`);
+        logBox.log(
+          `{red-fg}[Input Handler Error]{/} ${(error as Error).message}`,
+        );
       }
     });
     inputBox.clearValue();
@@ -201,7 +209,10 @@ function createTerminalUI(): UIBackend {
     if (!text) {
       // Top-level help
       const helpStr = cli.getHelp(cmdMgr.tree, []);
-      (uiInstance as UIBackend).log(`Available commands:\n${helpStr}`, "Command");
+      (uiInstance as UIBackend).log(
+        `Available commands:\n${helpStr}`,
+        "Command",
+      );
       return;
     }
 
@@ -289,9 +300,14 @@ function createTerminalUI(): UIBackend {
         formattedMessage = String(message);
       }
 
-      if (formattedMessage === lastLogMessage && tag === lastLogTag && level === lastLogLevel) {
+      if (
+        formattedMessage === lastLogMessage &&
+        tag === lastLogTag &&
+        level === lastLogLevel
+      ) {
         lastLogCount++;
-        const tagStr = tag ? `{bold}[${tag}]{/bold} ` : "";
+        // Tag is already formatted by Logger (e.g., "[bot1 Status]")
+        const tagStr = tag ? `{bold}${tag}{/bold} ` : "";
         const levelStr = getLevelPrefix(level);
         const newLine = `{cyan-fg}[${lastLogTimestamp}]{/} ${tagStr}${levelStr} ${formattedMessage} {yellow-fg}(x${lastLogCount}){/}`;
 
@@ -307,7 +323,8 @@ function createTerminalUI(): UIBackend {
         lastLogCount = 1;
         lastLogTimestamp = new Date().toISOString().substring(11, 19);
 
-        const tagStr = tag ? `{bold}[${tag}]{/bold} ` : "";
+        // Tag is already formatted by Logger (e.g., "[bot1 Status]")
+        const tagStr = tag ? `{bold}${tag}{/bold} ` : "";
         const levelStr = getLevelPrefix(level);
         logBox.log(
           `{cyan-fg}[${lastLogTimestamp}]{/} ${tagStr}${levelStr} ${formattedMessage}`,
@@ -383,7 +400,9 @@ function createHeadlessUI(): UIBackend {
   return {
     _debugMode: false,
     _commandManager: null,
-    setDebugMode(enabled: boolean): void { this._debugMode = enabled; },
+    setDebugMode(enabled: boolean): void {
+      this._debugMode = enabled;
+    },
     /**
      * Log a message to the headless console with an optional tag and log level.
      * @param message - The message to log
@@ -393,10 +412,11 @@ function createHeadlessUI(): UIBackend {
     log(message: unknown, tag: string = "", level: string = "INFO"): void {
       if (!this._debugMode && level === "DEBUG") return;
       const formatted = formatMessage(message);
-      const tagStr = tag ? `[${tag}]` : "";
+      // Tag is already formatted by Logger (e.g., "[bot1 Status]")
+      const tagStr = tag ? `${tag} ` : "";
       const levelStr = `[${level}]`;
       const timestamp = new Date().toISOString().substring(11, 19);
-      const line = `${timestamp} ${tagStr} ${levelStr} ${formatted}`;
+      const line = `${timestamp} ${tagStr}${levelStr} ${formatted}`;
       if (level === "ERROR") {
         // eslint-disable-next-line no-console
         console.error(line);
@@ -414,12 +434,16 @@ function createHeadlessUI(): UIBackend {
      * Get empty log history (headless mode has no log storage).
      * @returns Empty array
      */
-    getHistory(): string[] { return []; },
+    getHistory(): string[] {
+      return [];
+    },
     /**
      * Get scroll position (headless mode has no scrolling).
      * @returns Always 0
      */
-    getScrollPosition(): number { return 0; },
+    getScrollPosition(): number {
+      return 0;
+    },
     /**
      * No-op destroy for headless mode.
      */

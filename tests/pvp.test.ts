@@ -17,10 +17,18 @@ describe("CombatDecision", () => {
   });
 
   test("condition can be evaluated", () => {
-    const decision = new CombatDecision(() => true, async () => {}, "true");
+    const decision = new CombatDecision(
+      () => true,
+      async () => {},
+      "true",
+    );
     expect(decision.condition()).toBe(true);
 
-    const falseDecision = new CombatDecision(() => false, async () => {}, "false");
+    const falseDecision = new CombatDecision(
+      () => false,
+      async () => {},
+      "false",
+    );
     expect(falseDecision.condition()).toBe(false);
   });
 
@@ -38,8 +46,16 @@ describe("CombatDecision", () => {
   });
 
   test("multiple decisions are independent", () => {
-    const d1 = new CombatDecision(() => true, async () => {}, "d1");
-    const d2 = new CombatDecision(() => false, async () => {}, "d2");
+    const d1 = new CombatDecision(
+      () => true,
+      async () => {},
+      "d1",
+    );
+    const d2 = new CombatDecision(
+      () => false,
+      async () => {},
+      "d2",
+    );
     expect(d1.condition()).toBe(true);
     expect(d2.condition()).toBe(false);
   });
@@ -126,6 +142,21 @@ describe("CombatManager - Health Status", () => {
         get: () => Constants.COMBAT.STRAFE_RANGE,
       },
       pathfinder: { stop: async () => {} },
+      __logger: {
+        combat: (...args: unknown[]) => {},
+        debug: (...args: unknown[]) => {},
+        error: (...args: unknown[]) => {},
+        info: (...args: unknown[]) => {},
+        warn: (...args: unknown[]) => {},
+        command: (...args: unknown[]) => {},
+        inventory: (...args: unknown[]) => {},
+        status: (...args: unknown[]) => {},
+        config: (...args: unknown[]) => {},
+        client: (...args: unknown[]) => {},
+        chat: (...args: unknown[]) => {},
+        exception: (...args: unknown[]) => {},
+        warning: (...args: unknown[]) => {},
+      },
     };
 
     manager = new CombatManager(mockBot);

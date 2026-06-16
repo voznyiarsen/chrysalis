@@ -284,7 +284,13 @@ describe("Projectile Trajectory Prediction", () => {
   test("returns two pitches for reachable target with ender pearl params", () => {
     const source = { x: 0, y: 0, z: 0 };
     const target = { x: 10, y: 0, z: 0 };
-    const pitches = utilsManager.getProjectilePitch(source, target, 1.5, 0.03, 0.99);
+    const pitches = utilsManager.getProjectilePitch(
+      source,
+      target,
+      1.5,
+      0.03,
+      0.99,
+    );
     expect(pitches.length).toBe(2);
     expect(pitches[0]).toBeGreaterThan(pitches[1]);
   });
@@ -292,7 +298,13 @@ describe("Projectile Trajectory Prediction", () => {
   test("returns two distinct arcs for reachable target", () => {
     const source = { x: 0, y: 0, z: 0 };
     const target = { x: 10, y: 0, z: 0 };
-    const pitches = utilsManager.getProjectilePitch(source, target, 1.5, 0.03, 0.99);
+    const pitches = utilsManager.getProjectilePitch(
+      source,
+      target,
+      1.5,
+      0.03,
+      0.99,
+    );
     expect(pitches.length).toBe(2);
     expect(pitches[0]).not.toBe(pitches[1]);
   });
@@ -308,8 +320,20 @@ describe("Projectile Trajectory Prediction", () => {
     const source = { x: 0, y: 0, z: 0 };
     const target = { x: 10, y: 0, z: 0 };
 
-    const pitchesNoDrag = utilsManager.getProjectilePitch(source, target, 1.5, 0.03, 1.0);
-    const pitchesWithDrag = utilsManager.getProjectilePitch(source, target, 1.5, 0.03, 0.99);
+    const pitchesNoDrag = utilsManager.getProjectilePitch(
+      source,
+      target,
+      1.5,
+      0.03,
+      1.0,
+    );
+    const pitchesWithDrag = utilsManager.getProjectilePitch(
+      source,
+      target,
+      1.5,
+      0.03,
+      0.99,
+    );
 
     if (pitchesNoDrag.length > 0 && pitchesWithDrag.length > 0) {
       expect(pitchesNoDrag[0]).not.toBeCloseTo(pitchesWithDrag[0], 1);

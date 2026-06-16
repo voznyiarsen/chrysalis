@@ -94,7 +94,9 @@ export function flattenTree(
  * Return the effective lookup table for a node — its subcommands if they exist,
  * or the node itself if treated as a flat map (for the root tree).
  */
-function getSubcommandTable(node: Record<string, any> | CommandNode): Record<string, any> {
+function getSubcommandTable(
+  node: Record<string, any> | CommandNode,
+): Record<string, any> {
   if ((node as CommandNode).subcommands) {
     return (node as CommandNode).subcommands!;
   }
@@ -125,7 +127,8 @@ export function resolve(
 
     // Check for positional parameter inside subcommands
     const pos = Object.keys(table).find(
-      (k) => isPositional(k) && (table[k] as CommandNode | undefined)?.positional,
+      (k) =>
+        isPositional(k) && (table[k] as CommandNode | undefined)?.positional,
     );
     if (pos) {
       matched.push(token);

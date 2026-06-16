@@ -5,7 +5,12 @@ import configPrettier from "eslint-config-prettier";
 /** @type {import('eslint').Linter.Config[]} */
 export default [
   {
-    ignores: ["documentation/**", "minecraft-clients/**", "patching-scripts/**", "logs/**"],
+    ignores: [
+      "documentation/**",
+      "minecraft-clients/**",
+      "patching-scripts/**",
+      "logs/**",
+    ],
   },
   pluginJs.configs.recommended,
   configPrettier,

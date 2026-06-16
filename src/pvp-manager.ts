@@ -25,7 +25,12 @@ import { Constants } from "./constants";
 
 /** Registered item substrings that are considered PVP weapons. */
 const WEAPON_NAMES = [
-  "sword", "trident", "axe", "pickaxe", "shovel", "hoe",
+  "sword",
+  "trident",
+  "axe",
+  "pickaxe",
+  "shovel",
+  "hoe",
 ] as const;
 
 /**
@@ -39,11 +44,18 @@ export function getAttackSpeed(itemName?: string | null): number {
     if (itemName.includes(prefix)) {
       // Look for an exact match first, then try the prefix
       const key = itemName.replace(/^minecraft:/, "");
-      const speed = (Constants.WEAPON_ATTACK_SPEEDS as Record<string, number>)[key];
+      const speed = (Constants.WEAPON_ATTACK_SPEEDS as Record<string, number>)[
+        key
+      ];
       if (speed !== undefined) return speed;
       // Fallback: use the prefix lookup (all swords share 1.6, etc.)
       const speeds: Record<string, number> = {
-        sword: 1.6, trident: 1.1, axe: 1.0, pickaxe: 1.2, shovel: 1.0, hoe: 1.0,
+        sword: 1.6,
+        trident: 1.1,
+        axe: 1.0,
+        pickaxe: 1.2,
+        shovel: 1.0,
+        hoe: 1.0,
       };
       return speeds[prefix] ?? Constants.WEAPON_ATTACK_SPEEDS.OTHER;
     }
@@ -269,10 +281,7 @@ export class PVPManager {
    */
   private checkExplosion(): void {
     if (!this.target || !this.hasShield()) return;
-    if (
-      this.target.name === "creeper" &&
-      this.target.metadata[16] === 1
-    ) {
+    if (this.target.name === "creeper" && this.target.metadata[16] === 1) {
       this.blockingExplosion = true;
       const pf = this.bot.pathfinder;
       if (pf) pf.stop();
@@ -324,7 +333,8 @@ export class PVPManager {
    * Compute the weapon cooldown from the held item.
    */
   private getWeaponCooldown(): number {
-    const slot = this.bot.inventory.slots[this.bot.getEquipmentDestSlot("hand")];
+    const slot =
+      this.bot.inventory.slots[this.bot.getEquipmentDestSlot("hand")];
     return getCooldown(slot?.name);
   }
 
@@ -332,8 +342,10 @@ export class PVPManager {
    * Whether the bot currently has a shield in the off-hand.
    */
   private hasShield(): boolean {
-    if ((this.bot as any).supportFeature?.("doesntHaveOffHandSlot")) return false;
-    const slot = this.bot.inventory.slots[this.bot.getEquipmentDestSlot("off-hand")];
+    if ((this.bot as any).supportFeature?.("doesntHaveOffHandSlot"))
+      return false;
+    const slot =
+      this.bot.inventory.slots[this.bot.getEquipmentDestSlot("off-hand")];
     if (!slot) return false;
     return slot.name.includes("shield");
   }
