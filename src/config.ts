@@ -19,7 +19,9 @@ export class RuntimeConfig {
     if (this._overrides.has(overrideKey)) {
       return this._overrides.get(overrideKey);
     }
-    return (Constants as Record<string, Record<string, unknown>>)[category]?.[key];
+    return (Constants as Record<string, Record<string, unknown>>)[category]?.[
+      key
+    ];
   }
 
   /**

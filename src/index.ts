@@ -133,27 +133,37 @@ function resolveConfig(def: BotDefinition): BotConfig {
   const globalUsernameIdx = process.argv.indexOf("--username");
   const globalVersionIdx = process.argv.indexOf("--version");
 
-  const baseUsername = def.username
-    || (globalUsernameIdx !== -1 ? process.argv[globalUsernameIdx + 1] : undefined)
-    || process.env.PUPA_NAME
-    || "Pupa";
+  const baseUsername =
+    def.username ||
+    (globalUsernameIdx !== -1
+      ? process.argv[globalUsernameIdx + 1]
+      : undefined) ||
+    process.env.PUPA_NAME ||
+    "Pupa";
 
   // Append bot number to username to prevent conflicts when multiple bots
   // connect to the same server. Single-bot mode (bot 1) gets "Pupa1".
   const username = `${baseUsername}${def.number}`;
 
   return {
-    host: def.host
-      || (globalHostIdx !== -1 ? process.argv[globalHostIdx + 1] : undefined)
-      || process.env.PUPA_HOST
-      || "localhost",
-    port: def.port
-      || (globalPortIdx !== -1 ? parseInt(process.argv[globalPortIdx + 1], 10) : undefined)
-      || parseInt(process.env.PUPA_PORT || "25565", 10),
+    host:
+      def.host ||
+      (globalHostIdx !== -1 ? process.argv[globalHostIdx + 1] : undefined) ||
+      process.env.PUPA_HOST ||
+      "localhost",
+    port:
+      def.port ||
+      (globalPortIdx !== -1
+        ? parseInt(process.argv[globalPortIdx + 1], 10)
+        : undefined) ||
+      parseInt(process.env.PUPA_PORT || "25565", 10),
     username,
-    version: def.version
-      || (globalVersionIdx !== -1 ? process.argv[globalVersionIdx + 1] : undefined)
-      || undefined,
+    version:
+      def.version ||
+      (globalVersionIdx !== -1
+        ? process.argv[globalVersionIdx + 1]
+        : undefined) ||
+      undefined,
   };
 }
 
@@ -169,6 +179,8 @@ class BotRegistry {
   public loggers: Map<number, Logger> = new Map();
   /** Map of bot number -> resolved config */
   public configs: Map<number, BotConfig> = new Map();
+  /** Map of bot number -> runtime config */
+  public runtimeConfigs: Map<number, RuntimeConfig> = new Map();
   /** How many bots have finished executing (headless mode) */
   private _completedCount = 0;
   /** Total bots to wait for (headless mode) */
@@ -209,7 +221,9 @@ class BotRegistry {
     const cfg = this.getConfig(botNumber);
     const botLog = this.getLogger(botNumber);
 
-    botLog.client(`Connecting to ${cfg.host}:${cfg.port} as ${cfg.username}...`);
+    botLog.client(
+      `Connecting to ${cfg.host}:${cfg.port} as ${cfg.username}...`,
+    );
 
     const bot = mineflayer.createBot({
       host: cfg.host,
@@ -221,6 +235,11 @@ class BotRegistry {
     });
 
     this.bots.set(botNumber, bot);
+
+    // Create per-bot RuntimeConfig
+    const runtimeConfig = new RuntimeConfig();
+    this.runtimeConfigs.set(botNumber, runtimeConfig);
+    (bot as any).runtimeConfig = runtimeConfig;
 
     // Store the logger on the bot for plugin access
     (bot as any).__botNumber = botNumber;
@@ -234,7 +253,11 @@ class BotRegistry {
   /**
    * Set up lifecycle listeners for a single bot.
    */
-  private _setupBotListeners(bot: Bot, botNumber: number, cfg: BotConfig): void {
+  private _setupBotListeners(
+    bot: Bot,
+    botNumber: number,
+    cfg: BotConfig,
+  ): void {
     const botLog = this.getLogger(botNumber);
     const lm = this._createListenerManager();
 
@@ -276,12 +299,12 @@ class BotRegistry {
         botLog.client(`  ✓ Loaded: ${loaded.join(", ")}`);
       }
       if (failed.length > 0) {
-        botLog.error(
-          `  ✗ Failed: ${failed.map((f) => f.name).join(", ")}`,
-        );
+        botLog.error(`  ✗ Failed: ${failed.map((f) => f.name).join(", ")}`);
       }
 
-      botLog.client(`Pupa managers: ${loaded.length}/${managers.length} loaded`);
+      botLog.client(
+        `Pupa managers: ${loaded.length}/${managers.length} loaded`,
+      );
 
       // Apply PVP movement settings
       Object.assign((bot as any).pvp.movements, {
@@ -298,9 +321,18 @@ class BotRegistry {
 
       // Apply PVP movement settings using runtime config
       (bot as any).runtimeConfig = new RuntimeConfig();
-      (bot as any).pvp.attackRange = (bot as any).runtimeConfig.get("COMBAT", "ATTACK_RANGE");
-      (bot as any).pvp.followRange = (bot as any).runtimeConfig.get("COMBAT", "FOLLOW_RANGE");
-      (bot as any).pvp.viewDistance = (bot as any).runtimeConfig.get("COMBAT", "VIEW_DISTANCE");
+      (bot as any).pvp.attackRange = (bot as any).runtimeConfig.get(
+        "COMBAT",
+        "ATTACK_RANGE",
+      );
+      (bot as any).pvp.followRange = (bot as any).runtimeConfig.get(
+        "COMBAT",
+        "FOLLOW_RANGE",
+      );
+      (bot as any).pvp.viewDistance = (bot as any).runtimeConfig.get(
+        "COMBAT",
+        "VIEW_DISTANCE",
+      );
 
       (bot as any).listenerManager = lm;
       (bot as any).botNumber = botNumber;
@@ -318,7 +350,9 @@ class BotRegistry {
                 await (bot as any).commandManager.query(cmd);
               }
             } catch (error: unknown) {
-              botLog.error(`Headless command failed: ${(error as Error).message}`);
+              botLog.error(
+                `Headless command failed: ${(error as Error).message}`,
+              );
             } finally {
               bot.end();
               this._countCompletion();
@@ -373,7 +407,9 @@ class BotRegistry {
       if (entity.type === "player" && entity.username === bot.username) {
         await bot.waitForTicks!(1);
         (bot as any).combatManager.getLastDamage();
-        botLog.status(`Health: ${(bot as any).health.toFixed(1)}, Food: ${(bot as any).food}`);
+        botLog.status(
+          `Health: ${(bot as any).health.toFixed(1)}, Food: ${(bot as any).food}`,
+        );
       }
     });
   }
@@ -431,10 +467,15 @@ class BotRegistry {
    * For TUI mode: route a command to one or all bots.
    * Supports "bot1,2 command" syntax — returns which bot numbers to send to.
    */
-  parseBotPrefix(input: string): { botNumbers: number[]; command: string } | null {
+  parseBotPrefix(
+    input: string,
+  ): { botNumbers: number[]; command: string } | null {
     const match = input.match(/^bot([\d,\s]+)\s(.+)/);
     if (match) {
-      const list = match[1].split(",").map((s) => parseInt(s.trim(), 10)).filter((n) => n >= 1 && n <= 4);
+      const list = match[1]
+        .split(",")
+        .map((s) => parseInt(s.trim(), 10))
+        .filter((n) => n >= 1 && n <= 4);
       if (list.length === 0) return null;
       return { botNumbers: [...new Set(list)], command: match[2] };
     }
@@ -532,7 +573,10 @@ tui.onInput((text: string) => {
     const cmd = parsed.command;
 
     // Execute chained commands (semicolons) on each selected bot
-    const chained = cmd.split(";").map((c) => c.trim()).filter(Boolean);
+    const chained = cmd
+      .split(";")
+      .map((c) => c.trim())
+      .filter(Boolean);
     for (const botNum of botNumbers) {
       const bot = registry.getBot(botNum);
       if (!bot) continue;
@@ -553,7 +597,10 @@ tui.onInput((text: string) => {
     botNumbers = allBots.map(([n]) => n);
 
     // Execute chained commands on all bots
-    const chained = trimmed.split(";").map((c) => c.trim()).filter(Boolean);
+    const chained = trimmed
+      .split(";")
+      .map((c) => c.trim())
+      .filter(Boolean);
     for (const [botNum, bot] of allBots) {
       const cm = (bot as any).commandManager;
       if (!cm) continue;
@@ -578,11 +625,14 @@ process.on("uncaughtException", (err: Error, origin: string) => {
   if (HEADLESS) process.exit(1);
 });
 
-process.on("unhandledRejection", (reason: unknown, promise: Promise<unknown>) => {
-  const err = reason instanceof Error ? reason : new Error(String(reason));
-  err.message = `Unhandled Rejection at: ${promise}, reason: ${err.message}`;
-  logger.exception(err);
-});
+process.on(
+  "unhandledRejection",
+  (reason: unknown, promise: Promise<unknown>) => {
+    const err = reason instanceof Error ? reason : new Error(String(reason));
+    err.message = `Unhandled Rejection at: ${promise}, reason: ${err.message}`;
+    logger.exception(err);
+  },
+);
 
 process.on("warning", (warn: Error) => {
   const msg = warn?.message || String(warn);
