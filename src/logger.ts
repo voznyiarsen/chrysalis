@@ -55,7 +55,7 @@ export class Logger {
     const botTag = this._botPrefix();
     // If we have a bot tag, integrate it with the tag for cleaner output
     // e.g., "[bot1 Status]" instead of "[bot1] [Status]"
-    const combinedTag = botTag && tag ? `${botTag} ${tag}` : (botTag || tag);
+    const combinedTag = botTag && tag ? `${botTag} ${tag}` : botTag || tag;
     this._backend.log(message, combinedTag, level);
   }
 
