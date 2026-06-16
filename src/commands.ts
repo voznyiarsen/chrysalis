@@ -3,7 +3,8 @@
  * Processes and executes user commands via a hierarchical command tree
  */
 
-import { logger } from "./logger";
+import util from "node:util";
+import { Logger } from "./logger";
 import * as cli from "./cli-engine";
 import type { Bot, EquipmentDestination } from "mineflayer";
 import type { CommandNode } from "./cli-engine";
@@ -13,6 +14,7 @@ import type { CommandNode } from "./cli-engine";
  */
 export class CommandManager {
   bot: Bot;
+  logger: Logger;
   autosend = false;
   tree: Record<string, CommandNode> = {};
   variables: Record<string, unknown> = {};
@@ -24,6 +26,7 @@ export class CommandManager {
 
   constructor(bot: Bot) {
     this.bot = bot;
+    this.logger = (bot as any).__logger;
     this.setupCommandTree();
   }
 
@@ -36,7 +39,9 @@ export class CommandManager {
         description: "Toggle autosend mode (unmatched commands sent as chat)",
         handler: () => {
           this.autosend = !this.autosend;
-          logger.command(`Autosending ${this.autosend ? "enabled" : "disabled"}`);
+          this.logger.command(
+            `Autosending ${this.autosend ? "enabled" : "disabled"}`,
+          );
         },
       },
       ts: {
@@ -74,7 +79,8 @@ export class CommandManager {
             positional: true,
             subcommands: {
               "<slot>": {
-                description: "Destination slot (hand, off-hand, head, torso, legs, feet)",
+                description:
+                  "Destination slot (hand, off-hand, head, torso, legs, feet)",
                 positional: true,
                 handler: async (args: string[]) => {
                   await this.equip(args);
@@ -88,7 +94,8 @@ export class CommandManager {
         description: "Unequip an item from a slot",
         subcommands: {
           "<slot>": {
-            description: "Slot to unequip from (head, torso, legs, feet, off-hand)",
+            description:
+              "Slot to unequip from (head, torso, legs, feet, off-hand)",
             positional: true,
             handler: async (args: string[]) => {
               await this.unequip(args);
@@ -151,7 +158,8 @@ export class CommandManager {
         handler: () => this.toggleCombat(),
       },
       cm: {
-        description: "Change combat mode (0=Mobs, 1=Players Survival, 2=Players All, 3=All Entities)",
+        description:
+          "Change combat mode (0=Mobs, 1=Players Survival, 2=Players All, 3=All Entities)",
         subcommands: {
           "<mode>": {
             description: "Mode number 0-3",
@@ -188,7 +196,8 @@ export class CommandManager {
         handler: (args: string[]) => this.configCommand(args),
       },
       run: {
-        description: "Run a command N times with M ticks between each (run <cmd> <N> <M>)",
+        description:
+          "Run a command N times with M ticks between each (run <cmd> <N> <M>)",
         subcommands: {
           "<cmd>": {
             description: "Command string to execute",
@@ -214,7 +223,7 @@ export class CommandManager {
       dud: {
         description: "Dud command for headless mode testing",
         handler: () => {
-          logger.command(`Dud command ran successfully`);
+          this.logger.command(`Dud command ran successfully`);
         },
       },
       pause: {
@@ -226,6 +235,26 @@ export class CommandManager {
             handler: async (args: string[]) => {
               await this.pause(args);
             },
+          },
+        },
+      },
+      query_player_db: {
+        description: "Query player database by username",
+        subcommands: {
+          "<username>": {
+            description: "Player username",
+            positional: true,
+            handler: (args: string[]) => this.queryPlayerDB(args),
+          },
+        },
+      },
+      query_slot_db: {
+        description: "Query inventory slot info by slot number",
+        subcommands: {
+          "<slot>": {
+            description: "Slot number",
+            positional: true,
+            handler: (args: string[]) => this.querySlotDB(args),
           },
         },
       },
@@ -286,15 +315,18 @@ export class CommandManager {
         await result.node.handler(tokens, resolved);
       } catch (error: unknown) {
         const msg = error instanceof Error ? error.message : String(error);
-        logger.error(`Error executing command: ${msg}`);
+        this.logger.error(`Error executing command: ${msg}`);
       }
-      return;
     }
 
+    // If we got here, the command wasn't found at all
     // If we partially matched but no handler, show available subcommands as help
     if (result.node && result.matched.length > 0) {
-      const helpStr = cli.getHelp(result.node as unknown as Record<string, cli.CommandNode>, result.matched);
-      logger.command(`Incomplete command. Available:\n${helpStr}`);
+      const helpStr = cli.getHelp(
+        result.node as unknown as Record<string, cli.CommandNode>,
+        result.matched,
+      );
+      this.logger.command(`Incomplete command. Available:\n${helpStr}`);
       return;
     }
 
@@ -302,7 +334,7 @@ export class CommandManager {
     const status = this.autosend
       ? "sending as message..."
       : "not sending as a message";
-    logger.command(`Command ${data} not found, ${status}`);
+    this.logger.command(`Command ${data} not found, ${status}`);
     if (this.autosend) this.bot.chat(data);
   }
 
@@ -322,7 +354,9 @@ export class CommandManager {
    */
   toggleAutosend(): void {
     this.autosend = !this.autosend;
-    logger.command(`Autosending ${this.autosend ? "enabled" : "disabled"}`);
+    this.logger.command(
+      `Autosending ${this.autosend ? "enabled" : "disabled"}`,
+    );
   }
 
   /**
@@ -334,18 +368,18 @@ export class CommandManager {
       (this.bot.registry as any).items[parseInt(args[1])] ||
       (this.bot.registry as any).itemsByName[args[1]];
     if (!item) {
-      logger.error(new Error(`Item '${args[1]}' not found`));
+      this.logger.error(new Error(`Item '${args[1]}' not found`));
       return;
     }
     const count = args.length >= 3 ? parseInt(args[2]) : 1;
 
     try {
       await this.bot.toss(item.id, null, count);
-      logger.inventory(`Tossed ${item.displayName} x${count}`);
+      this.logger.inventory(`Tossed ${item.displayName} x${count}`);
     } catch (error: unknown) {
       const err = error instanceof Error ? error : new Error(String(error));
       err.message = `Failed to toss: ${err.message}`;
-      logger.error(err);
+      this.logger.error(err);
     }
   }
 
@@ -356,11 +390,13 @@ export class CommandManager {
     const count = this.bot.inventory.slots.filter(Boolean).length;
     try {
       await (this.bot as any).inventoryManager.tossAllItems();
-      logger.inventory(`Tossed ${count} ${count === 1 ? "item" : "items"}`);
+      this.logger.inventory(
+        `Tossed ${count} ${count === 1 ? "item" : "items"}`,
+      );
     } catch (error: unknown) {
       const err = error instanceof Error ? error : new Error(String(error));
       err.message = `Failed to toss: ${err.message}`;
-      logger.error(err);
+      this.logger.error(err);
     }
   }
 
@@ -374,17 +410,20 @@ export class CommandManager {
       (this.bot.registry as any).itemsByName[args[1]];
     const destination = args[2];
     if (!item) {
-      logger.error(new Error(`Item '${args[1]}' not found`));
+      this.logger.error(new Error(`Item '${args[1]}' not found`));
       return;
     }
 
     try {
-      await this.bot.equip(parseInt(item.id), destination as EquipmentDestination);
-      logger.inventory(`Equipped ${item.displayName} to ${destination}`);
+      await this.bot.equip(
+        parseInt(item.id),
+        destination as EquipmentDestination,
+      );
+      this.logger.inventory(`Equipped ${item.displayName} to ${destination}`);
     } catch (error: unknown) {
       const err = error instanceof Error ? error : new Error(String(error));
       err.message = `Failed to equip: ${err.message}`;
-      logger.error(err);
+      this.logger.error(err);
     }
   }
 
@@ -399,11 +438,13 @@ export class CommandManager {
 
     try {
       await this.bot.unequip(destination as EquipmentDestination);
-      logger.inventory(`Unequipped ${item?.displayName} from ${destination}`);
+      this.logger.inventory(
+        `Unequipped ${item?.displayName} from ${destination}`,
+      );
     } catch (error: unknown) {
       const err = error instanceof Error ? error : new Error(String(error));
       err.message = `Failed to unequip: ${err.message}`;
-      logger.error(err);
+      this.logger.error(err);
     }
   }
 
@@ -414,11 +455,11 @@ export class CommandManager {
     const count = this.bot.entity.equipment.filter(Boolean).length;
     try {
       await (this.bot as any).inventoryManager.unequipAllItems();
-      logger.inventory(`Unequipped ${count} items`);
+      this.logger.inventory(`Unequipped ${count} items`);
     } catch (error: unknown) {
       const err = error instanceof Error ? error : new Error(String(error));
       err.message = `Failed: ${err.message}`;
-      logger.error(err);
+      this.logger.error(err);
     }
   }
 
@@ -426,14 +467,14 @@ export class CommandManager {
    * Show bot's Minecraft version.
    */
   showVersion(): void {
-    logger.status(this.bot.version);
+    this.logger.status(this.bot.version);
   }
 
   /**
    * Show bot's position.
    */
   showPosition(): void {
-    logger.status(this.bot.entity.position);
+    this.logger.status(this.bot.entity.position);
   }
 
   /**
@@ -460,11 +501,11 @@ export class CommandManager {
   toggleCombat(): void {
     const listener = (this.bot as any).combatManager.doDecide;
     if ((this.bot as any).listenerCount("physicsTick", listener) > 0) {
-      logger.combat(`Combat disabled`);
+      this.logger.combat(`Combat disabled`);
       (this.bot as any).off("physicsTick", listener);
       (this.bot as any).pvp.stop();
     } else {
-      logger.combat(`Combat enabled`);
+      this.logger.combat(`Combat enabled`);
       (this.bot as any).on("physicsTick", listener);
     }
   }
@@ -476,16 +517,48 @@ export class CommandManager {
   changeMode(args: string[]): void {
     const cm = (this.bot as any).combatManager;
     cm.setMode(parseInt(args[1] ?? cm.mode, 10));
-    logger.combat(`Mode changed to ${cm.mode}`);
+    this.logger.combat(`Mode changed to ${cm.mode}`);
   }
 
   /**
    * Pacify the bot — stops combat and any active run loop.
    */
   pacify(): void {
-    logger.combat(`Pacifying bot...`);
+    this.logger.combat(`Pacifying bot...`);
     (this.bot as any).combatManager.setMode(4);
     this._stopRun();
+  }
+
+  /**
+   * Query player database by username.
+   * @param args - Command arguments, args[1] is the username
+   */
+  queryPlayerDB(args: string[]): void {
+    const username = args[1];
+    const player = (this.bot as any).players[username];
+    if (!player) {
+      this.logger.error(new Error(`Player '${username}' not found`));
+      return;
+    }
+    this.logger.debug(`Player Debug: '${player.username}'`);
+    this.logger.debug(util.inspect(player, { depth: 1, colors: true }));
+  }
+
+  /**
+   * Query slot database by slot number.
+   * @param args - Command arguments, args[1] is the slot number
+   */
+  querySlotDB(args: string[]): void {
+    const slotNumber = parseInt(args[1], 10);
+    const item = this.bot.inventory!.slots![slotNumber];
+    if (!item) {
+      this.logger.error(new Error(`Item in slot ${slotNumber} not found`));
+      return;
+    }
+    this.logger.debug(
+      `Slot Debug: '${(item as any).displayName}' (slot ${slotNumber})`,
+    );
+    this.logger.debug(util.inspect(item, { depth: 1, colors: true }));
   }
 
   /**
@@ -502,7 +575,7 @@ export class CommandManager {
   configCommand(args: string[]): void {
     const rc = (this.bot as any).runtimeConfig;
     if (!rc) {
-      logger.error(new Error("Runtime config not available"));
+      this.logger.error(new Error("Runtime config not available"));
       return;
     }
 
@@ -510,11 +583,11 @@ export class CommandManager {
       const overrides: Record<string, unknown> = rc.getAllOverrides();
       const keys = Object.keys(overrides);
       if (keys.length === 0) {
-        logger.config("No active runtime overrides");
+        this.logger.config("No active runtime overrides");
       } else {
-        logger.config("Runtime overrides:");
+        this.logger.config("Runtime overrides:");
         for (const key of keys) {
-          logger.config(`  ${key} = ${overrides[key]}`);
+          this.logger.config(`  ${key} = ${overrides[key]}`);
         }
       }
       return;
@@ -526,7 +599,7 @@ export class CommandManager {
 
     if (args.length === 2) {
       const value = rc.get(category, key);
-      logger.config(`${category}.${key} = ${value}`);
+      this.logger.config(`${category}.${key} = ${value}`);
       return;
     }
 
@@ -535,7 +608,7 @@ export class CommandManager {
     const value = isNaN(numValue) ? rawValue : numValue;
 
     rc.set(category, key, value);
-    logger.config(`Set ${category}.${key} = ${value}`);
+    this.logger.config(`Set ${category}.${key} = ${value}`);
 
     if (category === "COMBAT") {
       const pvp = (this.bot as any).pvp;
@@ -551,7 +624,7 @@ export class CommandManager {
    */
   async pause(args: string[]): Promise<void> {
     const ticks = parseInt(args[1], 10);
-    logger.command(`Pausing the bot for ${ticks} ticks`);
+    this.logger.command(`Pausing the bot for ${ticks} ticks`);
     await this.bot.waitForTicks(ticks);
   }
 
@@ -561,7 +634,7 @@ export class CommandManager {
   private _stopRun(): void {
     if (this._runRunning) {
       this._runRunning = false;
-      logger.command(`Stopped run loop`);
+      this.logger.command(`Stopped run loop`);
     }
   }
 
@@ -575,7 +648,7 @@ export class CommandManager {
     const m = parseInt(args[3], 10);
 
     if (n <= 0 || m < 0) {
-      logger.error(`Invalid arguments: run <cmd> <N> <M> where N>0, M>=0`);
+      this.logger.error(`Invalid arguments: run <cmd> <N> <M> where N>0, M>=0`);
       return;
     }
 
@@ -586,7 +659,7 @@ export class CommandManager {
     this._runTotal = n;
     this._runCmd = cmd;
 
-    logger.command(`Running '${cmd}' ${n} times (${m} tick gap)`);
+    this.logger.command(`Running '${cmd}' ${n} times (${m} tick gap)`);
 
     await this._runLoop(cmd, n, m);
   }
@@ -608,7 +681,7 @@ export class CommandManager {
 
     if (this._runRunning) {
       this._runRunning = false;
-      logger.command(`Run loop completed (${n} iterations)`);
+      this.logger.command(`Run loop completed (${n} iterations)`);
     }
   }
 }

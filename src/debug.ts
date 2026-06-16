@@ -4,7 +4,7 @@
  */
 
 import util from "node:util";
-import { logger } from "./logger";
+import { logger, Logger } from "./logger";
 import { Constants } from "./constants";
 import { Vec3 } from "vec3";
 import { Bot } from "mineflayer";
@@ -18,6 +18,7 @@ interface Args {
  */
 class DebugManager {
   public bot: Bot;
+  public logger: Logger;
   public strafeLooping: boolean = false;
 
   /**
@@ -25,6 +26,7 @@ class DebugManager {
    */
   constructor(bot: Bot) {
     this.bot = bot;
+    this.logger = (bot as any).__logger;
     logger.setDebugMode(true);
     this.setupDebugCommands();
   }
@@ -34,128 +36,83 @@ class DebugManager {
    */
   setupDebugCommands(): void {
     if (!(this.bot as any).commandManager) {
-      logger.error(new Error(`Command registry not initialized`));
+      this.logger.error(new Error(`Command registry not initialized`));
       return;
     }
 
     const cm = (this.bot as any).commandManager;
 
-    cm.registerCommand("t0", {
+    cm.registerCommand("debug_strafe_once", {
       description: "Single strafe test at (+3, 0, 0)",
       handler: async (_args: string[]) => {
-        await this.test0();
+        await this.debugStrafeOnce();
       },
     });
 
-    cm.registerCommand("t1", {
-      description: "Loop strafe test (call again to stop)",
+    cm.registerCommand("debug_strafe_loop", {
+      description: "Loop the strafe test (call again to stop)",
       handler: async (_args: string[]) => {
-        await this.test1();
+        await this.debugStrafeLoop();
       },
     });
 
-    cm.registerCommand("t2", {
-      description: "Throw pearl at nearest player with offset",
-      subcommands: {
-        "<mode>": {
-          description: "Arc mode: low | high | auto",
-          positional: true,
-          subcommands: {
-            "<x>": {
-              description: "X offset (e.g., x+2.5)",
-              positional: true,
-              subcommands: {
-                "<y>": {
-                  description: "Y offset (e.g., y-1.0)",
-                  positional: true,
-                  subcommands: {
-                    "<z>": {
-                      description: "Z offset (e.g., z+0.75)",
-                      positional: true,
-                      handler: async (args: string[]) => {
-                        await this.test2(args);
-                      },
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
+    cm.registerCommand("debug_pearl_throw", {
+      description: "Throw a pearl at nearest player with offset and arc mode",
+      handler: async (args: string[]) => {
+        await this.debugPearlThrow(args);
       },
     });
 
-    cm.registerCommand("t5", {
-      description: "Test jump path to nearest player",
-      handler: async (_args: string[]) => {
-        await this.test5();
+    cm.registerCommand("debug_jump_path", {
+      description:
+        "Test isJumpPathClear against nearest player's current position",
+      handler: async () => {
+        await this.debugJumpPath();
       },
     });
 
-    cm.registerCommand("t6", {
-      description: "Run 9 jump-path obstacle scenarios",
-      handler: async (_args: string[]) => {
-        await this.test6();
+    cm.registerCommand("debug_collision_stress", {
+      description: "Batch test isJumpPathClear with 9 scenarios",
+      handler: async () => {
+        await this.debugCollisionStress();
       },
     });
 
-    cm.registerCommand("t7", {
-      description: "Jump test to (+3, 0, 0)",
-      handler: async (_args: string[]) => {
-        await this.test7();
+    cm.registerCommand("debug_jump_test", {
+      description: "Test jump towards a relative point (+3, 0, 0)",
+      handler: async () => {
+        await this.debugJumpTest();
       },
     });
 
-    cm.registerCommand("e2e_attack", {
-      description: "Test basic attack flow (attack nearest player)",
-      handler: async (_args: string[]) => {
-        await this.e2eAttack();
+    cm.registerCommand("debug_e2e_attack", {
+      description: "E2E: Basic attack flow",
+      handler: async () => {
+        await this.debugE2eAttack();
       },
     });
 
-    cm.registerCommand("e2e_goal", {
-      description: "Test goal-directed movement while in combat",
-      handler: async (_args: string[]) => {
-        await this.e2eGoal();
+    cm.registerCommand("debug_e2e_goal", {
+      description: "E2E: Goal-directed movement while in combat",
+      handler: async () => {
+        await this.debugE2eGoal();
       },
     });
 
-    cm.registerCommand("e2e_strafe_goal", {
-      description: "Test strafing while moving toward a goal",
-      handler: async (_args: string[]) => {
-        await this.e2eStrafeGoal();
+    cm.registerCommand("debug_e2e_strafe_goal", {
+      description: "E2E: Strafing while moving toward a goal",
+      handler: async () => {
+        await this.debugE2eStrafeGoal();
       },
     });
 
-    cm.registerCommand("pdb", {
-      description: "Debug info for a player",
-      subcommands: {
-        "<username>": {
-          description: "Player username",
-          positional: true,
-          handler: (args: string[]) => this.playerDebug(args),
-        },
-      },
-    });
-
-    cm.registerCommand("sdb", {
-      description: "Debug info for an inventory slot",
-      subcommands: {
-        "<slot>": {
-          description: "Slot number",
-          positional: true,
-          handler: (args: string[]) => this.slotDebug(args),
-        },
-      },
-    });
-
-    logger.debug(`Debug commands registered`);
+    this.logger.debug(`Debug commands registered`);
   }
 
   /**
    * Test strafe movement once around a relative point (+3, 0, 0).
    */
-  async test0(): Promise<void> {
+  async debugStrafeOnce(): Promise<void> {
     this.strafeLooping = false;
     const center = new Vec3(
       Math.floor(this.bot.entity!.position.x) + 0.5,
@@ -165,7 +122,7 @@ class DebugManager {
     await (this.bot as any).combatManager.nudgeToCenter(center);
     const fixedPoint = this.bot.entity!.position.offset(3, 0, 0);
     (this.bot as any).combatManager.doStrafe(fixedPoint);
-    logger.debug(
+    this.logger.debug(
       `Executed single strafe test around ${fixedPoint.toString()}`,
     );
   }
@@ -174,10 +131,10 @@ class DebugManager {
    * Loop the strafe movement test around a relative point (+3, 0, 0).
    * Stops if test0 is called or another command sets strafeLooping to false.
    */
-  async test1(): Promise<void> {
+  async debugStrafeLoop(): Promise<void> {
     if (this.strafeLooping) {
       this.strafeLooping = false;
-      logger.debug("Stopped strafe loop test");
+      this.logger.debug("Stopped strafe loop test");
       return;
     }
 
@@ -189,7 +146,7 @@ class DebugManager {
     );
     await (this.bot as any).combatManager.nudgeToCenter(center);
     const fixedPoint = this.bot.entity!.position.offset(3, 0, 0);
-    logger.debug(
+    this.logger.debug(
       `Starting strafe loop test around ${fixedPoint.toString()}`,
     );
 
@@ -201,60 +158,73 @@ class DebugManager {
 
   /**
    * Throw a pearl at the nearest player with the given arc mode and relative offset.
-   * Usage: t2 <mode> <axis-offsets>
+   Usage: debug_pearl_throw <mode> <axis-offsets>
    *   mode: low | high | auto
    *   axis-offsets: x+2.5 y-1.0 z+0.75
    */
-  async test2(args: Args): Promise<void> {
+  async debugPearlThrow(args: Args): Promise<void> {
     const mode = args[1];
 
     // Parse axis offsets: "x+2.5" -> 2.5, "y-1.0" -> -1.0
     const parseAxis = (s: string) => parseFloat(s.slice(1));
-    const offset = new Vec3(parseAxis(args[2]), parseAxis(args[3]), parseAxis(args[4]));
+    const offset = new Vec3(
+      parseAxis(args[2]),
+      parseAxis(args[3]),
+      parseAxis(args[4]),
+    );
 
     // Compute target position: nearest player offset by the given vector
     const filter = (e: any) =>
       e.type === "player" && e.username !== this.bot.username;
     const target = this.bot.nearestEntity!(filter);
     if (!target) {
-      logger.error(new Error(`No player found for test2 (mode=${mode}, offset=${offset.toString()})`));
+      this.logger.error(
+        new Error(
+          `No player found for test2 (mode=${mode}, offset=${offset.toString()})`,
+        ),
+      );
       return;
     }
 
-    const targetPos = target.position!.offset(0, target.height! / 2, 0).plus(offset);
-    logger.debug(
+    const targetPos = target
+      .position!.offset(0, target.height! / 2, 0)
+      .plus(offset);
+    this.logger.debug(
       `Throwing ${mode} arc pearl at ${target.username} offset by ${offset.toString()}`,
     );
 
-    await this.testPearlArc(mode as "low" | "high" | "auto", targetPos);
+    await this.debugPearlArc(mode as "low" | "high" | "auto", targetPos);
   }
 
   /**
    * Test isJumpPathClear against the nearest player's current position.
    * Logs whether the jump arc is clear or blocked.
    */
-  async test5(): Promise<void> {
+  async debugJumpPath(): Promise<void> {
     const filter = (e: any) =>
       e.type === "player" && e.username !== this.bot.username;
     const target = this.bot.nearestEntity!(filter);
     if (!target) {
-      logger.error(new Error("No player found for test5"));
+      this.logger.error(new Error("No player found for test5"));
       return;
     }
 
     const source = this.bot.entity!.position;
     const strafePoint = target.position!;
 
-    logger.debug(
+    this.logger.debug(
       `Testing jump path to ${target.username} at ${strafePoint.x.toFixed(1)}, ${strafePoint.y.toFixed(1)}, ${strafePoint.z.toFixed(1)} from ${this.bot.entity!.position.x.toFixed(1)}, ${this.bot.entity!.position.y.toFixed(1)}, ${this.bot.entity!.position.z.toFixed(1)}`,
     );
 
-    const isClear = (this.bot as any).utilsManager.isJumpPathClear(source, strafePoint);
+    const isClear = (this.bot as any).utilsManager.isJumpPathClear(
+      source,
+      strafePoint,
+    );
 
     if (isClear) {
-      logger.debug(`Jump path to ${target.username} is CLEAR`);
+      this.logger.debug(`Jump path to ${target.username} is CLEAR`);
     } else {
-      logger.debug(`Jump path to ${target.username} is BLOCKED`);
+      this.logger.debug(`Jump path to ${target.username} is BLOCKED`);
     }
   }
 
@@ -263,9 +233,12 @@ class DebugManager {
    * Player at X=0, Z=0 (Y=0 and Y=1), Bot at X=3, Z=0 (Y=0 and Y=1).
    * Obstacle positions defined in 4-width by 3-height grid.
    */
-  async test6(): Promise<void> {
+  async debugCollisionStress(): Promise<void> {
     // Define test scenarios: obstacle positions (x, y, z), null means no obstacle
-    const scenarios: { name: string; obstacle: { x: number; y: number; z: number } | null }[] = [
+    const scenarios: {
+      name: string;
+      obstacle: { x: number; y: number; z: number } | null;
+    }[] = [
       { name: "Test 0", obstacle: null },
       { name: "Test 1", obstacle: { x: 1, y: 1, z: 0 } },
       { name: "Test 2", obstacle: { x: 2, y: 1, z: 0 } },
@@ -293,7 +266,7 @@ class DebugManager {
       }
 
       // Output positions in requested format
-      logger.debug(
+      this.logger.debug(
         `${botSource.toString()}, ${playerPos.toString()}, ${scenario.obstacle ? scenario.obstacle.x + ", " + scenario.obstacle.y + ", " + scenario.obstacle.z : "none"}`,
       );
 
@@ -303,7 +276,7 @@ class DebugManager {
         playerPos,
       );
 
-      logger.debug(`${scenario.name}: ${isClear ? "CLEAR" : "BLOCKED"}`);
+      this.logger.debug(`${scenario.name}: ${isClear ? "CLEAR" : "BLOCKED"}`);
 
       // Remove obstacle for next test (skip if no obstacle)
       if (scenario.obstacle) {
@@ -318,7 +291,7 @@ class DebugManager {
    * Test a jump towards a relative point (+3, 0, 0).
    * Centers the bot before jumping.
    */
-  async test7(): Promise<void> {
+  async debugJumpTest(): Promise<void> {
     const center = new Vec3(
       Math.floor(this.bot.entity!.position.x) + 0.5,
       this.bot.entity!.position.y,
@@ -334,7 +307,7 @@ class DebugManager {
       target.x - jumpSource.x,
       target.z - jumpSource.z,
     );
-    logger.debug(
+    this.logger.debug(
       `Pre-jump state: bot=${jumpSource.toString().slice(0, 30)} target=${target.toString().slice(0, 30)} dist=${preDist.toFixed(3)}`,
     );
 
@@ -344,15 +317,19 @@ class DebugManager {
     );
 
     if (impulse) {
-      logger.debug(`Jumping to ${target.toString()}`);
+      this.logger.debug(`Jumping to ${target.toString()}`);
 
       const utils = (this.bot as any).utilsManager;
       const originalApplyImpulse = utils.applyImpulse.bind(utils);
       const startTick = this.bot.time!.age;
 
       // Override applyImpulse to log every call for the next 40 ticks
-      utils.applyImpulse = (imp: Vec3, mode: string = "add", force: boolean = false) => {
-        logger.debug(
+      utils.applyImpulse = (
+        imp: Vec3,
+        mode: string = "add",
+        force: boolean = false,
+      ) => {
+        this.logger.debug(
           `ApplyImpulse: (${imp.x.toFixed(4)}, ${imp.y.toFixed(4)}, ${imp.z.toFixed(4)}) [${mode}]`,
         );
         const result = originalApplyImpulse(imp, mode, force);
@@ -375,34 +352,35 @@ class DebugManager {
       }
 
       const postPos = this.bot.entity!.position;
-      const postDist = Math.hypot(
-        target.x - postPos.x,
-        target.z - postPos.z,
-      );
+      const postDist = Math.hypot(target.x - postPos.x, target.z - postPos.z);
       const withinTolerance = postDist <= 0.3;
 
       // Calculate overshoot/undershoot along jump direction
-      const jumpDir = new Vec3(target.x - jumpSource.x, 0, target.z - jumpSource.z).normalize();
+      const jumpDir = new Vec3(
+        target.x - jumpSource.x,
+        0,
+        target.z - jumpSource.z,
+      ).normalize();
       const toTarget = new Vec3(target.x - postPos.x, 0, target.z - postPos.z);
       const alongJump = toTarget.dot(jumpDir); // negative = overshoot, positive = undershoot
       const overshoot = alongJump < 0 ? "overshoot" : "undershoot";
       const overshootAmount = Math.abs(alongJump);
 
-      logger.debug(
+      this.logger.debug(
         `Post-jump state:  bot=${postPos.toString().slice(0, 30)} target=${target.toString().slice(0, 30)} dist=${postDist.toFixed(3)} ${withinTolerance ? "✓" : "✗"}`,
       );
 
       if (withinTolerance) {
-        logger.debug(
+        this.logger.debug(
           `Jump landed within tolerance (${postDist.toFixed(3)} <= 0.3)`,
         );
       } else {
-        logger.debug(
+        this.logger.debug(
           `Jump ${overshoot} by ${overshootAmount.toFixed(3)} blocks (dist=${postDist.toFixed(3)} > 0.3)`,
         );
       }
     } else {
-      logger.error(new Error("Cannot calculate jump velocity for test7"));
+      this.logger.error(new Error("Cannot calculate jump velocity for test7"));
     }
   }
 
@@ -410,73 +388,79 @@ class DebugManager {
    * E2E: Test basic attack flow.
    * Attacks the nearest player, waits 40 ticks, then stops.
    */
-  async e2eAttack(): Promise<void> {
+  async debugE2eAttack(): Promise<void> {
     const filter = (e: any) =>
       e.type === "player" && e.username !== this.bot.username;
     const target = this.bot.nearestEntity!(filter);
     if (!target) {
-      logger.error(new Error("No player found for e2e_attack"));
+      this.logger.error(new Error("No player found for e2e_attack"));
       return;
     }
 
-    logger.debug(`e2e_attack: attacking ${target.username}`);
+    this.logger.debug(`e2e_attack: attacking ${target.username}`);
     await (this.bot as any).pvp.attack(target);
     await this.bot.waitForTicks!(40);
     await (this.bot as any).pvp.stop();
-    logger.debug("e2e_attack: complete");
+    this.logger.debug("e2e_attack: complete");
   }
 
   /**
    * E2E: Test goal-directed movement while in combat.
    * Attacks nearest player, sets a goal 10 blocks east, waits 100 ticks.
    */
-  async e2eGoal(): Promise<void> {
+  async debugE2eGoal(): Promise<void> {
     const filter = (e: any) =>
       e.type === "player" && e.username !== this.bot.username;
     const target = this.bot.nearestEntity!(filter);
     if (!target) {
-      logger.error(new Error("No player found for e2e_goal"));
+      this.logger.error(new Error("No player found for e2e_goal"));
       return;
     }
 
-    logger.debug(`e2e_goal: attacking ${target.username} with goal`);
+    this.logger.debug(`e2e_goal: attacking ${target.username} with goal`);
     await (this.bot as any).pvp.attack(target);
 
     const goalPos = this.bot.entity!.position.offset(10, 0, 0);
-    logger.debug(`e2e_goal: set goal to ${goalPos.toString().slice(0, 30)}`);
+    this.logger.debug(
+      `e2e_goal: set goal to ${goalPos.toString().slice(0, 30)}`,
+    );
     (this.bot as any).pvp.setGoal(goalPos);
 
     await this.bot.waitForTicks!(100);
     (this.bot as any).pvp.clearGoal();
     await (this.bot as any).pvp.stop();
-    logger.debug("e2e_goal: complete");
+    this.logger.debug("e2e_goal: complete");
   }
 
   /**
    * E2E: Test strafing while moving toward a goal.
    * Attacks nearest player, sets a nearby goal, waits 80 ticks.
    */
-  async e2eStrafeGoal(): Promise<void> {
+  async debugE2eStrafeGoal(): Promise<void> {
     const filter = (e: any) =>
       e.type === "player" && e.username !== this.bot.username;
     const target = this.bot.nearestEntity!(filter);
     if (!target) {
-      logger.error(new Error("No player found for e2e_strafe_goal"));
+      this.logger.error(new Error("No player found for e2e_strafe_goal"));
       return;
     }
 
-    logger.debug(`e2e_strafe_goal: attacking ${target.username} with nearby goal`);
+    this.logger.debug(
+      `e2e_strafe_goal: attacking ${target.username} with nearby goal`,
+    );
     await (this.bot as any).pvp.attack(target);
 
     // Set a goal just a few blocks away to test combined strafe+goal behavior
     const goalPos = this.bot.entity!.position.offset(4, 0, 3);
-    logger.debug(`e2e_strafe_goal: goal=${goalPos.toString().slice(0, 30)}`);
+    this.logger.debug(
+      `e2e_strafe_goal: goal=${goalPos.toString().slice(0, 30)}`,
+    );
     (this.bot as any).pvp.setGoal(goalPos);
 
     await this.bot.waitForTicks!(80);
     (this.bot as any).pvp.clearGoal();
     await (this.bot as any).pvp.stop();
-    logger.debug("e2e_strafe_goal: complete");
+    this.logger.debug("e2e_strafe_goal: complete");
   }
 
   /**
@@ -484,7 +468,10 @@ class DebugManager {
    * @param arcType - Which arc to attempt, or "auto" to pick the best
    * @param overrideTargetPos - Optional target position (otherwise uses nearest player)
    */
-  async testPearlArc(arcType: "low" | "high" | "auto", overrideTargetPos?: Vec3): Promise<void> {
+  async debugPearlArc(
+    arcType: "low" | "high" | "auto",
+    overrideTargetPos?: Vec3,
+  ): Promise<void> {
     let target: any;
     let targetPos: Vec3;
 
@@ -499,7 +486,7 @@ class DebugManager {
         e.type === "player" && e.username !== this.bot.username;
       target = this.bot.nearestEntity!(filter);
       if (!target) {
-        logger.error(new Error(`No player found for ${arcType} arc test`));
+        this.logger.error(new Error(`No player found for ${arcType} arc test`));
         return;
       }
       targetPos = target.position!.offset(0, target.height! / 2, 0);
@@ -518,13 +505,13 @@ class DebugManager {
         targetPos,
       );
       if (!result) {
-        logger.error(new Error("Cannot reach target with pearl"));
+        this.logger.error(new Error("Cannot reach target with pearl"));
         return;
       }
       const { pitch, arc } = result;
       const yaw = Math.atan2(eyePos.x - targetPos.x, eyePos.z - targetPos.z);
 
-      logger.debug(`Throwing ${arc} arc pearl at ${target.username}`);
+      this.logger.debug(`Throwing ${arc} arc pearl at ${target.username}`);
       await (this.bot as any).inventoryManager.equipPearl(yaw, pitch);
       (this.bot as any).combatManager.lastPearlTime = Date.now();
       return;
@@ -540,7 +527,7 @@ class DebugManager {
     );
 
     if (pitches.length === 0) {
-      logger.error(
+      this.logger.error(
         new Error(`Cannot reach target with pearl (${arcType} arc)`),
       );
       return;
@@ -550,39 +537,9 @@ class DebugManager {
     const pitch = arcType === "low" ? pitches[0] : pitches[1] || pitches[0];
     const yaw = Math.atan2(eyePos.x - targetPos.x, eyePos.z - targetPos.z);
 
-    logger.debug(`Throwing ${arcType} arc pearl at ${target.username}`);
+    this.logger.debug(`Throwing ${arcType} arc pearl at ${target.username}`);
     await (this.bot as any).inventoryManager.equipPearl(yaw, pitch);
     (this.bot as any).combatManager.lastPearlTime = Date.now();
-  }
-
-  /**
-   * Logs detailed info about a player by username.
-   * @param args - Command arguments, args[1] is the username
-   */
-  playerDebug(args: Args): void {
-    const username = args[1];
-    const player = (this.bot as any).players[username];
-    if (!player) {
-      logger.error(new Error(`Player '${username}' not found`));
-      return;
-    }
-    logger.debug(`Player Debug: '${player.username}'`);
-    logger.debug(util.inspect(player, { depth: 1, colors: true }));
-  }
-
-  /**
-   * Logs detailed info about an inventory slot by index.
-   * @param args - Command arguments, args[1] is the slot number
-   */
-  slotDebug(args: Args): void {
-    const slotNumber = parseInt(args[1], 10);
-    const item = this.bot.inventory!.slots![slotNumber];
-    if (!item) {
-      logger.error(new Error(`Item in slot ${slotNumber} not found`));
-      return;
-    }
-    logger.debug(`Slot Debug: '${(item as any).displayName}' (slot ${slotNumber})`);
-    logger.debug(util.inspect(item, { depth: 1, colors: true }));
   }
 }
 
@@ -593,6 +550,7 @@ class DebugManager {
  */
 export default function attach(bot: Bot): Bot {
   (bot as any).debugManager = new DebugManager(bot);
+  (bot as any).debugManager.bot = bot;
   return bot;
 }
 

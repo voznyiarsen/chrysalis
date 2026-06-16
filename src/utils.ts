@@ -285,7 +285,10 @@ export class UtilsManager {
    * @returns Effects multiplier value
    */
   getEffectsMultiplier(): number {
-    const effects = (this.bot.entity as any).effects as Record<string, { amplifier: number } | undefined>;
+    const effects = (this.bot.entity as any).effects as Record<
+      string,
+      { amplifier: number } | undefined
+    >;
     const speedAmp = effects["1"];
     const slowAmp = effects["2"];
     const speedLevel = speedAmp ? speedAmp.amplifier + 1 : 0;
@@ -301,7 +304,10 @@ export class UtilsManager {
    * @param inputs - Player inputs
    * @returns New state after the tick
    */
-  simulateTick(state: SimulateTickState, inputs: SimulateInputs): SimulateTickState {
+  simulateTick(
+    state: SimulateTickState,
+    inputs: SimulateInputs,
+  ): SimulateTickState {
     let { pos, vel, onGround } = state;
     const { forward, strafe, jumping, sprinting, sneaking } = inputs;
     if (Math.abs(vel.x) < this.momentumThreshold) vel.x = 0;
@@ -358,7 +364,11 @@ export class UtilsManager {
    * @param mode - Whether to add to or replace current velocity
    * @param force - Skip the once-per-tick debounce
    */
-  applyImpulse(impulse: Vec3, mode: "add" | "set" = "add", force = false): void {
+  applyImpulse(
+    impulse: Vec3,
+    mode: "add" | "set" = "add",
+    force = false,
+  ): void {
     const currentTick = (this.bot.time as any).age;
     if (!force && this.lastImpulseTick === currentTick) return;
     const entity = this.bot.entity as any;
@@ -380,7 +390,13 @@ export class UtilsManager {
    * @param drag - Per-tick velocity multiplier
    * @returns Pitches in degrees (low arc first, then high arc), empty if unreachable
    */
-  getProjectilePitch(source: Vec3, target: Vec3, v: number, g: number, drag = 1): number[] {
+  getProjectilePitch(
+    source: Vec3,
+    target: Vec3,
+    v: number,
+    g: number,
+    drag = 1,
+  ): number[] {
     const dx = target.x - source.x;
     const dz = target.z - source.z;
     const x = Math.sqrt(dx * dx + dz * dz);
@@ -434,7 +450,14 @@ export class UtilsManager {
    * @param drag - Per-tick velocity multiplier
    * @returns Whether the path is clear
    */
-  isProjectilePathClear(source: Vec3, target: Vec3, v: number, g: number, p: number, drag = 1): boolean {
+  isProjectilePathClear(
+    source: Vec3,
+    target: Vec3,
+    v: number,
+    g: number,
+    p: number,
+    drag = 1,
+  ): boolean {
     const yaw = Math.atan2(target.x - source.x, target.z - source.z);
     let currPos = source.clone();
     let currVel = new Vec3(
@@ -474,7 +497,10 @@ export class UtilsManager {
    * @param block - Block object with .shapes array
    * @returns Whether the point is inside any shape
    */
-  isPointInBlock(point: Vec3, block: { position: Vec3; shapes: number[][] }): boolean {
+  isPointInBlock(
+    point: Vec3,
+    block: { position: Vec3; shapes: number[][] },
+  ): boolean {
     const localX = point.x - block.position.x;
     const localY = point.y - block.position.y;
     const localZ = point.z - block.position.z;
@@ -495,7 +521,14 @@ export class UtilsManager {
   /**
    * Get the bounding box of an entity, defaulting to player dimensions for players.
    */
-  getEntityHitbox(entity: Entity): { minX: number; maxX: number; minY: number; maxY: number; minZ: number; maxZ: number } {
+  getEntityHitbox(entity: Entity): {
+    minX: number;
+    maxX: number;
+    minY: number;
+    maxY: number;
+    minZ: number;
+    maxZ: number;
+  } {
     const entityAny = entity as any;
     let width = entityAny.width;
     let height = entityAny.height;
@@ -559,7 +592,12 @@ export class UtilsManager {
    * @param height - Cylinder height
    * @returns Whether the point is inside the cylinder
    */
-  isInCylinder(source: Vec3, point: Vec3, radius: number, height: number): boolean {
+  isInCylinder(
+    source: Vec3,
+    point: Vec3,
+    radius: number,
+    height: number,
+  ): boolean {
     const dy = point.y - source.y;
     if (dy < 0 || dy > height) return false;
     const dx = point.x - source.x;
@@ -598,7 +636,11 @@ export class UtilsManager {
         ];
         for (const p of points) {
           const block = this.bot.blockAt(p);
-          if (block && (unwantedBlocks as readonly string[]).includes(block.name)) return true;
+          if (
+            block &&
+            (unwantedBlocks as readonly string[]).includes(block.name)
+          )
+            return true;
         }
       }
     }
@@ -660,7 +702,8 @@ export class UtilsManager {
               aabb.minY >= y + 1 ||
               aabb.maxZ <= z ||
               aabb.minZ >= z + 1
-            ) continue;
+            )
+              continue;
             for (const shape of block.shapes) {
               collisions.push(
                 new AABB(
@@ -708,7 +751,10 @@ export class UtilsManager {
     const dirZ = dz_tot / len;
     const entity = this.bot.entity as any;
     const vH0 = Math.hypot(entity.velocity.x, entity.velocity.z);
-    const vH1 = vH0 * GROUND_MOMENTUM + GROUND_ACCEL + Constants.PHYSICS.SPRINT_JUMP_BOOST;
+    const vH1 =
+      vH0 * GROUND_MOMENTUM +
+      GROUND_ACCEL +
+      Constants.PHYSICS.SPRINT_JUMP_BOOST;
     let currPos = source.clone();
     let currVel = new Vec3(
       dirX * vH1,
@@ -733,10 +779,7 @@ export class UtilsManager {
       let moveAABB = playerAABB
         .extend(currVel.x, currVel.y, currVel.z)
         .expand(0.1);
-      let collisions = this.getCollisions(
-        moveAABB,
-        entity.position.y + 0.3,
-      );
+      let collisions = this.getCollisions(moveAABB, entity.position.y + 0.3);
       for (const bb of collisions) {
         if (moveAABB.intersects(bb)) {
           return false;
@@ -795,7 +838,8 @@ export class UtilsManager {
     const attackRange = Constants.COMBAT.ATTACK_RANGE + 0.5;
     const prefMin = Constants.MOVEMENT.STRAFE_PREFERRED_MIN;
     const prefMax = Constants.MOVEMENT.STRAFE_PREFERRED_MAX;
-    const dist2D = (a: Vec3, b: Vec3): number => Math.hypot(a.x - b.x, a.z - b.z);
+    const dist2D = (a: Vec3, b: Vec3): number =>
+      Math.hypot(a.x - b.x, a.z - b.z);
     if (solids.length === 0) return null;
 
     let bestPoint: Vec3 | null = null;
@@ -881,7 +925,11 @@ export class UtilsManager {
 
     for (let x = -radius; x <= radius; x++) {
       for (let z = -radius; z <= radius; z++) {
-        for (let y = startY; y >= startY + Constants.BLOCK_DETECTION.MIN_WALKABLE_Y_OFFSET; y--) {
+        for (
+          let y = startY;
+          y >= startY + Constants.BLOCK_DETECTION.MIN_WALKABLE_Y_OFFSET;
+          y--
+        ) {
           const pos = new Vec3(source.x + x, y, source.z + z);
           const block = this.bot.blockAt(pos);
           const above = this.bot.blockAt(pos.offset(0, 1, 0));
@@ -892,10 +940,19 @@ export class UtilsManager {
           ) {
             const shape = block.shapes[0];
             if (shape) {
-              const dx = Math.abs(shape[Constants.SHAPE.MIN_X] - shape[Constants.SHAPE.MAX_X]);
-              const dz = Math.abs(shape[Constants.SHAPE.MIN_Z] - shape[Constants.SHAPE.MAX_Z]);
-              if (dx > (this.bot.entity as any).width && dz > (this.bot.entity as any).width) {
-                const yOff = Math.abs(shape[Constants.SHAPE.MIN_Y] - shape[Constants.SHAPE.MAX_Y]);
+              const dx = Math.abs(
+                shape[Constants.SHAPE.MIN_X] - shape[Constants.SHAPE.MAX_X],
+              );
+              const dz = Math.abs(
+                shape[Constants.SHAPE.MIN_Z] - shape[Constants.SHAPE.MAX_Z],
+              );
+              if (
+                dx > (this.bot.entity as any).width &&
+                dz > (this.bot.entity as any).width
+              ) {
+                const yOff = Math.abs(
+                  shape[Constants.SHAPE.MIN_Y] - shape[Constants.SHAPE.MAX_Y],
+                );
                 solids.push(pos.offset(0.5, yOff, 0.5));
                 break;
               }
@@ -931,7 +988,10 @@ export class UtilsManager {
    * @param options - Options with yaw, speed, strength
    * @returns New velocity vector (vertical component preserved)
    */
-  withStrafe(velocity: Vec3, { yaw, speed, strength = 1.0 }: WithStrafeOptions): Vec3 {
+  withStrafe(
+    velocity: Vec3,
+    { yaw, speed, strength = 1.0 }: WithStrafeOptions,
+  ): Vec3 {
     const currentSpeed = Math.hypot(velocity.x, velocity.z);
     const usedSpeed = speed !== undefined ? speed : currentSpeed;
     const oneMinusStrength = 1.0 - strength;
@@ -982,7 +1042,9 @@ export class UtilsManager {
     const GROUND_ACCEL = 0.1 * Mt * Et * Math.pow(0.6 / St, 3);
     const GROUND_MOMENTUM = St * Constants.PHYSICS.MOMENTUM_CONSERVATION;
     const vH0 = this.getHorizontalSpeed();
-    return vH0 * GROUND_MOMENTUM + GROUND_ACCEL + Constants.PHYSICS.SPRINT_JUMP_BOOST;
+    return (
+      vH0 * GROUND_MOMENTUM + GROUND_ACCEL + Constants.PHYSICS.SPRINT_JUMP_BOOST
+    );
   }
 
   /**

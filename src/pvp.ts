@@ -1,4 +1,4 @@
-import { logger } from "./logger";
+import { Logger } from "./logger";
 import { Constants } from "./constants";
 import { Vec3 } from "vec3";
 import { Bot } from "mineflayer";
@@ -16,7 +16,11 @@ class CombatDecision {
    * @param action - Async function to execute
    * @param name - Decision name
    */
-  constructor(condition: () => boolean, action: () => Promise<void>, name: string) {
+  constructor(
+    condition: () => boolean,
+    action: () => Promise<void>,
+    name: string,
+  ) {
     this.condition = condition;
     this.action = action;
     this.name = name;
@@ -28,6 +32,7 @@ class CombatDecision {
  */
 class CombatManager {
   public bot: Bot;
+  public logger: Logger;
   public alliesSet: Set<string>;
   public debounce: boolean;
   public lastDamage: number;
@@ -48,6 +53,7 @@ class CombatManager {
    */
   constructor(bot: Bot) {
     this.bot = bot;
+    this.logger = (bot as any).__logger;
     this.alliesSet = new Set();
     this.debounce = false;
     this.lastDamage = 0;
@@ -86,7 +92,7 @@ class CombatManager {
           if (needsTotem) {
             // Exit early if no totem is in inventory
             if (!inv().hasItem("totem_of_undying")) return;
-            logger.combat(
+            this.logger.combat(
               "Fall: Survival impossible with Gapples, equipping Totem",
             );
             await inv().equipTotem();
@@ -94,13 +100,13 @@ class CombatManager {
             canEatEGapple &&
             inv().hasItemWithMetadata("golden_apple", 1)
           ) {
-            logger.combat("Fall: Mitigating with Enchanted Golden Apple");
+            this.logger.combat("Fall: Mitigating with Enchanted Golden Apple");
             await inv().equipGapple();
           } else if (
             canEatGapple &&
             inv().hasItemWithMetadata("golden_apple", 0)
           ) {
-            logger.combat("Fall: Mitigating with Golden Apple");
+            this.logger.combat("Fall: Mitigating with Golden Apple");
             await inv().equipGapple();
           } else {
             // Exit early if neither gapple nor totem is available
@@ -109,7 +115,7 @@ class CombatManager {
               !inv().hasItem("totem_of_undying")
             )
               return;
-            logger.combat(
+            this.logger.combat(
               "Fall: No suitable Gapple available, equipping Totem",
             );
             await inv().equipTotem();
@@ -155,7 +161,11 @@ class CombatManager {
 
           const dist = this.bot.entity!.position.distanceTo(target.position);
           const hasPearls = inv().hasItem("ender_pearl");
-          if (!hasPearls || dist <= (this.bot as any).pvp.attackRange || dist > 50)
+          if (
+            !hasPearls ||
+            dist <= (this.bot as any).pvp.attackRange ||
+            dist > 50
+          )
             return false;
 
           const eyePos = this.bot.entity!.position.offset(
@@ -179,7 +189,7 @@ class CombatManager {
             eyePos.x - targetPos.x,
             eyePos.z - targetPos.z,
           );
-          logger.combat(`Throwing ${arc} arc pearl at ${target.username}`);
+          this.logger.combat(`Throwing ${arc} arc pearl at ${target.username}`);
           await inv().equipPearl(yaw, pitch);
           this.lastPearlTime = Date.now();
         },
@@ -270,7 +280,10 @@ class CombatManager {
    * @param target - Target position
    * @returns Pitch and arc info, or null if unreachable
    */
-  getBestPearlPitch(source: Vec3, target: Vec3): { pitch: number; arc: string } | null {
+  getBestPearlPitch(
+    source: Vec3,
+    target: Vec3,
+  ): { pitch: number; arc: string } | null {
     const { VELOCITY, GRAVITY, DRAG } = Constants.COMBAT.ENDER_PEARL;
     const pitches = (this.bot as any).utilsManager.getProjectilePitch(
       source,
@@ -295,7 +308,7 @@ class CombatManager {
       if (clear) {
         return { pitch, arc: arcs[i] };
       } else if (i === 0 && pitches.length > 1) {
-        logger.debug("Low arc blocked, evaluating high arc...");
+        this.logger.debug("Low arc blocked, evaluating high arc...");
       }
     }
     return null;
@@ -319,7 +332,13 @@ class CombatManager {
 
       // Priority decisions that may cause an item swap — if any of these
       // trigger and swap the held item, we skip the lower-priority decisions.
-      const priorityNames = new Set(["fall", "totem", "heal", "armor", "weapon"]);
+      const priorityNames = new Set([
+        "fall",
+        "totem",
+        "heal",
+        "armor",
+        "weapon",
+      ]);
 
       for (const decision of this.decisions) {
         if (decision.condition()) {
@@ -343,7 +362,7 @@ class CombatManager {
   setMode(mode?: number): void {
     this.mode = mode !== undefined ? mode : (this.mode + 1) % 4;
     this.modeFilterCache = null;
-    logger.combat(`Combat mode set to ${this.mode}`);
+    this.logger.combat(`Combat mode set to ${this.mode}`);
   }
 
   /**
@@ -354,7 +373,8 @@ class CombatManager {
     if (this.modeFilterCache && this.lastMode === this.mode)
       return this.modeFilterCache;
 
-    const viewDistSq = Constants.COMBAT.VIEW_DISTANCE * Constants.COMBAT.VIEW_DISTANCE;
+    const viewDistSq =
+      Constants.COMBAT.VIEW_DISTANCE * Constants.COMBAT.VIEW_DISTANCE;
     const distSq = (e: any) => {
       const dx = e.position.x - this.bot.entity!.position.x;
       const dz = e.position.z - this.bot.entity!.position.z;
@@ -366,7 +386,9 @@ class CombatManager {
     switch (this.mode) {
       case 0: // Mobs
         filter = (e) =>
-          e.type === "mob" && e.kind === "Hostile mobs" && distSq(e) <= viewDistSq;
+          e.type === "mob" &&
+          e.kind === "Hostile mobs" &&
+          distSq(e) <= viewDistSq;
         break;
       case 1: // Players (Survival)
         filter = (e) =>
@@ -418,7 +440,8 @@ class CombatManager {
    * Record the last damage taken based on health change.
    */
   getLastDamage(): void {
-    const health = this.bot.health! + ((this.bot as any).entity.metadata[11] || 0);
+    const health =
+      this.bot.health! + ((this.bot as any).entity.metadata[11] || 0);
     const delta = this.lastHealth - health;
     if (delta > 0) this.lastDamage = delta;
     this.lastHealth = health;
@@ -428,7 +451,11 @@ class CombatManager {
    * Get the current health status including absorption.
    * @returns Health status object
    */
-  getHealthStatus(): { totalHealth: number; healthPoints: number; absorbPoints: number } {
+  getHealthStatus(): {
+    totalHealth: number;
+    healthPoints: number;
+    absorbPoints: number;
+  } {
     const hp = this.bot.health!;
     const ap = (this.bot as any).entity.metadata[11] || 0;
     return { totalHealth: hp + ap, healthPoints: hp, absorbPoints: ap };
@@ -465,7 +492,9 @@ class CombatManager {
 
     const groundY = (this.bot as any).utilsManager.getGroundBelow();
     const fallDistance = this.bot.entity!.position.y - groundY;
-    const predictedDamage = (this.bot as any).utilsManager.getFallDamage(fallDistance);
+    const predictedDamage = (this.bot as any).utilsManager.getFallDamage(
+      fallDistance,
+    );
 
     // Tolerance: 32 ticks (1.6s) to eat + 10 ticks buffer = 42 ticks
     const EAT_TICKS_WITH_TOLERANCE = EAT_TICKS + EAT_TICKS_BUFFER;
@@ -515,7 +544,7 @@ class CombatManager {
     } catch (error: unknown) {
       const err = error as Error;
       err.message = `Error in combat loop: ${err.message}`;
-      logger.error(err);
+      this.logger.error(err);
     } finally {
       this._isDeciding = false;
     }
@@ -532,7 +561,7 @@ class CombatManager {
       if (!id) continue;
       const item = (this.bot as any).inventory.findInventoryItem(id, null);
       if (item) {
-        logger.combat(`Tossing junk: ${item.name} x${item.count}...`);
+        this.logger.combat(`Tossing junk: ${item.name} x${item.count}...`);
         await this.bot.toss!(item.type, item.metadata, item.count);
         await this.bot.waitForTicks!(Constants.TIMING.EQUIP_WAIT_TICKS);
         break;
@@ -623,7 +652,9 @@ class CombatManager {
     const dist2D = (a: Vec3, b: Vec3) => Math.hypot(a.x - b.x, a.z - b.z);
     const distToTarget = source.distanceTo(target);
 
-    const strafeRange = (this.bot as any).runtimeConfig?.get("COMBAT", "STRAFE_RANGE") ?? Constants.COMBAT.STRAFE_RANGE;
+    const strafeRange =
+      (this.bot as any).runtimeConfig?.get("COMBAT", "STRAFE_RANGE") ??
+      Constants.COMBAT.STRAFE_RANGE;
 
     if (distToTarget > strafeRange + 1) {
       this.strafePoint = null;
@@ -645,7 +676,7 @@ class CombatManager {
         } else {
           const isBlocked = !utils.isJumpPathClear(source, this.strafePoint);
           if (isBlocked) {
-            logger.debug("Clearing blocked strafe point");
+            this.logger.debug("Clearing blocked strafe point");
             this.strafePoint = null;
           } else if (distToPoint < 0.2) {
             // Reached the point, clear so we pick a new one
@@ -679,13 +710,13 @@ class CombatManager {
             if (dir !== this.strafeDirection) {
               this.strafeDirection = dir;
             }
-            logger.debug(`Strafe point found (${label})`);
+            this.logger.debug(`Strafe point found (${label})`);
             break;
           }
         }
 
         if (!this.strafePoint) {
-          logger.debug("No strafe point found in any direction");
+          this.logger.debug("No strafe point found in any direction");
         }
       }
 
@@ -699,7 +730,7 @@ class CombatManager {
 
         const impulse = utils.getJumpVelocity(source, this.strafePoint);
         if (impulse) {
-          logger.combat(
+          this.logger.combat(
             `Jump strafe to ${this.strafePoint.x.toFixed(1)}, ${this.strafePoint.z.toFixed(1)} (dist=${distToTarget.toFixed(1)}, dir=${this.strafeDirection})`,
           );
           utils.applyImpulse(impulse, "set", true);
@@ -752,7 +783,11 @@ class CombatManager {
     }
 
     // Final snap for precision
-    this.bot.entity!.position.set(target.x, this.bot.entity!.position.y, target.z);
+    this.bot.entity!.position.set(
+      target.x,
+      this.bot.entity!.position.y,
+      target.z,
+    );
   }
 
   /**
