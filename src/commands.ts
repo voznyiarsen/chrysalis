@@ -226,6 +226,14 @@ export class CommandManager {
           this.logger.command(`Dud command ran successfully`);
         },
       },
+      vel: {
+        description: "Show bot's current velocity",
+        handler: () => {
+          this.logger.command(
+            `Velocity: ${this.bot.entity!.velocity.toString()}`,
+          );
+        },
+      },
       pause: {
         description: "Pause the bot for N ticks",
         subcommands: {
@@ -317,15 +325,14 @@ export class CommandManager {
         const msg = error instanceof Error ? error.message : String(error);
         this.logger.error(`Error executing command: ${msg}`);
       }
+      return;
     }
 
-    // If we got here, the command wasn't found at all
     // If we partially matched but no handler, show available subcommands as help
     if (result.node && result.matched.length > 0) {
-      const helpStr = cli.getHelp(
-        result.node as unknown as Record<string, cli.CommandNode>,
-        result.matched,
-      );
+      const subTree =
+        result.node.subcommands ?? ({} as Record<string, cli.CommandNode>);
+      const helpStr = cli.getHelp(subTree, result.matched);
       this.logger.command(`Incomplete command. Available:\n${helpStr}`);
       return;
     }
@@ -540,8 +547,11 @@ export class CommandManager {
       this.logger.error(new Error(`Player '${username}' not found`));
       return;
     }
-    this.logger.debug(`Player Debug: '${player.username}'`);
-    this.logger.debug(util.inspect(player, { depth: 1, colors: true }));
+    this.logger.debug(`Player Debug: '${player.username}'`, "Debug");
+    this.logger.debug(
+      util.inspect(player, { depth: 1, colors: true }),
+      "Debug",
+    );
   }
 
   /**
@@ -557,8 +567,9 @@ export class CommandManager {
     }
     this.logger.debug(
       `Slot Debug: '${(item as any).displayName}' (slot ${slotNumber})`,
+      "Debug",
     );
-    this.logger.debug(util.inspect(item, { depth: 1, colors: true }));
+    this.logger.debug(util.inspect(item, { depth: 1, colors: true }), "Debug");
   }
 
   /**
