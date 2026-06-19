@@ -527,6 +527,253 @@ class DebugManager {
     await (this.bot as any).inventoryManager.equipPearl(yaw, pitch);
     (this.bot as any).combatManager.lastPearlTime = Date.now();
   }
+
+  /**
+   * Setup test environment by teleporting bot to origin
+   */
+  async setupTestEnvironment(): Promise<void> {
+    await this.bot.waitForChunksToLoad();
+    this.bot.chat!("/tp 0 1 0");
+    await this.bot.waitForChunksToLoad();
+    await new Promise<void>((resolve) => setTimeout(resolve, 1000));
+    const pos = this.bot.entity!.position;
+    this.logger.debug(
+      `Test environment setup: bot teleported to (${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)})`,
+      "Debug",
+    );
+    this.logger.debug(`Setting creative mode for tests...`, "Debug");
+    await (this.bot as any).inventoryManager.setGamemode(1);
+  }
+
+  /**
+   * Comprehensive jump test covering all 4 cardinal directions and multiple distances.
+   */
+  async debugJumpComprehensive(): Promise<
+    { direction: string; distance: number; result: number; success: boolean }[]
+  > {
+    const directions = [
+      { name: "North", offset: (pos: Vec3) => pos.offset(0, 0, -1) },
+      { name: "South", offset: (pos: Vec3) => pos.offset(0, 0, 1) },
+      { name: "East", offset: (pos: Vec3) => pos.offset(1, 0, 0) },
+      { name: "West", offset: (pos: Vec3) => pos.offset(-1, 0, 0) },
+    ];
+    const distances = [1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0];
+    const results = [];
+
+    for (const direction of directions) {
+      for (const distance of distances) {
+        const center = new Vec3(
+          Math.floor(this.bot.entity!.position.x) + 0.5,
+          this.bot.entity!.position.y,
+          Math.floor(this.bot.entity!.position.z) + 0.5,
+        );
+        await (this.bot as any).combatManager.nudgeToCenter(center);
+
+        const directionVec = direction.offset(new Vec3(0, 0, 0)).normalize();
+        const targetPos = this.bot.entity!.position.offset(
+          directionVec.x * distance, 0, directionVec.z * distance,
+        );
+        this.logger.debug(
+          `Comprehensive jump test: ${direction.name} ${distance} blocks to ${targetPos.toString()}`,
+          "Debug",
+        );
+
+        const jumpResult = await this.debugJumpTest(
+          new Vec3(directionVec.x * distance, 0, directionVec.z * distance),
+        );
+        const success = jumpResult >= 0 && jumpResult <= 0.5;
+        results.push({
+          direction: direction.name, distance: distance,
+          result: jumpResult, success: success,
+        });
+        this.logger.debug(
+          `Comprehensive jump test: ${direction.name} ${distance} blocks result: ${jumpResult.toFixed(3)} ${success ? "✓ PASS" : "✗ FAIL"}`,
+          "Debug",
+        );
+      }
+    }
+    return results;
+  }
+
+  /**
+   * Comprehensive pearl test covering all 4 cardinal directions at 20 blocks.
+   * Tests both low and high arcs using forcedMove event detection.
+   */
+  async debugPearlComprehensive(): Promise<
+    {
+      direction: string;
+      distance: number;
+      arc: string;
+      result: number;
+      success: boolean;
+    }[]
+  > {
+    const directions = [
+      { name: "North", offset: (pos: Vec3) => pos.offset(0, 0, -1) },
+      { name: "South", offset: (pos: Vec3) => pos.offset(0, 0, 1) },
+      { name: "East", offset: (pos: Vec3) => pos.offset(1, 0, 0) },
+      { name: "West", offset: (pos: Vec3) => pos.offset(-1, 0, 0) },
+    ];
+    const distances = [20];
+    const arcTypes = ["low", "high"];
+    const results = [];
+
+    for (const direction of directions) {
+      for (const distance of distances) {
+        for (const arcType of arcTypes) {
+          try { await this.bot.waitForChunksToLoad(); } catch (e) {
+            this.logger.warn(`Chunk loading failed: ${e.message}`, "Debug");
+          }
+
+          // Wait for the bot to settle
+          await new Promise<void>((resolve) => {
+            let settled = false;
+            const check = () => {
+              if (settled) return;
+              if (this.bot.entity!.onGround &&
+                  Math.abs(this.bot.entity!.velocity.x) < 0.001 &&
+                  Math.abs(this.bot.entity!.velocity.z) < 0.001) {
+                settled = true;
+                this.bot.off("physicsTick", check);
+                resolve();
+              }
+            };
+            check();
+            this.bot.on("physicsTick", check);
+            setTimeout(() => { if (!settled) { this.bot.off("physicsTick", check); resolve(); } }, 5000);
+          });
+
+          // Server-side teleport to center
+          await new Promise<void>((resolve) => {
+            const onMove = () => { this.bot.off("forcedMove", onMove); resolve(); };
+            this.bot.on("forcedMove", onMove);
+            this.bot.chat!(`/tp ${this.bot.entity!.position.x.toFixed(1)} ${this.bot.entity!.position.y.toFixed(1)} ${this.bot.entity!.position.z.toFixed(1)}`);
+            setTimeout(() => { this.bot.off("forcedMove", onMove); resolve(); }, 3000);
+          });
+
+          const directionVec = direction.offset(new Vec3(0, 0, 0)).normalize();
+          const targetPos = this.bot.entity!.position.offset(
+            directionVec.x * distance, 0, directionVec.z * distance,
+          );
+
+          this.logger.debug(
+            `Comprehensive pearl test: ${direction.name} ${distance} blocks ${arcType} arc to ${targetPos.toString()}`,
+            "Debug",
+          );
+
+          const teleportResult = await this._testPearlWithForcedMove(
+            direction.name, targetPos, arcType,
+          );
+
+          const success = teleportResult >= 0 && teleportResult <= 3.0;
+          results.push({
+            direction: direction.name, distance: distance,
+            arc: arcType, result: teleportResult, success: success,
+          });
+          this.logger.debug(
+            `Comprehensive pearl test: ${direction.name} ${distance} blocks ${arcType} arc result: ${teleportResult.toFixed(3)} ${success ? "✓ PASS" : "✗ FAIL"}`,
+            "Debug",
+          );
+        }
+      }
+    }
+    return results;
+  }
+
+  private async _testPearlWithForcedMove(
+    directionName: string, targetPos: Vec3, arcType: string,
+  ): Promise<number> {
+    return new Promise((resolve) => {
+      const eyePos = this.bot.entity!.position.offset(0, this.bot.entity!.height!, 0);
+      const initialDist = Math.sqrt(
+        Math.pow(targetPos.x - eyePos.x, 2) +
+        Math.pow(targetPos.y - eyePos.y, 2) +
+        Math.pow(targetPos.z - eyePos.z, 2),
+      );
+      const minAcceptable = initialDist * 0.5;
+
+      const listener = () => {
+        const newPos = this.bot.entity!.position;
+        const moved = Math.sqrt(
+          Math.pow(newPos.x - eyePos.x, 2) +
+          Math.pow(newPos.y - eyePos.y, 2) +
+          Math.pow(newPos.z - eyePos.z, 2),
+        );
+        const dist = Math.sqrt(
+          Math.pow(targetPos.x - newPos.x, 2) +
+          Math.pow(targetPos.y - newPos.y, 2) +
+          Math.pow(targetPos.z - newPos.z, 2),
+        );
+        this.logger.debug(
+          `Pearl teleport: ${newPos.toString()}, move: ${moved.toFixed(3)}, thresh: ${minAcceptable.toFixed(3)}, targetDist: ${dist.toFixed(3)}`,
+          "Debug",
+        );
+        if (moved >= minAcceptable) {
+          this.bot.off("forcedMove", listener as any);
+          resolve(dist);
+        } else {
+          this.logger.debug(`Ignoring small move ${moved.toFixed(3)} < ${minAcceptable.toFixed(3)}`, "Debug");
+        }
+      };
+
+      this.bot.on("forcedMove", listener as any);
+      const timeout = setTimeout(() => {
+        this.bot.off("forcedMove", listener as any);
+        this.logger.warn(`Pearl timeout for ${directionName} ${arcType}`, "Debug");
+        resolve(-1);
+      }, 30000);
+
+      this._executePearlThrow(eyePos, targetPos, arcType as any, 1)
+        .catch((err) => {
+          clearTimeout(timeout);
+          this.bot.off("forcedMove", listener as any);
+          this.logger.error(`Pearl failed: ${err.message}`, "Debug");
+          resolve(-1);
+        });
+    });
+  }
+
+  private async _executePearlThrow(
+    eyePos: Vec3, targetPos: Vec3,
+    arcType: "auto" | "low" | "high",
+    throwAmount: number = 1,
+  ): Promise<void> {
+    this.logger.debug(
+      `Starting pearl throw: ${arcType} arc, ${throwAmount} pearls`,
+      "Debug",
+    );
+    this.logger.debug(`Initial pos: ${this.bot.entity!.position.toString()}`, "Debug");
+    this.logger.debug(`Gamemode: ${this.bot.game.gameMode}`, "Debug");
+
+    this.logger.debug(`Setting ${throwAmount} ender pearl(s) in hand slot...`, "Debug");
+    await (this.bot as any).inventoryManager.setCreativeSlot("ender_pearl", throwAmount);
+
+    const count = (this.bot as any).inventoryManager.getItemCount("ender_pearl");
+    this.logger.debug(`Pearls after give: ${count}`, "Debug");
+    this.logger.debug(`Gamemode after give: ${this.bot.game.gameMode}`, "Debug");
+
+    if (arcType === "auto") {
+      this.logger.debug(`Calculating best pearl pitch...`, "Debug");
+      const result = (this.bot as any).combatManager.getBestPearlPitch(eyePos, targetPos);
+      if (!result) throw new Error("Cannot reach target with pearl (auto arc)");
+      const { pitch, arc } = result;
+      const yaw = Math.atan2(eyePos.x - targetPos.x, eyePos.z - targetPos.z);
+      this.logger.debug(`Arc: ${arc}, pitch: ${pitch.toFixed(2)}°, yaw: ${(yaw * 180 / Math.PI).toFixed(2)}°`, "Debug");
+      await (this.bot as any).inventoryManager.equipPearl(yaw, pitch);
+      this.logger.debug(`Pearl thrown`, "Debug");
+    } else {
+      const { VELOCITY, GRAVITY, DRAG } = Constants.COMBAT.ENDER_PEARL;
+      const pitches = (this.bot as any).utilsManager.getProjectilePitch(eyePos, targetPos, VELOCITY, GRAVITY, DRAG);
+      if (pitches.length === 0) throw new Error(`Cannot reach target with pearl (${arcType} arc)`);
+      const pitch = arcType === "low" ? pitches[0] : pitches[1] || pitches[0];
+      const yaw = Math.atan2(eyePos.x - targetPos.x, eyePos.z - targetPos.z);
+      this.logger.debug(`Arc: ${arcType}, pitch: ${pitch.toFixed(2)}°, yaw: ${(yaw * 180 / Math.PI).toFixed(2)}°`, "Debug");
+      await (this.bot as any).inventoryManager.equipPearl(yaw, pitch);
+      this.logger.debug(`Pearl thrown`, "Debug");
+    }
+
+    (this.bot as any).combatManager.lastPearlTime = Date.now();
+  }
 }
 
 /**
