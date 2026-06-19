@@ -183,6 +183,20 @@ interface SolidCacheEntry {
   expiry: number;
 }
 
+/** Result of the best pearl trajectory calculation */
+export interface PearlTrajectoryResult {
+  /** The pitch angle (degrees) to use */
+  pitch: number;
+  /** Which arc this pitch corresponds to */
+  arc: "low" | "high";
+  /** Total flight time in ticks */
+  flightTime: number;
+  /** The actual landing point of the projectile */
+  landingPoint: Vec3;
+  /** Distance from the landing point to the desired target */
+  landingDist: number;
+}
+
 // ---------------------------------------------------------------------------
 // UtilsManager
 // ---------------------------------------------------------------------------
@@ -389,6 +403,9 @@ export class UtilsManager {
    * @param g - Gravity acceleration
    * @param drag - Per-tick velocity multiplier
    * @returns Pitches in degrees (low arc first, then high arc), empty if unreachable
+   *
+   * The returned array has pitches sorted: [lowArc, highArc] where lowArc > highArc numerically
+   * (low arc = steeper angle downward = larger pitch value).
    */
   getProjectilePitch(
     source: Vec3,
@@ -408,12 +425,14 @@ export class UtilsManager {
     const rootSq = Math.sqrt(root);
     const lowArc = Math.atan((v2 - rootSq) / (g * x));
     const highArc = Math.atan((v2 + rootSq) / (g * x));
-    const pitches = [(-lowArc * 180) / Math.PI, (-highArc * 180) / Math.PI];
+    // lowArc < highArc mathematically, but we want pitches[0] > pitches[1] for low/high arcs
+    // So we swap the order to maintain the expected API contract
+    const pitches = [(highArc * 180) / Math.PI, (lowArc * 180) / Math.PI];
     const getDistanceAtY = (p: number): number => {
       let currX = 0;
       let currY = 0;
-      let velX = v * Math.cos((-p * Math.PI) / 180);
-      let velY = v * Math.sin((-p * Math.PI) / 180);
+      let velX = v * Math.cos((p * Math.PI) / 180);
+      let velY = v * Math.sin((p * Math.PI) / 180);
       for (let i = 0; i < 200; i++) {
         currX += velX;
         currY += velY;
@@ -440,6 +459,50 @@ export class UtilsManager {
   }
 
   /**
+   * Simulate a projectile trajectory from source with given pitch and return
+   * the total flight time (ticks) and landing position (first tick where
+   * the projectile is within 1.0 block of the target).
+   *
+   * This does NOT check for obstacles; it purely computes the parabolic path.
+   * @param source - Launch position
+   * @param target - Target position (end-of-flight marker)
+   * @param v - Initial speed
+   * @param g - Gravity per tick
+   * @param p - Pitch in degrees
+   * @param drag - Per-tick velocity multiplier
+   * @returns { flightTime, landingPoint } or null if flight never reaches target vicinity
+   * @private
+   */
+  private _computeLandingInfo(
+    source: Vec3,
+    target: Vec3,
+    v: number,
+    g: number,
+    p: number,
+    drag: number,
+  ): { flightTime: number; landingPoint: Vec3 } | null {
+    const yaw = Math.atan2(target.x - source.x, target.z - source.z);
+    let currPos = source.clone();
+    let currVel = new Vec3(
+      v * Math.cos((p * Math.PI) / 180) * Math.sin(yaw),
+      v * Math.sin((p * Math.PI) / 180),
+      v * Math.cos((p * Math.PI) / 180) * Math.cos(yaw),
+    );
+    const maxTicks = 200;
+    for (let i = 0; i < maxTicks; i++) {
+      const nextPos = currPos.plus(currVel);
+      currPos = nextPos;
+      currVel.y = currVel.y * drag - g;
+      currVel.x *= drag;
+      currVel.z *= drag;
+      if (currPos.distanceTo(target) < 1.0)
+        return { flightTime: i + 1, landingPoint: currPos.clone() };
+      if (currPos.y < -64) break;
+    }
+    return null;
+  }
+
+  /**
    * Check whether a projectile trajectory is clear of blocks and entities.
    * Simulates the full flight path.
    * @param source - Launch position
@@ -461,9 +524,9 @@ export class UtilsManager {
     const yaw = Math.atan2(target.x - source.x, target.z - source.z);
     let currPos = source.clone();
     let currVel = new Vec3(
-      v * Math.cos((-p * Math.PI) / 180) * Math.sin(yaw),
-      v * Math.sin((-p * Math.PI) / 180),
-      v * Math.cos((-p * Math.PI) / 180) * Math.cos(yaw),
+      v * Math.cos((p * Math.PI) / 180) * Math.sin(yaw),
+      v * Math.sin((p * Math.PI) / 180),
+      v * Math.cos((p * Math.PI) / 180) * Math.cos(yaw),
     );
     const maxTicks = 200;
     for (let i = 0; i < maxTicks; i++) {
@@ -489,6 +552,169 @@ export class UtilsManager {
       if (currPos.y < -64) break;
     }
     return false;
+  }
+
+  /**
+   * Best pearl trajectory calculation.
+   *
+   * Samples candidate landing points within a 1.5-block tolerance sphere centered
+   * on the target point, computes pitches for each candidate, checks whether each
+   * trajectory is unobstructed, then ranks by:
+   *  1) Unobstructed (clear paths before blocked ones)
+   *  2) Flight time  (ascending  – faster is better)
+   *  3) Landing distance to original target (ascending – more precise is better)
+   *
+   * @param source - Launch position (eye position of the thrower)
+   * @param target - Desired target position
+   * @param velocity - Initial projectile speed (default: ender pearl 1.5)
+   * @param gravity  - Gravity acceleration per tick (default: 0.03)
+   * @param drag     - Per-tick velocity multiplier (default: 0.99)
+   * @param toleranceRadius - Sampling radius around the target (default: 1.5)
+   * @param sampleStep       - Grid step size for candidate generation (default: 1.0)
+   * @returns The best trajectory result, or null if no candidate trajectory
+   *          (not even the direct target) is reachable.
+   */
+  getBestPearlTrajectory(
+    source: Vec3,
+    target: Vec3,
+    velocity: number = Constants.COMBAT.PROJECTILES.ender_pearl.VELOCITY,
+    gravity: number = Constants.COMBAT.PROJECTILES.ender_pearl.GRAVITY,
+    drag: number = Constants.COMBAT.PROJECTILES.ender_pearl.DRAG,
+    toleranceRadius: number = 1.5,
+    sampleStep: number = 1.0,
+  ): PearlTrajectoryResult | null {
+    // ---- 1. Generate candidate landing points within the tolerance sphere ----
+    const candidates: Array<{
+      point: Vec3;
+      pitch: number;
+      arc: "low" | "high";
+      blocked: boolean;
+      flightTime: number;
+      landingPoint: Vec3;
+      landingDist: number;
+    }> = [];
+
+    // Determine the number of integer-valued offset steps that fit inside the radius
+    const maxOffset = Math.floor(toleranceRadius / sampleStep);
+    const offsets: number[] = [];
+    for (let d = -maxOffset; d <= maxOffset; d++) {
+      const o = d * sampleStep;
+      // Always include the exact target (o = 0) and keep the list small
+      offsets.push(o);
+    }
+    // Ensure 0 is always present (maxOffset >= 1 for radius >= step, which is typical)
+    if (!offsets.includes(0)) offsets.push(0);
+
+    const candidateTargets: Vec3[] = [];
+    for (const dx of offsets) {
+      for (const dy of offsets) {
+        for (const dz of offsets) {
+          const distSq = dx * dx + dy * dy + dz * dz;
+          if (distSq > toleranceRadius * toleranceRadius + 1e-9) continue;
+          candidateTargets.push(
+            new Vec3(target.x + dx, target.y + dy, target.z + dz),
+          );
+        }
+      }
+    }
+
+    // ---- 2. Evaluate each candidate target point ----
+    for (const candidateTarget of candidateTargets) {
+      const pitches = this.getProjectilePitch(
+        source,
+        candidateTarget,
+        velocity,
+        gravity,
+        drag,
+      );
+
+      for (let i = 0; i < pitches.length; i++) {
+        const pitch = pitches[i];
+        const arc: "low" | "high" = i === 0 ? "low" : "high";
+
+        const blocked = !this.isProjectilePathClear(
+          source,
+          candidateTarget,
+          velocity,
+          gravity,
+          pitch,
+          drag,
+        );
+
+        if (blocked) {
+          // Still record the blocked entry so it ranks below all clear paths
+          candidates.push({
+            point: candidateTarget,
+            pitch,
+            arc,
+            blocked: true,
+            flightTime: Infinity,
+            landingPoint: candidateTarget.clone(),
+            landingDist: Infinity,
+          });
+          continue;
+        }
+
+        // Compute flight time and actual landing position
+        const info = this._computeLandingInfo(
+          source,
+          candidateTarget,
+          velocity,
+          gravity,
+          pitch,
+          drag,
+        );
+
+        if (!info) {
+          // Shouldn't happen for a pitch that came from getProjectilePitch, but be safe
+          candidates.push({
+            point: candidateTarget,
+            pitch,
+            arc,
+            blocked: true,
+            flightTime: Infinity,
+            landingPoint: candidateTarget.clone(),
+            landingDist: Infinity,
+          });
+          continue;
+        }
+
+        candidates.push({
+          point: candidateTarget,
+          pitch,
+          arc,
+          blocked: false,
+          flightTime: info.flightTime,
+          landingPoint: info.landingPoint,
+          landingDist: info.landingPoint.distanceTo(target),
+        });
+      }
+    }
+
+    // ---- 3. Rank: unobstructed (false < true) > flightTime ASC > landingDist ASC ----
+    if (candidates.length === 0) return null;
+
+    candidates.sort((a, b) => {
+      // Clear paths first
+      if (a.blocked !== b.blocked) return a.blocked ? 1 : -1;
+      // Then fastest (shortest flight time)
+      if (a.flightTime !== b.flightTime) return a.flightTime - b.flightTime;
+      // Then most precise (closest to actual target)
+      return a.landingDist - b.landingDist;
+    });
+
+    const best = candidates[0];
+
+    // If even the best candidate is blocked, nothing is reachable
+    if (best.blocked) return null;
+
+    return {
+      pitch: best.pitch,
+      arc: best.arc,
+      flightTime: best.flightTime,
+      landingPoint: best.landingPoint.clone(),
+      landingDist: best.landingDist,
+    };
   }
 
   /**
@@ -1054,7 +1280,12 @@ export class UtilsManager {
    * @param angleDeg - Angular offset
    * @returns Velocity vector
    */
-  getJumpVelocity(source: Vec3, target: Vec3, angleDeg = 0): Vec3 {
+  getJumpVelocity(
+    source: Vec3,
+    target: Vec3,
+    angleDeg = 0,
+    isStrafe = false,
+  ): Vec3 {
     const dx = target.x - source.x;
     const dz = target.z - source.z;
     const len = Math.hypot(dx, dz);
@@ -1087,7 +1318,10 @@ export class UtilsManager {
     const distMultiplier = 1 + GROUND_MOMENTUM * geomSum;
 
     // Required initial horizontal speed to cover the target distance.
-    const vH1 = len / distMultiplier;
+    const calibrationFactor = isStrafe
+      ? Constants.PHYSICS.STRAFE_VELOCITY_CALIBRATION
+      : Constants.PHYSICS.JUMP_VELOCITY_CALIBRATION;
+    const vH1 = (len / distMultiplier) * calibrationFactor;
 
     const rad = (angleDeg * Math.PI) / 180;
     const cosA = Math.cos(rad);
