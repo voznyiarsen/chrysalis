@@ -30,6 +30,7 @@ All source code is written in TypeScript under `src/`. Key configuration:
   npm run lint   # Run ESLint (includes --fix)
   npm run format # Run Prettier
   ```
+- **Build**: After making code changes, run `npm run build` to compile TypeScript and verify functionality.
 - **Documentation**: After making code changes, update `README.md` and `AGENTS.md` to reflect any changes to:
   - Command signatures and behavior
   - File structure and architecture overview
@@ -37,13 +38,15 @@ All source code is written in TypeScript under `src/`. Key configuration:
   - API signatures and type definitions
   - Configuration options and environment variables
 
+- **Jest Tests**: NEVER modify values inside `.expect()` calls in Jest tests. These values represent the expected behavior and should only be changed when the actual implementation changes. Instead, optimize the implementation or test infrastructure to meet the existing expectations.
+
 ---
 
 ## Development Guidelines
 
 - **Runtime**: Node.js (see `package.json` engines).
 - **Language**: TypeScript. Source files live under `src/` with a `.ts` extension.
-  Compiled JavaScript output goes to `dist/`. Run `npm run build` to compile.
+  Compiled JavaScript output goes to `dist/`.
 - **Linting**: ESLint (`eslint.config.mjs`) with Prettier (`.prettierrc`).
 - **Style**: Follow existing code patterns (async/await, event-driven, class-based modules).
   The `tsconfig.json` targets ES2022 with CommonJS module output (`"type": "commonjs"` in package.json).
@@ -93,6 +96,16 @@ Common abbreviations used throughout the codebase:
 | `EGAPPLE`                  | Enchanted Golden Apple                  |
 | `HP`                       | Health Points                           |
 | `AP`                       | Absorption Points                       |
+
+### Pitch Calculation
+The Mineflayer library uses an inverted pitch compared to Minecraft.
+
+- **Positive pitch** means looking **UP**
+- **Negative pitch** means looking **DOWN**
+
+Since the pitch is applied using the Mineflayer library, the input pitch values should be inverted.
+
+This is the absolute truth; do not question it.
 
 ### Method Naming Patterns
 
@@ -249,6 +262,25 @@ npm start -- --headless --bot1 "run debug_strafe_once 10 1"
 The headless mode defaults to a 10-second timeout. Use `--timeout <seconds>` to
 customize. When debugging, use the DebugManager's test commands (`debug_strafe_once`,
 `debug_strafe_loop`, `debug_pearl_throw`, etc.) via headless mode.
+
+---
+
+## Method and File Mappings
+
+| Method Name | File Location |
+|-------------|--------------|
+| `getItemCount` | `src/inventory.ts` |
+| `equipArmor` | `src/inventory.ts` |
+| `doStrafe` | `src/pvp.ts` |
+| `setupDecisions` | `src/pvp.ts` |
+| `getTargetFilter` | `src/pvp.ts` |
+| `getHealthStatus` | `src/pvp.ts` |
+| `hasItem` | `src/inventory.ts` |
+| `hasFood` | `src/inventory.ts` |
+| `isInLiquid` | `src/utils.ts` |
+| `isJumpPathClear` | `src/utils.ts` |
+| `equipGapple` | `src/inventory.ts` |
+| `restoreInventory` | `src/inventory.ts` |
 
 ---
 
