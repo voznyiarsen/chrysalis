@@ -39,6 +39,10 @@ export const Constants = {
     JUMP_VELOCITY: 0.42,
     /** Instantaneous horizontal velocity boost applied during a sprint-jump takeoff */
     SPRINT_JUMP_BOOST: 0.2,
+    /** Empirical calibration factor for jump velocity to account for model inaccuracies */
+    JUMP_VELOCITY_CALIBRATION: 0.95,
+    /** Empirical calibration factor for strafe velocity to account for model inaccuracies */
+    STRAFE_VELOCITY_CALIBRATION: 0.8,
     /** Momentum thresholds for stopping movement */
     MOMENTUM_THRESHOLD_1_8: 0.005,
     /** Momentum thresholds for stopping movement (1.9+) */
