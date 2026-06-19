@@ -283,7 +283,10 @@ class CombatManager {
 
   /**
    * Determine the best pitch for throwing an ender pearl.
-   * Prioritizes low arc for speed, falls back to high arc if blocked.
+   * Delegates to {@link UtilsManager.getBestPearlTrajectory} which samples
+   * landing points within a 1.5-block tolerance radius, checks obstacles,
+   * and ranks by unobstructed > flight time > landing precision.
+   *
    * @param source - Launch position
    * @param target - Target position
    * @returns Pitch and arc info, or null if unreachable
@@ -292,32 +295,19 @@ class CombatManager {
     source: Vec3,
     target: Vec3,
   ): { pitch: number; arc: string } | null {
-    const { VELOCITY, GRAVITY, DRAG } = Constants.COMBAT.ENDER_PEARL;
-    const pitches = (this.bot as any).utilsManager.getProjectilePitch(
+    const result = (this.bot as any).utilsManager.getBestPearlTrajectory(
       source,
       target,
-      VELOCITY,
-      GRAVITY,
-      DRAG,
     );
 
-    const arcs = ["low", "high"];
-    for (let i = 0; i < pitches.length; i++) {
-      const pitch = pitches[i];
-      const clear = (this.bot as any).utilsManager.isProjectilePathClear(
-        source,
-        target,
-        VELOCITY,
-        GRAVITY,
-        pitch,
-        DRAG,
-      );
-
-      if (clear) {
-        return { pitch, arc: arcs[i] };
-      } else if (i === 0 && pitches.length > 1) {
-        this.logger.debug("Low arc blocked, evaluating high arc...", "Combat");
+    if (result) {
+      if (result.arc === "high") {
+        this.logger.debug(
+          "Low arc blocked, evaluating high arc via tolerance sampling...",
+          "Combat",
+        );
       }
+      return { pitch: result.pitch, arc: result.arc };
     }
     return null;
   }

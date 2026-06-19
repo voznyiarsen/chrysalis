@@ -388,9 +388,17 @@ class BotRegistry {
         if ((bot as any).listenerManager) {
           (bot as any).listenerManager.offAll(bot);
         }
-        setTimeout(() => {
-          this.createBot(botNumber);
-        }, Constants.TIMING.RECONNECT_DELAY);
+        const attemptReconnect = (attempt: number = 1) => {
+          const delay = Constants.TIMING.RECONNECT_DELAY * Math.min(attempt, 5);
+          setTimeout(() => {
+            botLog.client(`Reconnect attempt ${attempt}...`);
+            this.createBot(botNumber).catch((err: unknown) => {
+              botLog.error(`Reconnect failed: ${(err as Error).message}`);
+              attemptReconnect(attempt + 1);
+            });
+          }, delay);
+        };
+        attemptReconnect();
       }
     });
 

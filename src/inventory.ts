@@ -224,6 +224,48 @@ class InventoryManager {
   }
 
   /**
+   * Place an item directly into a slot using creative mode.
+   * Switches to creative (gamemode 1), places the item, and switches back to survival.
+   * @param itemName - Name of the item (e.g., "ender_pearl")
+   * @param count - Stack size
+   * @param targetSlot - Destination slot name (default: "hand")
+   */
+  async setCreativeSlot(
+    itemName: string,
+    count: number = 1,
+    targetSlot: string = "hand",
+  ): Promise<void> {
+    // Use /give command which works reliably in creative mode
+    await this.setGamemode(1);
+    try {
+      await this.clearInventory();
+      await this.bot.chat!(`/give @p ${itemName} ${count}`);
+      await this.bot.waitForTicks!(Constants.TIMING.EQUIP_WAIT_TICKS);
+
+      // Wait for item to appear in hand slot
+      for (let attempt = 0; attempt < 10; attempt++) {
+        const destSlot = (this.bot as any).getEquipmentDestSlot(targetSlot);
+        const slotItem: any = (this.bot as any).inventory.slots[destSlot];
+        if (slotItem && slotItem.name === itemName) {
+          await this.setGamemode(0);
+          return;
+        }
+        await this.bot.waitForTicks!(1);
+      }
+
+      // Fallback: try to equip from inventory
+      await this._equipItem(itemName, targetSlot);
+    } catch (error: unknown) {
+      const err = error as Error;
+      err.message = `Failed to set creative slot for ${itemName}: ${err.message}`;
+      this.logger.error(err);
+      await this.setGamemode(0);
+      throw err;
+    }
+    await this.setGamemode(0);
+  }
+
+  /**
    * Record current inventory to a JSON file.
    * @param slot - Recording slot index for the filename
    */
@@ -638,7 +680,7 @@ class InventoryManager {
    * Equip and throw an ender pearl (or other projectile) toward a target.
    * Adjusts pitch for the projectile's offset and looks before throwing.
    * @param yaw - Yaw in radians, or null to keep current
-   * @param pitch - Pitch in radians, or null to keep current
+   * @param pitch - Pitch in degrees (converted to radians internally), or null to keep current
    * @param itemType - Item name for the projectile
    */
   async equipPearl(
@@ -661,9 +703,10 @@ class InventoryManager {
         };
         // Minecraft pitch: positive is down. PITCH_OFFSET (positive) makes it point lower.
         // T = P + O => P = T - O
-        // All our internal pitches are in Radians, but constants might be in Degrees
+        // getProjectilePitch returns degrees, bot.look expects radians
+        const pitchRad = (pitch * Math.PI) / 180;
         const offsetRad = ((projData as any).PITCH_OFFSET * Math.PI) / 180;
-        const adjustedPitch = pitch - offsetRad;
+        const adjustedPitch = pitchRad - offsetRad;
 
         // Mineflayer uses positive pitch for looking UP
         await this.bot.look!(yaw, adjustedPitch, true);
