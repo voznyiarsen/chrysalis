@@ -4,6 +4,7 @@
  */
 
 import { AABB, UtilsManager } from "../src/utils";
+import { Vec3 } from "vec3";
 
 describe("AABB - Collision Detection", () => {
   describe("constructor and basic properties", () => {
@@ -338,5 +339,148 @@ describe("Projectile Trajectory Prediction", () => {
     if (pitchesNoDrag.length > 0 && pitchesWithDrag.length > 0) {
       expect(pitchesNoDrag[0]).not.toBeCloseTo(pitchesWithDrag[0], 1);
     }
+  });
+});
+
+describe("getBestPearlTrajectory", () => {
+  let utilsManager: any;
+
+  beforeAll(() => {
+    const mockBot: any = {
+      version: "1.12.2",
+      registry: { blocksByName: {} },
+      entity: { effects: {} },
+      blockAt: () => null,
+      entities: {},
+    };
+    utilsManager = new UtilsManager(mockBot);
+  });
+
+  test("returns a result for a reachable target with clear path", () => {
+    const source = new Vec3(0, 0, 0);
+    const target = new Vec3(10, 0, 0);
+    const result = utilsManager.getBestPearlTrajectory(
+      source,
+      target,
+      1.5, // velocity
+      0.03, // gravity
+      0.99, // drag
+      1.5, // tolerance radius
+      1.0, // step
+    );
+    expect(result).not.toBeNull();
+    expect(result).toHaveProperty("pitch");
+    expect(result).toHaveProperty("arc");
+    expect(result).toHaveProperty("flightTime");
+    expect(result).toHaveProperty("landingPoint");
+    expect(result).toHaveProperty("landingDist");
+    // The landing point should be within 2.5 blocks of the target
+    // (tolerance radius 1.5 + end-trigger radius 1.0)
+    expect(result!.landingDist).toBeLessThanOrEqual(2.6);
+  });
+
+  test("returns null for unreachable target (too far/too steep)", () => {
+    const source = new Vec3(0, 0, 0);
+    const target = new Vec3(100, 50, 0);
+    const result = utilsManager.getBestPearlTrajectory(
+      source,
+      target,
+      1.5,
+      0.03,
+      0.99,
+      1.5,
+      1.0,
+    );
+    expect(result).toBeNull();
+  });
+
+  test("tolerance sphere allows hitting near the target when direct pitch is blocked", () => {
+    // Create a mock where isProjectilePathClear returns false for the direct
+    // target but true for offset targets within tolerance
+    const source = new Vec3(0, 0, 0);
+    const target = new Vec3(10, 0, 0);
+
+    const originalClear = utilsManager.isProjectilePathClear.bind(utilsManager);
+
+    utilsManager.isProjectilePathClear = (
+      src: any,
+      tgt: any,
+      v: number,
+      g: number,
+      p: number,
+      d: number,
+    ) => {
+      // Block the exact target point, allow others
+      const distToTarget = Math.sqrt(
+        (tgt.x - 10) ** 2 + (tgt.y - 0) ** 2 + (tgt.z - 0) ** 2,
+      );
+      if (distToTarget < 0.5) {
+        return false;
+      }
+      return true;
+    };
+
+    const result = utilsManager.getBestPearlTrajectory(
+      source,
+      target,
+      1.5,
+      0.03,
+      0.99,
+      1.5,
+      1.0,
+    );
+
+    // Restore
+    utilsManager.isProjectilePathClear = originalClear;
+
+    // Should find an alternative path via tolerance sampling
+    expect(result).not.toBeNull();
+    if (result) {
+      // The landing point should be within tolerance + end-trigger radius of the target
+      expect(result.landingDist).toBeLessThanOrEqual(2.6);
+    }
+  });
+
+  test("returns null when all paths (including tolerance samples) are blocked", () => {
+    const source = new Vec3(0, 0, 0);
+    const target = new Vec3(10, 0, 0);
+
+    const originalClear = utilsManager.isProjectilePathClear.bind(utilsManager);
+
+    // Block everything
+    utilsManager.isProjectilePathClear = () => false;
+
+    const result = utilsManager.getBestPearlTrajectory(
+      source,
+      target,
+      1.5,
+      0.03,
+      0.99,
+      1.5,
+      1.0,
+    );
+
+    utilsManager.isProjectilePathClear = originalClear;
+
+    expect(result).toBeNull();
+  });
+
+  test("selects low arc over high arc when both are clear (low arc is faster)", () => {
+    const source = new Vec3(0, 0, 0);
+    const target = new Vec3(15, 0, 0);
+
+    const result = utilsManager.getBestPearlTrajectory(
+      source,
+      target,
+      1.5,
+      0.03,
+      0.99,
+      1.5,
+      1.0,
+    );
+
+    expect(result).not.toBeNull();
+    // Low arc is the default fastest choice when unobstructed
+    expect(result!.arc).toBe("low");
   });
 });
