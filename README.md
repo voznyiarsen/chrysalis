@@ -37,7 +37,7 @@ npm run build
 npm start
 ```
 
-## Commands
+## Command & Interaction Model
 
 Commands use a hierarchical Cisco IOS-style CLI. Type `?` (Shift-/) at any prompt to see available commands and subcommands in the current context. Press **Tab** to auto-complete tokens or show completions when ambiguous.
 
@@ -53,6 +53,7 @@ Key architectural elements:
 - **`registerCommand(name, node)`** is the plugin API used by `debug.ts` to inject debug commands.
 - **Variable substitution**: `${variable}` tokens in commands are resolved by `evaluatePlaceholders()` against built-in variables (such as `${x}`, `${y}`, `${z}`) before execution.
 - **Tab completion** and **`?` context-sensitive help** are handled by `tui.ts` using the CLI engine, not by the command tree itself.
+- **Function calling**: The `func <functionName> [args...]` command provides direct access to internal functions for scripting and debugging.
 
 ### Command List
 
@@ -70,7 +71,7 @@ Key architectural elements:
 | `eq <item> <slot>`           | Equip an item to a slot (hand, off-hand, head, torso, legs, feet)              |
 | `uneq <slot>`                | Unequip an item from a slot                                                    |
 | `uneqall`                    | Unequip all items                                                              |
-| `rec [slot]`                 | Record inventory to a JSON file (default slot 0)                               |
+| `rec [slot]`                 | Record inventory to a JSON file (default slot 0)                                |
 | `res [slot]`                 | Restore inventory from a recorded JSON file                                    |
 | `clear`                      | Clear inventory via creative mode                                              |
 | `pause <ticks>`              | Pause the bot for N ticks                                                      |
@@ -81,6 +82,8 @@ Key architectural elements:
 | `dud`                        | Test command                                                                   |
 | `query_player_db <username>` | Query player database for a specific user                                      |
 | `query_slot_db <slot>`       | Query slot database for a specific slot                                        |
+| `func`                       | List all available functions that can be called directly                       |
+| `func <functionName> [args]` | Call a function directly by name with optional arguments                      |
 
 ### Variable Substitution
 
@@ -99,7 +102,7 @@ Example: `ts ${x}` — tosses the item whose name matches the current X coordina
 - **Tab** at any prompt: If the current token uniquely matches a command, it is auto-completed. If multiple matches exist, available options are shown in the log.
 - **Tab** after a trailing space: Lists available subcommands/parameters at the current level.
 
-## Runtime Configuration
+### Runtime Configuration
 
 Combat and movement constants can be adjusted at runtime via the `cfg` command, without restarting the bot. Example:
 
@@ -111,7 +114,7 @@ cfg                    # list all active overrides
 
 Adjustable values are routed through `config.ts` (the `RuntimeConfig` class), which wraps `constants.ts` and allows per-key overrides via a `Map`.
 
-### Adjustable Constants
+#### Adjustable Constants
 
 The following constants are available for runtime override:
 
@@ -153,38 +156,48 @@ In headless mode, ERROR-level messages are routed to stderr with a `HH:MM:SS` ti
 const logger = require("./logger");
 
 // Level-based
-logger.debug(msg, tag?);   // DEBUG level
-logger.info(msg, tag?);    // INFO level
-logger.warn(msg, tag?);    // WARN level
-logger.error(msg, tag?);   // ERROR level
+logger.debug(msg, tag?, caller?);   // DEBUG level
+logger.info(msg, tag?, caller?);    // INFO level
+logger.warn(msg, tag?, caller?);    // WARN level
+logger.error(msg, tag?, caller?);   // ERROR level
 
 // Semantic helpers (tag is set automatically)
-logger.client(msg, level?);
-logger.combat(msg, level?);
-logger.inventory(msg, level?);
-logger.command(msg, level?);
-logger.status(msg, level?);
-logger.config(msg, level?);
-logger.chat(msg);
-logger.exception(msg);     // always ERROR
-logger.warning(msg);       // always WARN
+logger.client(msg, level?, caller?);
+logger.combat(msg, level?, caller?);
+logger.inventory(msg, level?, caller?);
+logger.command(msg, level?, caller?);
+logger.status(msg, level?, caller?);
+logger.config(msg, level?, caller?);
+logger.chat(msg, caller?);
+logger.exception(msg, caller?);     // always ERROR
+logger.warning(msg, caller?);       // always WARN
+
+// Additional semantic helpers
+logger.movement(msg, level?, caller?);
+logger.pathfinding(msg, level?, caller?);
+logger.entity(msg, level?, caller?);
+logger.packet(msg, level?, caller?);
 ```
 
 ### Canonical Tags
 
-| Tag         | Domain                                                                                 | Default Level |
-| ----------- | -------------------------------------------------------------------------------------- | ------------- |
-| `Client`    | Bot lifecycle (login, kick, end, reconnect)                                            | INFO          |
-| `Combat`    | Decisions, modes, pearls, strafing                                                     | INFO/DEBUG    |
-| `Inventory` | Equip, toss, record, restore, consume                                                  | INFO          |
-| `Command`   | User commands, run loops, pause                                                        | INFO          |
-| `Status`    | Health, food, position, version                                                        | INFO          |
-| `Config`    | Runtime config get/set/list                                                            | INFO          |
-| `Chat`      | Incoming chat messages                                                                 | INFO          |
-| `Error`     | Recoverable failures                                                                   | ERROR         |
-| `Exception` | Uncaught exceptions, unhandled rejections                                              | ERROR         |
-| `Warning`   | Node warnings                                                                          | WARN          |
-| `Debug`     | Verbose debug commands (debug_strafe_once, debug_strafe_loop, debug_pearl_throw, etc.) | DEBUG         |
+| Tag           | Domain                                                                                 | Default Level |
+| ------------ | -------------------------------------------------------------------------------------- | ------------- |
+| `Client`     | Bot lifecycle (login, kick, end, reconnect)                                            | INFO          |
+| `Combat`     | Decisions, modes, pearls, strafing                                                     | INFO/DEBUG    |
+| `Inventory`  | Equip, toss, record, restore, consume                                                  | INFO          |
+| `Command`    | User commands, run loops, pause                                                        | INFO          |
+| `Status`     | Health, food, position, version                                                        | INFO          |
+| `Config`     | Runtime config get/set/list                                                            | INFO          |
+| `Chat`       | Incoming chat messages                                                                 | INFO          |
+| `Error`      | Recoverable failures                                                                   | ERROR         |
+| `Exception`  | Uncaught exceptions, unhandled rejections                                              | ERROR         |
+| `Warning`    | Node warnings                                                                          | WARN          |
+| `Debug`      | Verbose debug commands (debug_strafe_once, debug_strafe_loop, debug_pearl_throw, etc.) | DEBUG         |
+| `Movement`   | Movement logic, path execution, navigation                                             | INFO/DEBUG    |
+| `Pathfinding`| Path computation, goal setting, A* search                                               | INFO/DEBUG    |
+| `Entity`     | Entity tracking, targeting, interaction                                                | INFO/DEBUG    |
+| `Packet`     | Packet handling, protocol events                                                       | DEBUG         |
 
 ### Debug Mode
 
@@ -275,7 +288,6 @@ Common abbreviations used throughout the codebase:
 | -------------------------- | --------------------------------------- |
 | `bot`                      | Mineflayer bot instance                 |
 | `svc`                      | Service or saved context                |
-| `inv`                      | Inventory                               |
 | `pos`                      | Position (Vec3)                         |
 | `AABB`                     | Axis-Aligned Bounding Box               |
 | `St`                       | Slipperiness factor                     |
@@ -284,7 +296,7 @@ Common abbreviations used throughout the codebase:
 | `dx`, `dy`, `dz`           | Delta/difference in X, Y, Z coordinates |
 | `dist`, `dist2D`, `distSq` | Distance, 2D distance, squared distance |
 | `GAPPLE`                   | Golden Apple                            |
-| `EGAPPLE`                  | Enchanted Golden Apple                  |
+| `EGAPPLE`                   | Enchanted Golden Apple                  |
 | `HP`                       | Health Points                           |
 | `AP`                       | Absorption Points                       |
 
@@ -332,49 +344,13 @@ npm start -- --headless --bot1 "cmd1; cmd2; cmd3;"
 npm start -- --headless --bot1 "run debug_strafe_once 10 1"
 
 # Custom timeout and multiple commands
-npm start -- --timeout 30 --headless --bot1 "run debug_strafe_once 10 5"
+npm start -- --headless --bot1 "run debug_strafe_once 10 5"
 
 # Flags can appear in any order
 npm start -- --timeout 60 --headless --bot1 "eq 1 boots; v"
 ```
 
-The headless mode defaults to a 10-second timeout. Use `--timeout <seconds>` to customize. When debugging, use the DebugManager's test commands (`debug_strafe_once`, `debug_strafe_loop`, `debug_pearl_throw`, etc.) via headless mode.
-
-## Project Structure
-
-| File                 | Purpose                                                                                          |
-| -------------------- | ------------------------------------------------------------------------------------------------ |
-| `src/index.ts`       | Entry point, listener management, plugin loading                                                 |
-| `src/tui.ts`         | Terminal UI (blessed) or headless console logger                                                 |
-| `src/logger.ts`      | Unified logging facade — all modules must use this                                               |
-| `src/commands.ts`    | Hierarchical command tree with context-sensitive Cisco IOS-style CLI                             |
-| `src/cli-engine.ts`  | CLI engine — tokenization, tree resolution, suggestions, abbreviation expansion, help generation |
-| `src/pvp.ts`         | Combat manager, strafing, targeting, decision tree                                               |
-| `src/pvp-manager.ts` | PVP Manager — attack timing, cooldowns, target tracking, shield blocking                         |
-| `src/inventory.ts`   | Inventory manager, equipment, item caching                                                       |
-| `src/utils.ts`       | Physics (AABB, trajectory, collision), movement utilities, LRU block cache                       |
-| `src/config.ts`      | Runtime configuration manager for mutable constants                                              |
-| `src/debug.ts`       | Debug/test commands for development                                                              |
-| `src/constants.ts`   | Centralized constants (physics, combat, materials, timing)                                       |
-| `tests/`             | Unit tests for `utils.ts`, `pvp.ts`, and `e2e.test.ts` (`.test.ts` files)                        |
-| `dist/`              | Compiled JavaScript output (generated by `npm run build`)                                        |
-
-## Method and File Mappings
-
-| Method Name | File Location |
-|-------------|--------------|
-| `getItemCount` | `src/inventory.ts` |
-| `equipArmor` | `src/inventory.ts` |
-| `doStrafe` | `src/pvp.ts` |
-| `setupDecisions` | `src/pvp.ts` |
-| `getTargetFilter` | `src/pvp.ts` |
-| `getHealthStatus` | `src/pvp.ts` |
-| `hasItem` | `src/inventory.ts` |
-| `hasFood` | `src/inventory.ts` |
-| `isInLiquid` | `src/utils.ts` |
-| `isJumpPathClear` | `src/utils.ts` |
-| `equipGapple` | `src/inventory.ts` |
-| `restoreInventory` | `src/inventory.ts` |
+The headless mode defaults to a-10-second timeout. Use `--timeout <seconds>` to customize. When debugging, use the DebugManager's test commands (`debug_strafe_once`, `debug_strafe_loop`, `debug_pearl_throw`, etc.) via headless mode.
 
 ## License
 

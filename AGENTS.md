@@ -20,25 +20,29 @@ All source code is written in TypeScript under `src/`. Key configuration:
   Plugin-added properties (e.g., `bot.inventoryManager`, `bot.combatManager`) are
   accessed via `(bot as any)` casts where mineflayer's type declarations don't cover them.
 
----
+**API Documentation**: For Mineflayer library and Minecraft protocol documentation, see the `module-documentation` directory.
 
-### Rules for agents
+### Module Documentation Index
 
-- When implementing new features, prefer enhancing existing modules over creating new top-level files.
-- **Formatting**: Run linters to auto-fix formatting issues instead of manual fixes:
-  ```bash
-  npm run lint   # Run ESLint (includes --fix)
-  npm run format # Run Prettier
-  ```
-- **Build**: After making code changes, run `npm run build` to compile TypeScript and verify functionality.
-- **Documentation**: After making code changes, update `README.md` and `AGENTS.md` to reflect any changes to:
-  - Command signatures and behavior
-  - File structure and architecture overview
-  - Test commands and examples
-  - API signatures and type definitions
-  - Configuration options and environment variables
+The `module-documentation` directory contains API documentation for the following modules:
 
-- **Jest Tests**: NEVER modify values inside `.expect()` calls in Jest tests. These values represent the expected behavior and should only be changed when the actual implementation changes. Instead, optimize the implementation or test infrastructure to meet the existing expectations.
+- `flying-squid_api.md`
+- `mineflayer-cmd_api.md`
+- `mineflayer-collectblock_api.md`
+- `mineflayer-pvp_api.md`
+- `mineflayer-statemachine_api.md`
+- `mineflayer-tool_api.md`
+- `mineflayer_api.md`
+- `mineflayer_unstable_api.md`
+- `node-minecraft-assets_api.md`
+- `node-minecraft-data_api.md`
+- `node-minecraft-packets_api.md`
+- `node-minecraft-protocol_api.md`
+- `prismarine-auth_api.md`
+- `prismarine-block_api.md`
+- `prismarine-realms_api.md`
+- `prismarine-windows_api.md`
+- `prismarine-world_api.md`
 
 ---
 
@@ -48,7 +52,7 @@ All source code is written in TypeScript under `src/`. Key configuration:
 - **Language**: TypeScript. Source files live under `src/` with a `.ts` extension.
   Compiled JavaScript output goes to `dist/`.
 - **Linting**: ESLint (`eslint.config.mjs`) with Prettier (`.prettierrc`).
-- **Style**: Follow existing code patterns (async/await, event-driven, class-based modules).
+- **Style**: Follow the TypeScript styleguide in `styleguide.md`.
   The `tsconfig.json` targets ES2022 with CommonJS module output (`"type": "commonjs"` in package.json).
 - **Environment**: Configuration goes into `.env`.
 - **Dependencies**: Use `npm install` / `npm ci`; do not add heavy native modules without discussion.
@@ -84,7 +88,6 @@ Common abbreviations used throughout the codebase:
 | -------------------------- | --------------------------------------- |
 | `bot`                      | Mineflayer bot instance                 |
 | `svc`                      | Service or saved context                |
-| `inv`                      | Inventory                               |
 | `pos`                      | Position (Vec3)                         |
 | `AABB`                     | Axis-Aligned Bounding Box               |
 | `St`                       | Slipperiness factor                     |
@@ -93,9 +96,17 @@ Common abbreviations used throughout the codebase:
 | `dx`, `dy`, `dz`           | Delta/difference in X, Y, Z coordinates |
 | `dist`, `dist2D`, `distSq` | Distance, 2D distance, squared distance |
 | `GAPPLE`                   | Golden Apple                            |
-| `EGAPPLE`                  | Enchanted Golden Apple                  |
+| `EGAPPLE`                   | Enchanted Golden Apple                  |
 | `HP`                       | Health Points                           |
 | `AP`                       | Absorption Points                       |
+
+### Units
+
+| Term  | Alias | Definition                                                                                                            |
+| ----- | ----- | --------------------------------------------------------------------------------------------------------------------- |
+| Tick  | t     | The standard unit of time in Minecraft, equal to 50ms. Minecraft's physics and inputs are updated once every tick. |
+| Block | b     | The standard unit of distance in Minecraft, 1b is equal to 1m.                                                        |
+| Pixel | px    | A sub-unit of distance. A pixel is 1/16th of a block, which is equal to 0.0625b                                    |
 
 ### Pitch Calculation
 The Mineflayer library uses an inverted pitch compared to Minecraft.
@@ -127,38 +138,48 @@ All output flows through the unified Logger facade in `logger.ts`. **Do not call
 const logger = require("./logger");
 
 // Level-based
-logger.debug(msg, tag?);   // DEBUG level
-logger.info(msg, tag?);    // INFO level
-logger.warn(msg, tag?);    // WARN level
-logger.error(msg, tag?);   // ERROR level
+logger.debug(msg, tag?, caller?);   // DEBUG level
+logger.info(msg, tag?, caller?);    // INFO level
+logger.warn(msg, tag?, caller?);    // WARN level
+logger.error(msg, tag?, caller?);   // ERROR level
 
 // Semantic helpers (tag is set automatically)
-logger.client(msg, level?);
-logger.combat(msg, level?);
-logger.inventory(msg, level?);
-logger.command(msg, level?);
-logger.status(msg, level?);
-logger.config(msg, level?);
-logger.chat(msg);
-logger.exception(msg);     // always ERROR
-logger.warning(msg);       // always WARN
+logger.client(msg, level?, caller?);
+logger.combat(msg, level?, caller?);
+logger.inventory(msg, level?, caller?);
+logger.command(msg, level?, caller?);
+logger.status(msg, level?, caller?);
+logger.config(msg, level?, caller?);
+logger.chat(msg, caller?);
+logger.exception(msg, caller?);     // always ERROR
+logger.warning(msg, caller?);       // always WARN
+
+// Additional semantic helpers
+logger.movement(msg, level?, caller?);
+logger.pathfinding(msg, level?, caller?);
+logger.entity(msg, level?, caller?);
+logger.packet(msg, level?, caller?);
 ```
 
 ### Canonical Tags
 
-| Tag         | Domain                                                                                 | Default Level |
-| ----------- | -------------------------------------------------------------------------------------- | ------------- |
-| `Client`    | Bot lifecycle (login, kick, end, reconnect)                                            | INFO          |
-| `Combat`    | Decisions, modes, pearls, strafing                                                     | INFO/DEBUG    |
-| `Inventory` | Equip, toss, record, restore, consume                                                  | INFO          |
-| `Command`   | User commands, run loops, pause                                                        | INFO          |
-| `Status`    | Health, food, position, version                                                        | INFO          |
-| `Config`    | Runtime config get/set/list                                                            | INFO          |
-| `Chat`      | Incoming chat messages                                                                 | INFO          |
-| `Error`     | Recoverable failures                                                                   | ERROR         |
-| `Exception` | Uncaught exceptions, unhandled rejections                                              | ERROR         |
-| `Warning`   | Node warnings                                                                          | WARN          |
-| `Debug`     | Verbose debug commands (debug_strafe_once, debug_strafe_loop, debug_pearl_throw, etc.) | DEBUG         |
+| Tag           | Domain                                                                                 | Default Level |
+| ------------ | -------------------------------------------------------------------------------------- | ------------- |
+| `Client`     | Bot lifecycle (login, kick, end, reconnect)                                            | INFO          |
+| `Combat`     | Decisions, modes, pearls, strafing                                                     | INFO/DEBUG    |
+| `Inventory`  | Equip, toss, record, restore, consume                                                  | INFO          |
+| `Command`    | User commands, run loops, pause                                                        | INFO          |
+| `Status`     | Health, food, position, version                                                        | INFO          |
+| `Config`     | Runtime config get/set/list                                                            | INFO          |
+| `Chat`       | Incoming chat messages                                                                 | INFO          |
+| `Error`      | Recoverable failures                                                                   | ERROR         |
+| `Exception`  | Uncaught exceptions, unhandled rejections                                              | ERROR         |
+| `Warning`    | Node warnings                                                                          | WARN          |
+| `Debug`      | Verbose debug commands (debug_strafe_once, debug_strafe_loop, debug_pearl_throw, etc.) | DEBUG         |
+| `Movement`   | Movement logic, path execution, navigation                                             | INFO/DEBUG    |
+| `Pathfinding`| Path computation, goal setting, A* search                                               | INFO/DEBUG    |
+| `Entity`     | Entity tracking, targeting, interaction                                                | INFO/DEBUG    |
+| `Packet`     | Packet handling, protocol events                                                       | DEBUG         |
 
 ### Debug Mode
 
@@ -172,27 +193,16 @@ logger.setDebugMode(false); // suppress DEBUG output
 
 ---
 
-## Architecture Overview
+## Command & Interaction Model
 
-| File                 | Purpose                                                                                          |
-| -------------------- | ------------------------------------------------------------------------------------------------ |
-| `src/index.ts`       | Entry point, listener management, plugin loading                                                 |
-| `src/tui.ts`         | Terminal UI (blessed) or headless console logger                                                 |
-| `src/logger.ts`      | Unified logging facade — all modules must use this                                               |
-| `src/commands.ts`    | Hierarchical command tree with context-sensitive Cisco IOS-style CLI                             |
-| `src/cli-engine.ts`  | CLI engine — tokenization, tree resolution, suggestions, abbreviation expansion, help generation |
-| `src/pvp.ts`         | Combat manager, strafing, targeting, decision tree                                               |
-| `src/pvp-manager.ts` | PVP Manager — attack timing, cooldowns, target tracking, shield blocking                         |
-| `src/inventory.ts`   | Inventory manager, equipment, item caching                                                       |
-| `src/utils.ts`       | Physics (AABB, trajectory, collision), movement utilities, LRU block cache                       |
-| `src/config.ts`      | Runtime configuration manager for mutable constants                                              |
-| `src/debug.ts`       | Debug/test commands for development                                                              |
-| `src/constants.ts`   | Centralized constants (physics, combat, materials, timing)                                       |
-| `tests/`             | Unit tests for `utils.ts`, `pvp.ts`, and `e2e.test.ts` (`.test.ts` files)                        |
+### Command Types
 
----
+Commands are categorized based on how they are executed and registered:
 
-## Command System
+- **Server-only commands**: Start with `/`. They are executed via `bot.chat()` and are registered by the Minecraft server itself.
+- **Client-only commands**: Do not have a prefix. They are executed using internal bot logic and must **never** be sent via `bot.chat()`. They are registered by modules such as `src/commands.ts` and `src/debug.ts`.
+
+### Command System Architecture
 
 The command system uses a **hierarchical command tree** instead of flat regex matching
 (`cli-engine.ts` + `commands.ts`).
@@ -208,10 +218,6 @@ The command system uses a **hierarchical command tree** instead of flat regex ma
   `${version}`, `${target}`) before execution.
 - **Tab completion** and **`?` context-sensitive help** are handled by `tui.ts` using the CLI engine,
   not by the command tree itself.
-
----
-
-## Runtime Configuration
 
 Combat and movement constants can be adjusted at runtime via the `cfg` command,
 without restarting the bot. Example:
@@ -259,29 +265,6 @@ npm start -- --headless --bot1 "cmd1; cmd2; cmd3;"
 npm start -- --headless --bot1 "run debug_strafe_once 10 1"
 ```
 
-The headless mode defaults to a 10-second timeout. Use `--timeout <seconds>` to
-customize. When debugging, use the DebugManager's test commands (`debug_strafe_once`,
-`debug_strafe_loop`, `debug_pearl_throw`, etc.) via headless mode.
-
----
-
-## Method and File Mappings
-
-| Method Name | File Location |
-|-------------|--------------|
-| `getItemCount` | `src/inventory.ts` |
-| `equipArmor` | `src/inventory.ts` |
-| `doStrafe` | `src/pvp.ts` |
-| `setupDecisions` | `src/pvp.ts` |
-| `getTargetFilter` | `src/pvp.ts` |
-| `getHealthStatus` | `src/pvp.ts` |
-| `hasItem` | `src/inventory.ts` |
-| `hasFood` | `src/inventory.ts` |
-| `isInLiquid` | `src/utils.ts` |
-| `isJumpPathClear` | `src/utils.ts` |
-| `equipGapple` | `src/inventory.ts` |
-| `restoreInventory` | `src/inventory.ts` |
-
 ---
 
 ## Session-Specific Notes
@@ -291,6 +274,28 @@ customize. When debugging, use the DebugManager's test commands (`debug_strafe_o
   intermediate artifacts but **the canonical project is at
   `/home/tsuchinoko/code-nodejs/pupa`**.
 - Ignore the `temporary` directory in the root of the workspace – it is for intermediate artifacts only.
+
+---
+
+## Rules for agents
+
+- **Divide-Verify-Refine**: For complex tasks, break them down into smaller, manageable sub-tasks (Divide). After each sub-task, verify the result through builds, tests, or manual inspection (Verify). If issues are found, refine the implementation before proceeding to the next sub-task (Refine).
+- When implementing new features, prefer enhancing existing modules over creating new top-level files.
+- **Formatting**: Run linters to auto-fix formatting issues instead of manual fixes:
+  ```bash
+  npm run lint   # Run ESLint (includes --fix)
+  npm run format # Run Prettier
+  ```
+- **Build & Verify**: After making code changes, run `npm run build` to compile TypeScript and `npm start -- --headless --bot1` to verify functionality.
+- **Documentation**: After making code changes, update `README.md` and `AGENTS.md` to reflect any changes to:
+  - Command signatures and behavior
+  - File structure and architecture overview
+  - Test commands and examples
+  - API signatures and type definitions
+  - Configuration options and environment variables
+
+- **Jest Tests**: Always aim to resolve the underlying issue causing a test failure. Do not bypass failures by modifying values inside `.expect()` calls unless all other options have been exhausted.
+- **Troubleshooting**: If issues arise during development or testing, assume they are caused by the codebase. The server is never at fault.
 
 ---
 
