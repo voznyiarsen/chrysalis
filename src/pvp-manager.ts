@@ -16,7 +16,6 @@
 import { Bot } from "mineflayer";
 import { goals, Movements } from "mineflayer-pathfinder";
 import { Vec3 } from "vec3";
-import { logger } from "./logger";
 import { Constants } from "./constants";
 
 // ---------------------------------------------------------------------------
@@ -302,8 +301,6 @@ export class PVPManager {
       this.timeToNextAttack = this.getWeaponCooldown();
       return;
     }
-
-    const tgt = this.target;
 
     // Deactivate shield before attacking (if active)
     if (this.hasShield()) {
