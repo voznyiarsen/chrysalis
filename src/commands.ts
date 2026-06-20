@@ -28,6 +28,7 @@ export class CommandManager {
     this.bot = bot;
     this.logger = (bot as any).__logger;
     this.setupCommandTree();
+    this.initializeFunctionRegistry();
   }
 
   /**
@@ -264,6 +265,21 @@ export class CommandManager {
             positional: true,
             handler: (args: string[]) => this.querySlotDB(args),
           },
+        },
+      },
+      func: {
+        description: "Call a function directly by name or list available functions",
+        subcommands: {
+          "<functionName>": {
+            description: "Function name to call",
+            positional: true,
+            handler: async (args: string[]) => {
+              await this.callFunction(args);
+            },
+          },
+        },
+        handler: async () => {
+          await this.listFunctions();
         },
       },
     };
@@ -626,6 +642,9 @@ export class CommandManager {
       if (key === "ATTACK_RANGE") pvp.attackRange = value;
       if (key === "FOLLOW_RANGE") pvp.followRange = value;
       if (key === "VIEW_DISTANCE") pvp.viewDistance = value;
+      if (key === "USE_OFFSET_BASED_PEARLS") {
+        this.logger.config(`Offset-based pearl throwing ${value ? 'enabled' : 'disabled'}`);
+      }
     }
   }
 
@@ -695,12 +714,156 @@ export class CommandManager {
       this.logger.command(`Run loop completed (${n} iterations)`);
     }
   }
+
+  // Function registry - maps function names to their implementations
+  private functionRegistry: Record<string, (...args: any[]) => any> = {};
+
+  /**
+   * Initialize the function registry with available functions.
+   * This method is safe to call even if some managers are not yet loaded.
+   */
+  private initializeFunctionRegistry(): void {
+    this.functionRegistry = {
+      // CommandManager functions
+      tossSingle: this.tossSingle.bind(this),
+      tossAll: this.tossAll.bind(this),
+      equip: this.equip.bind(this),
+      unequip: this.unequip.bind(this),
+      unequipAll: this.unequipAll.bind(this),
+      restore: this.restore.bind(this),
+      record: this.record.bind(this),
+      pause: this.pause.bind(this),
+      run: this.run.bind(this),
+      quit: this.quit.bind(this),
+      toggleCombat: this.toggleCombat.bind(this),
+      changeMode: this.changeMode.bind(this),
+      pacify: this.pacify.bind(this),
+      queryPlayerDB: this.queryPlayerDB.bind(this),
+      querySlotDB: this.querySlotDB.bind(this),
+      configCommand: this.configCommand.bind(this),
+      showVersion: this.showVersion.bind(this),
+      showPosition: this.showPosition.bind(this),
+      toggleAutosend: this.toggleAutosend.bind(this),
+    };
+
+    // Add manager-specific functions if their managers are available
+    this._addManagerFunctions();
+  }
+
+  /**
+   * Add functions from other managers if they are available.
+   * This can be called multiple times to update the registry as managers load.
+   */
+  private _addManagerFunctions(): void {
+    // Add debug functions if debug manager is available
+    if ((this.bot as any).debugManager) {
+      const dm = (this.bot as any).debugManager;
+      const debugFunctions = {
+        debugStrafeOnce: this._safeBind(dm, dm.debugStrafeOnce),
+        debugStrafeLoop: this._safeBind(dm, dm.debugStrafeLoop),
+        debugPearlThrow: this._safeBind(dm, dm.debugPearlThrow),
+        debugJumpPath: this._safeBind(dm, dm.debugJumpPath),
+        debugCollisionStress: this._safeBind(dm, dm.debugCollisionStress),
+        debugJumpTest: this._safeBind(dm, dm.debugJumpTest),
+        debugJumpComprehensive: this._safeBind(dm, dm.debugJumpComprehensive),
+        debugPearlComprehensive: this._safeBind(dm, dm.debugPearlComprehensive),
+        setupTestEnvironment: this._safeBind(dm, dm.setupTestEnvironment),
+      };
+      Object.assign(this.functionRegistry, debugFunctions);
+    }
+
+    // Add inventory manager functions if available
+    if ((this.bot as any).inventoryManager) {
+      const im = (this.bot as any).inventoryManager;
+      const inventoryFunctions = {
+        clearInventory: this._safeBind(im, im.clearInventory),
+        recordInventory: this._safeBind(im, im.recordInventory),
+        restoreInventory: this._safeBind(im, im.restoreInventory),
+      };
+      Object.assign(this.functionRegistry, inventoryFunctions);
+    }
+
+    // Add combat manager functions if available
+    if ((this.bot as any).combatManager) {
+      const cm = (this.bot as any).combatManager;
+      const combatFunctions = {
+        toggleCombatMode: this._safeBind(cm, cm.toggleCombatMode),
+        setTargetFilter: this._safeBind(cm, cm.setTargetFilter),
+      };
+      Object.assign(this.functionRegistry, combatFunctions);
+    }
+  }
+
+  /**
+   * Safely bind a method if it exists, otherwise return undefined.
+   */
+  private _safeBind(context: any, method: any): any {
+    return method && typeof method === 'function' ? method.bind(context) : undefined;
+  }
+
+  /**
+   * List all available functions that can be called with the func command.
+   */
+  async listFunctions(): Promise<void> {
+    const functionNames = Object.keys(this.functionRegistry).sort();
+    if (functionNames.length === 0) {
+      this.logger.info("No functions available.");
+      return;
+    }
+
+    this.logger.info("Available functions:");
+    for (const funcName of functionNames) {
+      this.logger.info(`  ${funcName}`);
+    }
+    this.logger.info(`\nUsage: func <functionName> [args...]`);
+    this.logger.info("Example: func showVersion");
+  }
+
+  /**
+   * Call a function directly by name.
+   * @param args - Array where args[1] is the function name and args[2..n] are arguments
+   */
+  async callFunction(args: string[]): Promise<void> {
+    if (args.length < 2) {
+      this.logger.error("Function name required. Usage: func <functionName> [args...]");
+      return;
+    }
+
+    const functionName = args[1];
+    const functionArgs = args.slice(2); // Extract arguments for the function
+
+    if (!this.functionRegistry[functionName]) {
+      const availableFunctions = Object.keys(this.functionRegistry).sort();
+      this.logger.error(`Function '${functionName}' not found. Available functions:\n  ${availableFunctions.join(", ")}`);
+      return;
+    }
+
+    try {
+      // Call the function with the provided arguments
+      const result = await this.functionRegistry[functionName](functionArgs);
+      
+      // Log the result if the function returns something
+      if (result !== undefined) {
+        this.logger.info(`Function '${functionName}' returned: ${JSON.stringify(result)}`);
+      } else {
+        this.logger.info(`Function '${functionName}' executed successfully.`);
+      }
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Error calling function '${functionName}': ${msg}`);
+    }
+  }
 }
 
 /**
  * Attach the CommandManager to a bot instance.
  */
 export default function attach(bot: Bot): Bot {
-  (bot as any).commandManager = new CommandManager(bot);
+  try {
+    (bot as any).commandManager = new CommandManager(bot);
+  } catch (error: unknown) {
+    console.error("CommandManager attachment failed:", error);
+    throw error;
+  }
   return bot;
 }
