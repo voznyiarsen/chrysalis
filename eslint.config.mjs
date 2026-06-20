@@ -1,6 +1,8 @@
 import globals from "globals";
 import pluginJs from "@eslint/js";
 import configPrettier from "eslint-config-prettier";
+import typescriptEslint from "@typescript-eslint/eslint-plugin";
+import parser from "@typescript-eslint/parser";
 
 /** @type {import('eslint').Linter.Config[]} */
 export default [
@@ -10,6 +12,7 @@ export default [
       "minecraft-clients/**",
       "patching-scripts/**",
       "logs/**",
+      "dist/**",
     ],
   },
   pluginJs.configs.recommended,
@@ -25,6 +28,31 @@ export default [
     },
     rules: {
       "no-unused-vars": ["warn", { argsIgnorePattern: "^_" }],
+      "no-console": "warn",
+    },
+  },
+  {
+    files: ["**/*.ts"],
+    languageOptions: {
+      parser: parser,
+      parserOptions: {
+        ecmaVersion: "latest",
+        sourceType: "module",
+        project: "./tsconfig.json",
+      },
+      globals: {
+        ...globals.node,
+        ...globals.jest,
+      },
+    },
+    plugins: {
+      "@typescript-eslint": typescriptEslint,
+    },
+    rules: {
+      ...typescriptEslint.configs.recommended.rules,
+      "@typescript-eslint/no-unused-vars": ["warn", { argsIgnorePattern: "^_" }],
+      "@typescript-eslint/no-explicit-any": "off",
+      "@typescript-eslint/ban-ts-comment": ["error", { "ts-ignore": false }],
       "no-console": "warn",
     },
   },

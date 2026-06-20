@@ -147,3 +147,4 @@ vite.config.ts.timestamp-*
 minecraft-clients/
 temporary/
 documentation/
+module-documentation/
