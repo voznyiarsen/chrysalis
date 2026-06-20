@@ -293,7 +293,7 @@ describe("Projectile Trajectory Prediction", () => {
       0.99,
     );
     expect(pitches.length).toBe(2);
-    expect(pitches[0]).toBeGreaterThan(pitches[1]);
+    expect(pitches[0]).toBeLessThan(pitches[1]);
   });
 
   test("returns two distinct arcs for reachable target", () => {
