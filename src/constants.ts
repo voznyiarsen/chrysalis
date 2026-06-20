@@ -42,7 +42,7 @@ export const Constants = {
     /** Empirical calibration factor for jump velocity to account for model inaccuracies */
     JUMP_VELOCITY_CALIBRATION: 0.95,
     /** Empirical calibration factor for strafe velocity to account for model inaccuracies */
-    STRAFE_VELOCITY_CALIBRATION: 0.8,
+    STRAFE_VELOCITY_CALIBRATION: 0.95,
     /** Momentum thresholds for stopping movement */
     MOMENTUM_THRESHOLD_1_8: 0.005,
     /** Momentum thresholds for stopping movement (1.9+) */
@@ -158,6 +158,8 @@ export const Constants = {
       wind_charge: { VELOCITY: 1.0, GRAVITY: 0.0, DRAG: 1.0, PITCH_OFFSET: 0 },
       fireball: { VELOCITY: 1.0, GRAVITY: 0.0, DRAG: 0.95, PITCH_OFFSET: 0 },
     },
+    /** Enable offset-based pearl throwing (true) or angle-based (false) */
+    USE_OFFSET_BASED_PEARLS: true,
     /** Specialized settings for ender pearl usage */
     ENDER_PEARL: {
       VELOCITY: 1.5,

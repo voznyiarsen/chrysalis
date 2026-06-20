@@ -214,9 +214,19 @@ export class UtilsManager {
   public recentPointsMax: number;
   public liquidBlockIds: Set<number>;
   public lastImpulseTick?: number;
+  public logger: any;
 
   constructor(bot: Bot) {
     this.bot = bot;
+    this.logger = (bot as any).__logger || console;
+
+    // Save reference to original bot.chat for any code that needs it
+    if (typeof this.bot.chat === 'function') {
+      (this.bot as any)._originalChat = this.bot.chat.bind(this.bot);
+    } else {
+      this.logger.debug("bot.chat method not available, skipping", "Utils");
+    }
+    
     this.isNewSlipperiness = this._compareVersion(bot.version, "1.15") >= 0;
     this.isNewCollision = this._compareVersion(bot.version, "1.14") >= 0;
     this.isNewThreshold = this._compareVersion(bot.version, "1.9") >= 0;
@@ -395,8 +405,7 @@ export class UtilsManager {
   }
 
   /**
-   * Compute the pitch angles (low and high arc) to hit a target with a projectile.
-   * Uses the standard parabolic projectile formula with drag.
+   * Get projectile pitch angles for reaching a target.
    * @param source - Launch position
    * @param target - Target position
    * @param v - Initial projectile speed
@@ -425,9 +434,10 @@ export class UtilsManager {
     const rootSq = Math.sqrt(root);
     const lowArc = Math.atan((v2 - rootSq) / (g * x));
     const highArc = Math.atan((v2 + rootSq) / (g * x));
-    // lowArc < highArc mathematically, but we want pitches[0] > pitches[1] for low/high arcs
-    // So we swap the order to maintain the expected API contract
-    const pitches = [(highArc * 180) / Math.PI, (lowArc * 180) / Math.PI];
+    // lowArc < highArc mathematically
+    // pitches[0] = low arc (shallower angle, lower pitch value)
+    // pitches[1] = high arc (steeper angle, higher pitch value)
+    const pitches = [(lowArc * 180) / Math.PI, (highArc * 180) / Math.PI];
     const getDistanceAtY = (p: number): number => {
       let currX = 0;
       let currY = 0;
@@ -456,6 +466,60 @@ export class UtilsManager {
       return refinedP;
     };
     return pitches.map(refine);
+  }
+
+  /**
+   * Calculate vertical offset for aiming at a target using projectile physics.
+   * This offset-based approach is more intuitive than angle-based aiming.
+   * 
+   * @param source - Eye position (projectile origin)
+   * @param target - Target position (where you want the projectile to land)
+   * @param v - Initial projectile speed (blocks per tick)
+   * @param g - Gravity acceleration (blocks per tick squared)
+   * @param drag - Per-tick velocity multiplier
+   * @param arcType - 'low' or 'high' arc trajectory
+   * @returns Vertical offset in blocks to aim at (add to target Y position)
+   *
+   * The offset represents how much to aim above/below the target.
+   * Positive offset = aim above target (for high arcs)
+   * Negative offset = aim below target (for low arcs)
+   */
+  getProjectileOffset(
+    source: Vec3,
+    target: Vec3,
+    v: number,
+    g: number,
+    drag = 1,
+    arcType: 'low' | 'high' = 'low'
+  ): number {
+    // Calculate the horizontal distance
+    const dx = target.x - source.x;
+    const dz = target.z - source.z;
+    const horizontalDistance = Math.sqrt(dx * dx + dz * dz);
+    const dy = target.y - source.y;
+    
+    // Calculate the discriminant for the quadratic equation
+    const v2 = v * v;
+    const v4 = v2 * v2;
+    const root = v4 - g * (g * horizontalDistance * horizontalDistance + 2 * dy * v2);
+    
+    if (root < 0) {
+      throw new Error('Target is unreachable with given projectile parameters');
+    }
+    
+    const rootSq = Math.sqrt(root);
+    
+    // Calculate the two possible angles (low and high arcs)
+    const lowArcAngle = Math.atan((v2 - rootSq) / (g * horizontalDistance));
+    const highArcAngle = Math.atan((v2 + rootSq) / (g * horizontalDistance));
+    
+    // Select the appropriate arc
+    const angle = arcType === 'low' ? lowArcAngle : highArcAngle;
+    
+    // Calculate the vertical offset using the formula: y = R * tan(theta)
+    const offset = horizontalDistance * Math.tan(angle);
+    
+    return offset;
   }
 
   /**
@@ -691,12 +755,14 @@ export class UtilsManager {
       }
     }
 
-    // ---- 3. Rank: unobstructed (false < true) > flightTime ASC > landingDist ASC ----
+    // ---- 3. Rank: unobstructed (false < true) > low arc preferred > flightTime ASC > landingDist ASC ----
     if (candidates.length === 0) return null;
 
     candidates.sort((a, b) => {
       // Clear paths first
       if (a.blocked !== b.blocked) return a.blocked ? 1 : -1;
+      // Prefer low arc over high arc when both are available
+      if (a.arc !== b.arc) return a.arc === "low" ? -1 : 1;
       // Then fastest (shortest flight time)
       if (a.flightTime !== b.flightTime) return a.flightTime - b.flightTime;
       // Then most precise (closest to actual target)
@@ -773,42 +839,7 @@ export class UtilsManager {
     };
   }
 
-  /**
-   * Compute the pitch offset(s) needed to aim a projectile at a target.
-   * Returns raw angle offsets (not final pitch values).
-   * @param source - Launch position
-   * @param target - Target position
-   * @param velocity - Initial projectile speed
-   * @returns Offset angles, empty if unreachable
-   */
-  getProjectileOffset(
-    source: Vec3,
-    target: Vec3,
-    velocity: number = Constants.COMBAT.DEFAULT_PROJECTILE_VELOCITY,
-  ): number[] {
-    if (!source || !target)
-      throw new Error("getProjectileOffset: source and target are required");
-    const gravity = Constants.PHYSICS.GRAVITY;
-    const distance = Math.sqrt(
-      (target.x - source.x) ** 2 + (target.z - source.z) ** 2,
-    );
-    const dy = target.y - source.y;
-    if (distance === 0) return dy >= 0 ? [Infinity] : [-Infinity];
-    const v0Sq = velocity * velocity;
-    const disc =
-      v0Sq * v0Sq - gravity * (gravity * distance * distance + 2 * dy * v0Sq);
-    if (disc < 0) return [];
-    const discSq = Math.sqrt(disc);
-    const denom = gravity * distance;
-    const angle1 = Math.atan2(v0Sq + discSq, denom);
-    const angle2 = Math.atan2(v0Sq - discSq, denom);
-    const highArcOffset =
-      distance * Math.tan(angle1) - dy + Constants.COMBAT.PROJECTILE_EYE_OFFSET;
-    if (disc === 0) return [highArcOffset];
-    const lowArcOffset =
-      distance * Math.tan(angle2) - dy + Constants.COMBAT.PROJECTILE_EYE_OFFSET;
-    return [highArcOffset, lowArcOffset];
-  }
+
 
   /**
    * Check whether a point is within a vertical cylinder.

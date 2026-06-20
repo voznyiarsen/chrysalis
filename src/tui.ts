@@ -10,6 +10,11 @@ import type { CommandNode } from "./cli-engine";
 // Lazily-initialized instance (singleton)
 let uiInstance: UIBackend | null = null;
 
+// Command history and cursor state
+let commandHistory: string[] = [];
+let historyIndex = -1;
+let currentInput = "";
+
 // ── Headless mode detection ────────────────────────────────────────
 // Check argv before blessed is even required
 // Also detect Jest test environment
@@ -42,16 +47,6 @@ interface CliBackend {
 
 // ── Helpers ────────────────────────────────────────────────────────
 
-const CRASH_LOG_DIR = (() => {
-  const p = require("node:path");
-  const fs = require("node:fs");
-  const dir = p.join(__dirname, "logs");
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir);
-  }
-  return dir;
-})();
-
 function getLevelPrefix(level: string): string {
   switch (level) {
     case "DEBUG":
@@ -83,8 +78,10 @@ function createTerminalUI(): UIBackend {
 
   // ── Full TUI mode ──────────────────────────────────────────────
   // @ts-ignore - blessed is optional and may not resolve in all environments
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const blessed = require("blessed");
   // @ts-ignore - blessed-contrib is optional
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const contrib = require("blessed-contrib");
 
   const screen: any = blessed.screen({
@@ -124,7 +121,9 @@ function createTerminalUI(): UIBackend {
   logBox.add("┌─────────────────────────────────────┐");
   logBox.add("│ Type text and press {blue-fg}Enter{/} to submit │");
   logBox.add("│ Press {blue-fg}Esc{/} to clear input            │");
-  logBox.add("│ Use {blue-fg}↑/↓{/} keys to scroll logs         │");
+  logBox.add("│ Use {blue-fg}↑/↓{/} for command history         │");
+  logBox.add("│ Use {blue-fg}←/→{/} to move cursor             │");
+  logBox.add("│ Press {blue-fg}Tab{/} for auto-completion      │");
   logBox.add("└─────────────────────────────────────┘");
 
   // ── Input callbacks ────────────────────────────────────────────
@@ -132,6 +131,21 @@ function createTerminalUI(): UIBackend {
   inputBox.on("submit", (text: string) => {
     const timestamp = new Date().toISOString().substring(11, 19);
     logBox.add(`{cyan-fg}[${timestamp}]{/} ${text}`);
+    
+    // Add non-empty commands to history
+    const trimmedText = text.trim();
+    if (trimmedText && (commandHistory.length === 0 || commandHistory[commandHistory.length - 1] !== trimmedText)) {
+      commandHistory.push(trimmedText);
+      // Keep history to a reasonable size (e.g., 100 commands)
+      if (commandHistory.length > 100) {
+        commandHistory.shift();
+      }
+    }
+    
+    // Reset history navigation state
+    historyIndex = -1;
+    currentInput = "";
+    
     inputCallbacks.forEach((cb) => {
       try {
         cb(text);
@@ -148,6 +162,59 @@ function createTerminalUI(): UIBackend {
 
   inputBox.key("escape", () => {
     inputBox.clearValue();
+    screen.render();
+  });
+
+  // Up arrow: Navigate command history
+  inputBox.key("up", () => {
+    if (commandHistory.length === 0) return;
+    
+    // Save current input if we're at the end of history
+    if (historyIndex === -1) {
+      currentInput = inputBox.getValue();
+    }
+    
+    // Move up in history
+    if (historyIndex < commandHistory.length - 1) {
+      historyIndex++;
+      inputBox.setValue(commandHistory[commandHistory.length - 1 - historyIndex]);
+      screen.render();
+    }
+  });
+
+  // Down arrow: Navigate command history (or restore current input)
+  inputBox.key("down", () => {
+    if (historyIndex === -1) return;
+    
+    // Move down in history
+    if (historyIndex > 0) {
+      historyIndex--;
+      inputBox.setValue(commandHistory[commandHistory.length - 1 - historyIndex]);
+    } else {
+      // Restore original input
+      historyIndex = -1;
+      inputBox.setValue(currentInput);
+    }
+    screen.render();
+  });
+
+  // Left arrow: Move cursor left
+  inputBox.key("left", () => {
+    const currentValue = inputBox.getValue();
+    const cursorPos = inputBox.getCursorPos();
+    if (cursorPos > 0) {
+      inputBox.setCursorPos(cursorPos - 1);
+    }
+    screen.render();
+  });
+
+  // Right arrow: Move cursor right
+  inputBox.key("right", () => {
+    const currentValue = inputBox.getValue();
+    const cursorPos = inputBox.getCursorPos();
+    if (cursorPos < currentValue.length) {
+      inputBox.setCursorPos(cursorPos + 1);
+    }
     screen.render();
   });
 

@@ -50,69 +50,92 @@ export class Logger {
 
   /**
    * Log a structured entry through the backend.
+   * Includes the calling function name for better traceability.
    */
-  private _log(message: unknown, tag: string, level: LogLevel): void {
+  private _log(message: unknown, tag: string, level: LogLevel, caller?: string): void {
     const botTag = this._botPrefix();
     // If we have a bot tag, integrate it with the tag for cleaner output
     // e.g., "[bot1 Status]" instead of "[bot1] [Status]"
     const combinedTag = botTag && tag ? `${botTag} ${tag}` : botTag || tag;
-    this._backend.log(message, combinedTag, level);
+    
+    // Format the message to include the caller function if available
+    const messageWithCaller = caller ? `[${caller}] ${message}` : message;
+    
+    this._backend.log(messageWithCaller, combinedTag, level);
   }
 
   // ── Level-based API ───────────────────────────────────────────
 
-  debug(msg: unknown, tag = ""): void {
-    this._log(msg, tag, "DEBUG");
+  debug(msg: unknown, tag = "", caller?: string): void {
+    this._log(msg, tag, "DEBUG", caller);
   }
 
-  info(msg: unknown, tag = ""): void {
-    this._log(msg, tag, "INFO");
+  info(msg: unknown, tag = "", caller?: string): void {
+    this._log(msg, tag, "INFO", caller);
   }
 
-  warn(msg: unknown, tag = ""): void {
-    this._log(msg, tag, "WARN");
+  warn(msg: unknown, tag = "", caller?: string): void {
+    this._log(msg, tag, "WARN", caller);
   }
 
-  error(msg: unknown, tag = ""): void {
-    this._log(msg, tag, "ERROR");
+  error(msg: unknown, tag = "", caller?: string): void {
+    this._log(msg, tag, "ERROR", caller);
   }
 
   // ── Semantic helpers ──────────────────────────────────────────
 
-  client(msg: unknown, level: LogLevel = "INFO"): void {
-    this._log(msg, "Client", level);
+  client(msg: unknown, level: LogLevel = "INFO", caller?: string): void {
+    this._log(msg, "Client", level, caller);
   }
 
-  combat(msg: unknown, level: LogLevel = "INFO"): void {
-    this._log(msg, "Combat", level);
+  combat(msg: unknown, level: LogLevel = "INFO", caller?: string): void {
+    this._log(msg, "Combat", level, caller);
   }
 
-  inventory(msg: unknown, level: LogLevel = "INFO"): void {
-    this._log(msg, "Inventory", level);
+  inventory(msg: unknown, level: LogLevel = "INFO", caller?: string): void {
+    this._log(msg, "Inventory", level, caller);
   }
 
-  command(msg: unknown, level: LogLevel = "INFO"): void {
-    this._log(msg, "Command", level);
+  command(msg: unknown, level: LogLevel = "INFO", caller?: string): void {
+    this._log(msg, "Command", level, caller);
   }
 
-  status(msg: unknown, level: LogLevel = "INFO"): void {
-    this._log(msg, "Status", level);
+  status(msg: unknown, level: LogLevel = "INFO", caller?: string): void {
+    this._log(msg, "Status", level, caller);
   }
 
-  config(msg: unknown, level: LogLevel = "INFO"): void {
-    this._log(msg, "Config", level);
+  config(msg: unknown, level: LogLevel = "INFO", caller?: string): void {
+    this._log(msg, "Config", level, caller);
   }
 
-  chat(msg: unknown): void {
-    this._log(msg, "Chat", "INFO");
+  chat(msg: unknown, caller?: string): void {
+    this._log(msg, "Chat", "INFO", caller);
   }
 
-  exception(msg: unknown): void {
-    this._log(msg, "Exception", "ERROR");
+  exception(msg: unknown, caller?: string): void {
+    this._log(msg, "Exception", "ERROR", caller);
   }
 
-  warning(msg: unknown): void {
-    this._log(msg, "Warning", "WARN");
+  warning(msg: unknown, caller?: string): void {
+    this._log(msg, "Warning", "WARN", caller);
+  }
+
+  // ── Additional semantic helpers ──────────────────────────────────
+
+  movement(msg: unknown, level: LogLevel = "INFO", caller?: string): void {
+    this._log(msg, "Movement", level, caller);
+  }
+
+  pathfinding(msg: unknown, level: LogLevel = "INFO", caller?: string): void {
+    this._log(msg, "Pathfinding", level, caller);
+  }
+
+  entity(msg: unknown, level: LogLevel = "INFO", caller?: string): void {
+    this._log(msg, "Entity", level, caller);
+  }
+
+  packet(msg: unknown, level: LogLevel = "INFO", caller?: string): void {
+    this._log(msg, "Packet", level, caller);
   }
 }
 

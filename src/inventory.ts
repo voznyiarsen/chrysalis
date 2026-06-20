@@ -5,6 +5,7 @@ import nbt from "prismarine-nbt";
 import prismarineItem from "prismarine-item";
 import { Constants } from "./constants";
 import { Bot } from "mineflayer";
+import { Vec3 } from "vec3";
 
 // Construct the Item class with a game version
 const Item: any = prismarineItem("1.19.3");
@@ -207,11 +208,18 @@ class InventoryManager {
     }
   }
 
+  /** Map gamemode numbers to their string names as stored in bot.game.gameMode */
+  private static readonly GAMEMODE_NAMES = ["survival", "creative", "adventure", "spectator"];
+
   /**
    * Clear the entire inventory via creative mode.
+   * @throws Will throw an error if not in creative mode
    */
   async clearInventory(): Promise<void> {
-    await this.setGamemode(1);
+    const creativeName = InventoryManager.GAMEMODE_NAMES[1];
+    if ((this.bot.game as any).gameMode !== creativeName) {
+      throw new Error(`clearInventory requires creative mode, current gamemode is ${(this.bot.game as any).gameMode}`);
+    }
     try {
       await (this.bot as any).creative.clearInventory();
       this.logger.inventory(`Inventory cleared`);
@@ -220,49 +228,88 @@ class InventoryManager {
       err.message = `Failed to clear inventory: ${err.message}`;
       this.logger.error(err);
     }
-    await this.setGamemode(0);
   }
 
   /**
-   * Place an item directly into a slot using creative mode.
-   * Switches to creative (gamemode 1), places the item, and switches back to survival.
+   * Get an item using the /give command.
+   * Works in any gamemode but typically used in creative mode.
    * @param itemName - Name of the item (e.g., "ender_pearl")
    * @param count - Stack size
    * @param targetSlot - Destination slot name (default: "hand")
    */
-  async setCreativeSlot(
+  async getItemViaCommand(
     itemName: string,
     count: number = 1,
     targetSlot: string = "hand",
   ): Promise<void> {
-    // Use /give command which works reliably in creative mode
-    await this.setGamemode(1);
-    try {
-      await this.clearInventory();
-      await this.bot.chat!(`/give @p ${itemName} ${count}`);
-      await this.bot.waitForTicks!(Constants.TIMING.EQUIP_WAIT_TICKS);
+    // Use /give command which works in any gamemode
+    await this.clearInventory();
+    await this.bot.chat!(`/give @p ${itemName} ${count}`);
+    await this.bot.waitForTicks!(Constants.TIMING.EQUIP_WAIT_TICKS);
 
-      // Wait for item to appear in hand slot
-      for (let attempt = 0; attempt < 10; attempt++) {
-        const destSlot = (this.bot as any).getEquipmentDestSlot(targetSlot);
-        const slotItem: any = (this.bot as any).inventory.slots[destSlot];
-        if (slotItem && slotItem.name === itemName) {
-          await this.setGamemode(0);
-          return;
-        }
-        await this.bot.waitForTicks!(1);
+    // Wait for item to appear in hand slot
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const destSlot = (this.bot as any).getEquipmentDestSlot(targetSlot);
+      const slotItem: any = (this.bot as any).inventory.slots[destSlot];
+      if (slotItem && slotItem.name === itemName) {
+        return;
       }
+      await this.bot.waitForTicks!(1);
+    }
 
-      // Fallback: try to equip from inventory
-      await this._equipItem(itemName, targetSlot);
+    // Fallback: try to equip from inventory
+    const equipped = await this._equipItem(itemName, targetSlot);
+    if (!equipped) {
+      throw new Error(`Failed to obtain ${itemName}: not found in inventory after /give`);
+    }
+  }
+
+  /**
+   * Get an item using creative mode inventory manipulation.
+   * Uses bot.creative.setInventorySlot() to directly set items in creative mode.
+   * @param item - Item instance to set in the slot
+   * @param slot - Target slot index (default: 36, first quickbar slot)
+   * @throws Will throw an error if gamemode is not 1 (creative)
+   */
+  async getItemViaCreative(
+    item: any, // Item instance
+    slot: number = 36, // Default to first quickbar slot
+  ): Promise<void> {
+    const creativeName = InventoryManager.GAMEMODE_NAMES[1];
+    if ((this.bot.game as any).gameMode !== creativeName) {
+      throw new Error(`getItemViaCreative requires creative mode (gamemode 1), current gamemode is ${(this.bot.game as any).gameMode}`);
+    }
+
+    try {
+      // Use creative mode API to set item directly
+      await this.bot.creative.setInventorySlot(slot, item);
+      this.logger.debug(`Set item ${item.name} in slot ${slot} using creative API`, "Inventory");
     } catch (error: unknown) {
       const err = error as Error;
-      err.message = `Failed to set creative slot for ${itemName}: ${err.message}`;
+      err.message = `Failed to set item ${item.name} in creative mode: ${err.message}`;
       this.logger.error(err);
-      await this.setGamemode(0);
       throw err;
     }
-    await this.setGamemode(0);
+  }
+
+  /**
+   * Helper method to create an item instance for use with getItemViaCreative.
+   * @param itemName - Name of the item (e.g., "ender_pearl")
+   * @param count - Stack size (default: 1)
+   * @returns Item instance suitable for creative.setInventorySlot()
+   */
+  createItemInstance(itemName: string, count: number = 1): any {
+    try {
+      // Create an item instance using mineflayer's item registry
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const Item = require("prismarine-item")("1.16"); // Use appropriate version
+      return new Item(itemName, count);
+    } catch (error: unknown) {
+      const err = error as Error;
+      err.message = `Failed to create item instance for ${itemName}: ${err.message}`;
+      this.logger.error(err);
+      throw err;
+    }
   }
 
   /**
@@ -270,6 +317,7 @@ class InventoryManager {
    * @param slot - Recording slot index for the filename
    */
   async recordInventory(slot: number | string = 0): Promise<void> {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const fs = require("node:fs");
     const array = (this.bot as any).inventory.slots.filter(
       (item: any) => item?.type,
@@ -308,6 +356,7 @@ class InventoryManager {
    * @param slot - Recording slot index matching the filename
    */
   async restoreInventory(slot: number | string = 0): Promise<void> {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const fs = require("node:fs");
     const raw = fs.readFileSync(`./recording-${slot}.json`, "utf8");
     const data = JSON.parse(raw);
@@ -336,7 +385,7 @@ class InventoryManager {
   }
 
   /**
-   * Set the player's gamemode, retrying until it takes effect.
+   * Set the bot's gamemode via /gamemode command.
    * @param mode - Gamemode ID (0=survival, 1=creative, etc.)
    * @param timeout - Max time in ms to wait
    */
@@ -344,19 +393,24 @@ class InventoryManager {
     mode: number,
     timeout: number = Constants.TIMING.DEFAULT_TIMEOUT,
   ): Promise<void> {
+    const modeName = InventoryManager.GAMEMODE_NAMES[mode] || String(mode);
     const t0 = Date.now();
-    while ((this.bot as any).player.gamemode !== mode) {
-      if (Date.now() - t0 > timeout) {
-        this.logger.error(
-          new Error(`Timeout reached while setting gamemode to ${mode}`),
-        );
-        return;
-      }
+    if ((this.bot.game as any).gameMode !== modeName) {
+      // Send the command once, then wait for the gamemode to update
       this.logger.status(
-        `Current gamemode: ${(this.bot as any).player.gamemode}, setting to ${mode}`,
+        `Current gamemode: ${(this.bot.game as any).gameMode}, setting to ${modeName}`,
       );
       await this.bot.chat!(`/gamemode ${mode}`);
-      await this.bot.waitForTicks!(2);
+      // Wait for the gamemode to update
+      while ((this.bot.game as any).gameMode !== modeName) {
+        if (Date.now() - t0 > timeout) {
+          this.logger.warning(
+            `Timeout reached while setting gamemode to ${modeName} (current: ${(this.bot.game as any).gameMode}), proceeding anyway`,
+          );
+          return;
+        }
+        await this.bot.waitForTicks!(2);
+      }
     }
   }
 
@@ -688,34 +742,82 @@ class InventoryManager {
     pitch: number | null = null,
     itemType: string = "ender_pearl",
   ): Promise<void> {
-    if (await this._equipItem(itemType, "hand")) {
-      // Ensure the bot stops moving before the throw
-      (this.bot as any).clearControlStates();
-      await (this.bot as any).pathfinder.stop();
-      await this.bot.waitForTicks!(1);
-
-      if (yaw !== null && pitch !== null) {
-        // Apply pitch offset from documentation
-        const projData = Constants.COMBAT.PROJECTILES[
-          itemType as keyof typeof Constants.COMBAT.PROJECTILES
-        ] || {
-          PITCH_OFFSET: 0,
-        };
-        // Minecraft pitch: positive is down. PITCH_OFFSET (positive) makes it point lower.
-        // T = P + O => P = T - O
-        // getProjectilePitch returns degrees, bot.look expects radians
-        const pitchRad = (pitch * Math.PI) / 180;
-        const offsetRad = ((projData as any).PITCH_OFFSET * Math.PI) / 180;
-        const adjustedPitch = pitchRad - offsetRad;
-
-        // Mineflayer uses positive pitch for looking UP
-        await this.bot.look!(yaw, adjustedPitch, true);
-        await this.bot.waitForTicks!(1);
-      }
-      (this.bot as any).activateItem(false); // Right click once
-      await this.bot.waitForTicks!(1);
-      this.logger.inventory(`Tossed ${itemType} successfully`);
+    const equipped = await this._equipItem(itemType, "hand");
+    if (!equipped) {
+      throw new Error(`Cannot throw ${itemType}: not found in inventory`);
     }
+    // Ensure the bot stops moving before the throw
+    (this.bot as any).clearControlStates();
+    await (this.bot as any).pathfinder.stop();
+    await this.bot.waitForTicks!(1);
+
+    if (yaw !== null && pitch !== null) {
+      // Apply pitch offset from documentation
+      const projData = Constants.COMBAT.PROJECTILES[
+        itemType as keyof typeof Constants.COMBAT.PROJECTILES
+      ] || {
+        PITCH_OFFSET: 0,
+      };
+      // Minecraft pitch: positive is down. PITCH_OFFSET (positive) makes it point lower.
+      // T = P + O => P = T - O
+      // getProjectilePitch returns degrees, bot.look expects radians
+      const pitchRad = (pitch * Math.PI) / 180;
+      const offsetRad = ((projData as any).PITCH_OFFSET * Math.PI) / 180;
+      const adjustedPitch = pitchRad - offsetRad;
+
+      // Mineflayer uses positive pitch for looking UP
+      await this.bot.look!(yaw, adjustedPitch, true);
+      await this.bot.waitForTicks!(1);
+    }
+    (this.bot as any).activateItem(false); // Right click once
+    await this.bot.waitForTicks!(1);
+    this.logger.inventory(`Tossed ${itemType} successfully`);
+  }
+
+  /**
+   * Equip and throw an ender pearl (or other projectile) using offset-based aiming.
+   * This method uses a vertical offset instead of pitch angles for more intuitive aiming.
+   * 
+   * @param targetPos - Target position to throw at
+   * @param offset - Vertical offset in blocks (positive = aim above target, negative = aim below)
+   * @param itemType - Item name for the projectile
+   */
+  async equipPearlWithOffset(
+    targetPos: Vec3,
+    offset: number,
+    itemType: string = "ender_pearl"
+  ): Promise<void> {
+    const equipped = await this._equipItem(itemType, "hand");
+    if (!equipped) {
+      throw new Error(`Cannot throw ${itemType}: not found in inventory`);
+    }
+    
+    // Ensure the bot stops moving before the throw
+    (this.bot as any).clearControlStates();
+    await (this.bot as any).pathfinder.stop();
+    await this.bot.waitForTicks!(1);
+    
+    // Calculate the aim point by applying the offset to the target
+    const aimPoint = targetPos.clone();
+    aimPoint.y += offset;
+    
+    // Look at the aim point (bot.look uses true for body+head look)
+    const yaw = Math.atan2(targetPos.x - this.bot.entity.position.x, targetPos.z - this.bot.entity.position.z);
+    const pitch = Math.atan2(
+      aimPoint.y - (this.bot.entity.position.y + Constants.PHYSICS.EYE_HEIGHT_OFFSET),
+      Math.sqrt(
+        Math.pow(targetPos.x - this.bot.entity.position.x, 2) +
+        Math.pow(targetPos.z - this.bot.entity.position.z, 2)
+      )
+    );
+    
+    // Mineflayer uses positive pitch for looking UP, so we need to invert
+    await this.bot.look!(yaw, -pitch, true);
+    await this.bot.waitForTicks!(1);
+    
+    (this.bot as any).activateItem(false); // Right click once
+    await this.bot.waitForTicks!(1);
+    this.logger.inventory(`Tossed ${itemType} with offset ${offset.toFixed(2)} successfully`);
   }
 
   /**

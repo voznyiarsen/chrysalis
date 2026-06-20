@@ -20,7 +20,7 @@ import attachUtils from "./utils";
 import attachDebug from "./debug";
 import { RuntimeConfig } from "./config";
 import { Constants } from "./constants";
-import { Vec3 } from "vec3";
+
 
 // Suppress Node.js internal deprecation warnings
 (process as any).noDeprecation = true;
@@ -52,9 +52,7 @@ interface BotConfig {
   version: string | undefined;
 }
 
-const DEFAULT_HOST = process.env.PUPA_HOST || "localhost";
-const DEFAULT_PORT = parseInt(process.env.PUPA_PORT || "25565", 10);
-const DEFAULT_USERNAME = process.env.PUPA_NAME || "Pupa";
+
 
 // ── Parse bot definitions from argv ────────────────────────────────
 
@@ -305,6 +303,24 @@ class BotRegistry {
       botLog.client(
         `Pupa managers: ${loaded.length}/${managers.length} loaded`,
       );
+
+      // Initialize DebugManager after all managers are loaded (especially CommandManager)
+      if (loaded.includes("DebugManager") && (bot as any).debugManager) {
+        try {
+          (bot as any).debugManager.initialize();
+        } catch (e: unknown) {
+          botLog.error(`DebugManager initialization failed: ${(e as Error).message}`);
+        }
+      }
+
+      // Update CommandManager function registry with any newly available manager functions
+      if (loaded.includes("CommandManager") && (bot as any).commandManager) {
+        try {
+          (bot as any).commandManager._addManagerFunctions();
+        } catch (e: unknown) {
+          botLog.error(`CommandManager function registry update failed: ${(e as Error).message}`);
+        }
+      }
 
       // Apply PVP movement settings
       Object.assign((bot as any).pvp.movements, {
@@ -573,11 +589,10 @@ tui.onInput((text: string) => {
   // Parse bot prefix: "bot1,2 command" or "bot1 command"
   const parsed = registry.parseBotPrefix(trimmed);
   const allBots = registry.getAllBots();
-  let botNumbers: number[];
 
   if (parsed) {
     // Route to specific bots only
-    botNumbers = parsed.botNumbers.filter((n) => registry.getBot(n));
+    const botNumbers = parsed.botNumbers.filter((n) => registry.getBot(n));
     const cmd = parsed.command;
 
     // Execute chained commands (semicolons) on each selected bot
@@ -602,9 +617,6 @@ tui.onInput((text: string) => {
     }
   } else {
     // No bot prefix — execute on all bots
-    botNumbers = allBots.map(([n]) => n);
-
-    // Execute chained commands on all bots
     const chained = trimmed
       .split(";")
       .map((c) => c.trim())
