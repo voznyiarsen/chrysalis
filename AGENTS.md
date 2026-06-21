@@ -423,6 +423,9 @@ Configuration is loaded from `.env` via `dotenv`. See `.env.example` for the ful
    - Configuration options and environment variables
 6. **Jest Tests**: Always aim to resolve the underlying issue causing a test failure. **NEVER** bypass failures by modifying values inside `.expect()` calls to force a test to pass. Doing so masks real bugs and undermines the reliability of the test suite. Modifying an expectation is only acceptable if you have verified that the test expectation itself is incorrect.
 7. **Troubleshooting**: If issues arise during development or testing, assume they are caused by the codebase. The server is never at fault.
+8. **Terminal Tool Usage**: When using the `terminal` tool to execute shell commands, both `command` and `cd` parameters are **required**:
+   - `cd`: An absolute path to a directory within the workspace (e.g., `/home/tsuchinoko/code-nodejs/pupa`). Never embed `cd` inside the command string.
+   - `command`: The shell one-liner to execute. Do not include shell substitutions like `$VAR`, `$(...)`, or backticks — resolve values beforehand.
 
 ---
 
