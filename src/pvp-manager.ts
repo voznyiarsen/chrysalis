@@ -1,5 +1,5 @@
 /**
- * In-house PVP Manager — replaces mineflayer-pvp plugin.
+ * @fileoverview In-house PVP Manager — replaces mineflayer-pvp plugin.
  *
  * Manages target tracking, tick-based attack cooldown, shield blocking for
  * creeper explosions, and serves a `bot.pvp` interface that integrates with
@@ -13,23 +13,20 @@
  *   emitted for parity with the original plugin.
  */
 
-import { Bot } from "mineflayer";
-import { goals, Movements } from "mineflayer-pathfinder";
-import { Vec3 } from "vec3";
-import { Constants } from "./constants";
-
-// ---------------------------------------------------------------------------
-// Cooldown helpers (constant-driven, no AttackSpeeds.json runtime import)
-// ---------------------------------------------------------------------------
+import { Bot } from 'mineflayer';
+import { Entity } from 'prismarine-entity';
+import { goals, Movements } from 'mineflayer-pathfinder';
+import { Vec3 } from 'vec3';
+import { Constants } from './constants';
 
 /** Registered item substrings that are considered PVP weapons. */
 const WEAPON_NAMES = [
-  "sword",
-  "trident",
-  "axe",
-  "pickaxe",
-  "shovel",
-  "hoe",
+  'sword',
+  'trident',
+  'axe',
+  'pickaxe',
+  'shovel',
+  'hoe',
 ] as const;
 
 /**
@@ -39,15 +36,10 @@ const WEAPON_NAMES = [
 export function getAttackSpeed(itemName?: string | null): number {
   if (!itemName) return Constants.WEAPON_ATTACK_SPEEDS.OTHER;
   for (const prefix of WEAPON_NAMES) {
-    // Match e.g. "diamond_sword" → "sword", "netherite_sword" → "sword"
     if (itemName.includes(prefix)) {
-      // Look for an exact match first, then try the prefix
-      const key = itemName.replace(/^minecraft:/, "");
-      const speed = (Constants.WEAPON_ATTACK_SPEEDS as Record<string, number>)[
-        key
-      ];
+      const key = itemName.replace(/^minecraft:/, '');
+      const speed = (Constants.WEAPON_ATTACK_SPEEDS as Record<string, number>)[key];
       if (speed !== undefined) return speed;
-      // Fallback: use the prefix lookup (all swords share 1.6, etc.)
       const speeds: Record<string, number> = {
         sword: 1.6,
         trident: 1.1,
@@ -82,45 +74,45 @@ export function getDamageMultiplier(itemName?: string | null): number {
   return Math.max(0.2, Math.min(1.0, damageMul));
 }
 
-// ---------------------------------------------------------------------------
-// PVPManager
-// ---------------------------------------------------------------------------
-
 export class PVPManager {
-  public bot: Bot;
+  bot: Bot;
 
   /** Current attack target (undefined = not attacking). */
-  public target: any | undefined;
+  target: Entity | undefined;
 
   /** Ticks remaining until the next attack is permitted. */
-  public timeToNextAttack: number = 0;
+  timeToNextAttack: number = 0;
 
   /** Whether the target was within attack range on the previous tick. */
-  public wasInRange: boolean = false;
+  wasInRange: boolean = false;
 
   /** True while the bot is blocking a creeper explosion. */
-  public blockingExplosion: boolean = false;
+  blockingExplosion: boolean = false;
+
+  /** Timeout handle for the explosion blocking reset. */
+  private _explosionTimeout: ReturnType<typeof setTimeout> | null = null;
 
   /** Distance at which the bot begins attacking. */
-  public attackRange: number = Constants.COMBAT.ATTACK_RANGE;
+  attackRange: number = Constants.COMBAT.ATTACK_RANGE;
 
   /** How close to the target the bot should try to get. */
-  public followRange: number = Constants.COMBAT.FOLLOW_RANGE;
+  followRange: number = Constants.COMBAT.FOLLOW_RANGE;
 
   /** Max distance before the target is considered lost. */
-  public viewDistance: number = Constants.COMBAT.VIEW_DISTANCE;
+  viewDistance: number = Constants.COMBAT.VIEW_DISTANCE;
 
   /** Movements config for pathfinder (kept for external access). */
-  public movements: Movements;
+  movements: Movements;
 
   /** Optional goal position for combat-aware movement. */
-  public goal: Vec3 | null = null;
+  goal: Vec3 | null = null;
 
   constructor(bot: Bot) {
     this.bot = bot;
     this.movements = new Movements(bot);
-    this.bot.on("physicsTick" as any, () => this.update());
-    this.bot.on("entityGone", (e: any) => {
+    // mineflayer event typing doesn't cover physicsTick
+    this.bot.on('physicsTick' as any, () => this.update());
+    this.bot.on('entityGone', (e: { position: Vec3 }) => {
       if (e === this.target) this.stop();
     });
   }
@@ -133,21 +125,21 @@ export class PVPManager {
    * Begin attacking a target entity.
    * @returns Promise that resolves when attack setup is complete.
    */
-  async attack(target: any): Promise<void> {
+  async attack(target: Entity): Promise<void> {
     if (target === this.target) return;
     await this.stop();
     this.target = target;
     this.timeToNextAttack = 0;
     if (!this.target) return;
 
-    // Set up pathfinder to approach the target until within strafe range
     const pf = this.bot.pathfinder;
     if (pf) {
       pf.setMovements(this.movements);
       pf.setGoal(new goals.GoalFollow(this.target, this.followRange), true);
     }
 
-    this.bot.emit("startedAttacking" as any);
+    // mineflayer event typing doesn't cover startedAttacking
+    this.bot.emit('startedAttacking' as any);
   }
 
   /**
@@ -158,26 +150,27 @@ export class PVPManager {
     if (this.target == null) return;
     this.target = undefined;
     this.goal = null;
+    this._clearExplosionTimeout();
 
     const pathfinder = this.bot.pathfinder;
     if (pathfinder) {
       pathfinder.stop();
       try {
-        // Wait briefly for pathfinder to settle
         await new Promise<void>((resolve, reject) => {
-          const timeout = setTimeout(() => reject(new Error("timeout")), 5000);
-          this.bot.once("path_stop" as any, () => {
+          const timeout = setTimeout(() => reject(new Error('timeout')), 5000);
+          this.bot.once('path_stop' as any, () => {
             clearTimeout(timeout);
             resolve();
           });
         });
       } catch {
-        this.bot.removeAllListeners("path_stop" as any);
+        this.bot.removeAllListeners('path_stop' as any);
         pathfinder.setGoal(null);
       }
     }
 
-    this.bot.emit("stoppedAttacking" as any);
+    // mineflayer event typing doesn't cover stoppedAttacking
+    this.bot.emit('stoppedAttacking' as any);
   }
 
   /**
@@ -187,9 +180,11 @@ export class PVPManager {
     if (this.target == null) return;
     this.target = undefined;
     this.goal = null;
+    this._clearExplosionTimeout();
     const pathfinder = this.bot.pathfinder;
     if (pathfinder) pathfinder.setGoal(null);
-    this.bot.emit("stoppedAttacking" as any);
+    // mineflayer event typing doesn't cover stoppedAttacking
+    this.bot.emit('stoppedAttacking' as any);
   }
 
   /**
@@ -256,13 +251,11 @@ export class PVPManager {
     }
     this.wasInRange = inRange;
 
-    // --- Goal-based movement integration ---
     if (this.goal) {
       const distToGoal = this.bot.entity.position.distanceTo(this.goal);
       const pf = this.bot.pathfinder;
 
       if (distToGoal > this.attackRange + 1) {
-        // Far from goal — use pathfinder to navigate
         if (pf) {
           pf.setMovements(this.movements);
           pf.setGoal(new goals.GoalNearXZ(this.goal.x, this.goal.z, 1));
@@ -280,15 +273,27 @@ export class PVPManager {
    */
   private checkExplosion(): void {
     if (!this.target || !this.hasShield()) return;
-    if (this.target.name === "creeper" && this.target.metadata[16] === 1) {
+    if (this.target.name === 'creeper' && (this.target.metadata as Record<number, unknown>)[16] === 1) {
       this.blockingExplosion = true;
       const pf = this.bot.pathfinder;
       if (pf) pf.stop();
       this.bot.lookAt(this.target.position.offset(0, 1, 0), true);
       this.bot.activateItem(true);
-      setTimeout(() => {
+      this._clearExplosionTimeout();
+      this._explosionTimeout = setTimeout(() => {
         this.blockingExplosion = false;
+        this._explosionTimeout = null;
       }, 2000);
+    }
+  }
+
+  /**
+   * Clear the explosion blocking timeout if one is pending.
+   */
+  private _clearExplosionTimeout(): void {
+    if (this._explosionTimeout !== null) {
+      clearTimeout(this._explosionTimeout);
+      this._explosionTimeout = null;
     }
   }
 
@@ -313,7 +318,8 @@ export class PVPManager {
     );
 
     this.bot.attack(this.target);
-    this.bot.emit("attackedTarget" as any);
+    // mineflayer event typing doesn't cover attackedTarget
+    this.bot.emit('attackedTarget' as any);
     this.timeToNextAttack = this.getWeaponCooldown();
 
     // Re-activate shield after a brief delay
@@ -331,7 +337,7 @@ export class PVPManager {
    */
   private getWeaponCooldown(): number {
     const slot =
-      this.bot.inventory.slots[this.bot.getEquipmentDestSlot("hand")];
+      this.bot.inventory.slots[this.bot.getEquipmentDestSlot('hand')];
     return getCooldown(slot?.name);
   }
 
@@ -339,19 +345,14 @@ export class PVPManager {
    * Whether the bot currently has a shield in the off-hand.
    */
   private hasShield(): boolean {
-    if ((this.bot as any).supportFeature?.("doesntHaveOffHandSlot"))
-      return false;
+    if (this.bot.supportFeature?.('doesntHaveOffHandSlot')) return false;
     const slot =
-      this.bot.inventory.slots[this.bot.getEquipmentDestSlot("off-hand")];
+      this.bot.inventory.slots[this.bot.getEquipmentDestSlot('off-hand')];
     if (!slot) return false;
-    return slot.name.includes("shield");
+    return slot.name.includes('shield');
   }
 }
 
-// ---------------------------------------------------------------------------
-// Plugin entry point — attaches bot.pvp
-// ---------------------------------------------------------------------------
-
 export function plugin(bot: Bot): void {
-  (bot as any).pvp = new PVPManager(bot);
+  bot.pvp = new PVPManager(bot);
 }

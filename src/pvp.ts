@@ -1,15 +1,17 @@
-import { Logger } from "./logger";
-import { Constants } from "./constants";
-import { Vec3 } from "vec3";
-import { Bot } from "mineflayer";
+import { Logger } from './logger';
+import { Constants } from './constants';
+import { Vec3 } from 'vec3';
+import { Bot } from 'mineflayer';
 
 /**
- * Represents a rule-based decision for inventory management during combat
+ * @fileoverview Combat decision engine and manager for Pupa bot.
+ *
+ * Represents a rule-based decision for inventory management during combat.
  */
 class CombatDecision {
-  public condition: () => boolean;
-  public action: () => Promise<void>;
-  public name: string;
+  condition: () => boolean;
+  action: () => Promise<void>;
+  name: string;
 
   /**
    * @param condition - Function returning boolean
@@ -31,38 +33,38 @@ class CombatDecision {
  * Manages combat state, targeting, movement (strafing), and automated inventory decisions
  */
 class CombatManager {
-  public bot: Bot;
-  public logger: Logger;
-  public alliesSet: Set<string>;
-  public debounce: boolean;
-  public lastDamage: number;
-  public lastHealth: number;
-  public strafeDirection: number;
-  public strafePoint: Vec3 | null;
-  public lastDist: number | null;
-  public _edgeSneaking: boolean;
-  public mode: number;
-  public modeFilterCache: ((e: any) => boolean) | null;
-  public lastMode: number;
-  public lastPearlTime: number;
+  public readonly bot: Bot;
+  public readonly logger: Logger;
+  public readonly alliesSet: Set<string>;
+  debounce: boolean;
+  lastDamage: number;
+  lastHealth: number;
+  strafeDirection: number;
+  strafePoint: Vec3 | null;
+  lastDist: number | null;
+  _edgeSneaking: boolean;
+  mode: number;
+  modeFilterCache: ((e: any) => boolean) | null;
+  lastMode: number;
+  lastPearlTime: number;
   public decisions: CombatDecision[];
-  public _isDeciding: boolean;
+  _isDeciding: boolean;
 
   /**
    * @param bot - Mineflayer bot instance
    */
   constructor(bot: Bot) {
     this.bot = bot;
-    this.logger = (bot as any).__logger;
+    this.logger = bot.__logger;
     this.alliesSet = new Set();
     this.debounce = false;
     this.lastDamage = 0;
     this.lastHealth = 20;
-    this.strafeDirection = 1; // +1 = strafe right, -1 = strafe left
+    this.strafeDirection = 1;
     this.strafePoint = null;
     this.lastDist = null;
     this._edgeSneaking = false;
-    this.mode = 2; // Default: Player PVP
+    this.mode = 2;
     this.modeFilterCache = null;
     this.lastMode = -1;
     this.lastPearlTime = 0;
@@ -90,52 +92,50 @@ class CombatManager {
           const { canEatGapple, canEatEGapple, needsTotem } = status;
 
           if (needsTotem) {
-            // Exit early if no totem is in inventory
-            if (!inv().hasItem("totem_of_undying")) return;
-            this.logger.combat("Fall: Survival impossible with Gapples, equipping Totem");
+            if (!inv().hasItem('totem_of_undying')) return;
+            this.logger.combat('Fall: Survival impossible with Gapples, equipping Totem');
             await inv().equipTotem();
           } else if (
             canEatEGapple &&
-            inv().hasItemWithMetadata("golden_apple", 1)
+            inv().hasItemWithMetadata('golden_apple', 1)
           ) {
-            this.logger.combat("Fall: Mitigating with Enchanted Golden Apple");
+            this.logger.combat('Fall: Mitigating with Enchanted Golden Apple');
             await inv().equipGapple();
           } else if (
             canEatGapple &&
-            inv().hasItemWithMetadata("golden_apple", 0)
+            inv().hasItemWithMetadata('golden_apple', 0)
           ) {
-            this.logger.combat("Fall: Mitigating with Golden Apple");
+            this.logger.combat('Fall: Mitigating with Golden Apple');
             await inv().equipGapple();
           } else {
-            // Exit early if neither gapple nor totem is available
             if (
-              !inv().hasItem("golden_apple") &&
-              !inv().hasItem("totem_of_undying")
+              !inv().hasItem('golden_apple') &&
+              !inv().hasItem('totem_of_undying')
             )
               return;
-            this.logger.combat("Fall: No suitable Gapple available, equipping Totem");
+            this.logger.combat('Fall: No suitable Gapple available, equipping Totem');
             await inv().equipTotem();
           }
         },
-        "fall",
+        'fall',
       ),
 
       new CombatDecision(
         () => true,
         () => inv().equipArmor(),
-        "armor",
+        'armor',
       ),
       new CombatDecision(
         () => true,
         () => inv().equipWeapon(),
-        "weapon",
+        'weapon',
       ),
 
       new CombatDecision(
         () => {
           const { totalHealth } = this.getHealthStatus();
-          const hasTotems = inv().hasItem("totem_of_undying");
-          const hasGapple = inv().hasItem("golden_apple");
+          const hasTotems = inv().hasItem('totem_of_undying');
+          const hasGapple = inv().hasItem('golden_apple');
           return (
             hasTotems &&
             (totalHealth <=
@@ -144,7 +144,7 @@ class CombatManager {
           );
         },
         () => inv().equipTotem(),
-        "totem",
+        'totem',
       ),
 
       new CombatDecision(
@@ -156,7 +156,7 @@ class CombatManager {
           if (Date.now() - this.lastPearlTime < COOLDOWN) return false;
 
           const dist = this.bot.entity!.position.distanceTo(target.position);
-          const hasPearls = inv().hasItem("ender_pearl");
+          const hasPearls = inv().hasItem('ender_pearl');
           if (
             !hasPearls ||
             dist <= (this.bot as any).pvp.attackRange ||
@@ -171,7 +171,6 @@ class CombatManager {
           );
           const targetPos = target.position.offset(0, target.height / 2, 0);
           
-          // Use offset-based approach
           return this.getBestPearlOffset(eyePos, targetPos, 'low') !== null;
         },
         async () => {
@@ -183,7 +182,6 @@ class CombatManager {
           );
           const targetPos = target.position.offset(0, target.height / 2, 0);
           
-          // Use offset-based approach
           const result = this.getBestPearlOffset(eyePos, targetPos, 'low');
             if (!result) {
               this.logger.combat(`Cannot throw pearl at ${target.username}: unreachable`);
@@ -195,15 +193,15 @@ class CombatManager {
           
           this.lastPearlTime = Date.now();
         },
-        "pearl",
+        'pearl',
       ),
 
       new CombatDecision(
         () => {
           const { totalHealth, healthPoints } = this.getHealthStatus();
-          const hasGapple = inv().hasItem("golden_apple");
-          const hasTotems = inv().hasItem("totem_of_undying");
-          const regeneration = (this.bot as any).entity.effects["10"];
+          const hasGapple = inv().hasItem('golden_apple');
+          const hasTotems = inv().hasItem('totem_of_undying');
+          const regeneration = (this.bot as any).entity.effects['10'];
           return (
             hasGapple &&
             healthPoints < 20 &&
@@ -214,16 +212,16 @@ class CombatManager {
           );
         },
         () => inv().equipGapple(),
-        "heal",
+        'heal',
       ),
 
       new CombatDecision(
         () => {
           const { totalHealth } = this.getHealthStatus();
-          const hasPotion = inv().hasItem("potion");
-          const strength = (this.bot as any).entity.effects["5"];
-          const hasTotems = inv().hasItem("totem_of_undying");
-          const hasGapple = inv().hasItem("golden_apple");
+          const hasPotion = inv().hasItem('potion');
+          const strength = (this.bot as any).entity.effects['5'];
+          const hasTotems = inv().hasItem('totem_of_undying');
+          const hasGapple = inv().hasItem('golden_apple');
           return (
             hasPotion &&
             !strength &&
@@ -231,16 +229,16 @@ class CombatManager {
           );
         },
         () => inv().equipBuff(),
-        "buff",
+        'buff',
       ),
 
       new CombatDecision(
         () => {
           const { totalHealth, healthPoints } = this.getHealthStatus();
-          const hasGapple = inv().hasItem("golden_apple");
-          const hasTotems = inv().hasItem("totem_of_undying");
+          const hasGapple = inv().hasItem('golden_apple');
+          const hasTotems = inv().hasItem('totem_of_undying');
           const hasFood = inv().hasFood();
-          const regeneration = (this.bot as any).entity.effects["10"];
+          const regeneration = (this.bot as any).entity.effects['10'];
 
           const safe =
             totalHealth > (this.lastDamage || 1) * CRITICAL_HEALTH_MULTIPLIER ||
@@ -252,7 +250,7 @@ class CombatManager {
           return hasFood && (needsFood || needsHealingFood) && safe;
         },
         () => inv().equipFood(),
-        "food",
+        'food',
       ),
 
       new CombatDecision(
@@ -260,17 +258,17 @@ class CombatManager {
           const { totalHealth } = this.getHealthStatus();
           return (
             totalHealth > (this.lastDamage || 1) * CRITICAL_HEALTH_MULTIPLIER ||
-            !inv().hasItem("totem_of_undying")
+            !inv().hasItem('totem_of_undying')
           );
         },
         () => inv().equipUtility(),
-        "utility",
+        'utility',
       ),
 
       new CombatDecision(
         () => true,
         () => this.decideIfToss(),
-        "toss",
+        'toss',
       ),
     ];
   }
@@ -288,15 +286,15 @@ class CombatManager {
   getBestPearlPitch(
     source: Vec3,
     target: Vec3,
-  ): { pitch: number; arc: string } | null {
+  ): { pitch: number; arc: 'low' | 'high' } | null {
     const result = (this.bot as any).utilsManager.getBestPearlTrajectory(
       source,
       target,
     );
 
     if (result) {
-      if (result.arc === "high") {
-        this.logger.debug("Low arc blocked, evaluating high arc via tolerance sampling...");
+      if (result.arc === 'high') {
+        this.logger.debug('Low arc blocked, evaluating high arc via tolerance sampling...');
       }
       return { pitch: result.pitch, arc: result.arc };
     }
@@ -316,7 +314,7 @@ class CombatManager {
     source: Vec3,
     target: Vec3,
     arcType: 'low' | 'high' = 'low'
-  ): { offset: number; arc: string } | null {
+  ): { offset: number; arc: 'low' | 'high' } | null {
     const { VELOCITY, GRAVITY, DRAG } = Constants.COMBAT.ENDER_PEARL;
     
     try {
@@ -329,7 +327,6 @@ class CombatManager {
         arcType
       );
       
-      // Check if the path is clear using the offset-based approach
       // For now, we'll assume it's clear if we can calculate an offset
       // In a full implementation, we'd simulate the trajectory with the offset
       
@@ -378,11 +375,11 @@ class CombatManager {
       // Priority decisions that may cause an item swap — if any of these
       // trigger and swap the held item, we skip the lower-priority decisions.
       const priorityNames = new Set([
-        "fall",
-        "totem",
-        "heal",
-        "armor",
-        "weapon",
+        'fall',
+        'totem',
+        'heal',
+        'armor',
+        'weapon',
       ]);
 
       for (const decision of this.decisions) {
@@ -431,26 +428,26 @@ class CombatManager {
     switch (this.mode) {
       case 0: // Mobs
         filter = (e) =>
-          e.type === "mob" &&
-          e.kind === "Hostile mobs" &&
+          e.type === 'mob' &&
+          e.kind === 'Hostile mobs' &&
           distSq(e) <= viewDistSq;
         break;
       case 1: // Players (Survival)
         filter = (e) =>
-          e.type === "player" &&
+          e.type === 'player' &&
           (this.bot as any).players[e.username]?.gamemode === 0 &&
           !this.alliesSet.has(e.username) &&
           distSq(e) <= viewDistSq;
         break;
       case 2: // Players (All)
         filter = (e) =>
-          e.type === "player" &&
+          e.type === 'player' &&
           !this.alliesSet.has(e.username) &&
           distSq(e) < viewDistSq;
         break;
       case 3: // All entities
         filter = (e) =>
-          (e.type === "player" || e.type === "mob") &&
+          (e.type === 'player' || e.type === 'mob') &&
           !this.alliesSet.has(e.username) &&
           distSq(e) < viewDistSq;
         break;
@@ -530,7 +527,6 @@ class CombatManager {
     const { totalHealth } = this.getHealthStatus();
     const velY = (this.bot as any).entity.velocity.y;
 
-    // Only check if falling
     if (velY >= 0 || (this.bot as any).entity.onGround) {
       return { isDangerous: false };
     }
@@ -589,7 +585,7 @@ class CombatManager {
     } catch (error: unknown) {
       const err = error as Error;
       err.message = `Error in combat loop: ${err.message}`;
-      this.logger.error(err, "Combat");
+      this.logger.error(err, 'Combat');
     } finally {
       this._isDeciding = false;
     }
@@ -599,7 +595,7 @@ class CombatManager {
    * Decide whether to toss junk items from inventory.
    */
   async decideIfToss(): Promise<void> {
-    const junk = ["compass", "knowledge_book", "glass_bottle"].map(
+    const junk = ['compass', 'knowledge_book', 'glass_bottle'].map(
       (name) => (this.bot as any).registry.itemsByName[name]?.id,
     );
     for (const id of junk) {
@@ -629,7 +625,7 @@ class CombatManager {
         0.01,
         (this.bot as any).entity.velocity.y,
       );
-      (this.bot as any).utilsManager.applyImpulse(impulse, "set");
+      (this.bot as any).utilsManager.applyImpulse(impulse, 'set');
     }
   }
 
@@ -642,7 +638,7 @@ class CombatManager {
    */
   doEdgeProtection(): void {
     const bot = this.bot;
-    if (!(bot as any).entity.onGround) return;
+    if (!bot.entity.onGround) return;
 
     const pos = bot.entity!.position;
     const blockX = Math.floor(pos.x) + 0.5;
@@ -654,21 +650,21 @@ class CombatManager {
     if (dx < 0.5 && dz < 0.5) {
       // Centered — release sneak if we set it
       if (this._edgeSneaking) {
-        (bot as any).setControlState("sneak", false);
+        bot.setControlState('sneak', false);
         this._edgeSneaking = false;
       }
       return;
     }
 
     // Edge detected — sneak and nudge toward center
-    (bot as any).setControlState("sneak", true);
+    bot.setControlState('sneak', true);
     this._edgeSneaking = true;
 
     const nudgeX = dx >= 0.5 ? Math.sign(blockX - pos.x) * 0.02 : 0;
     const nudgeZ = dz >= 0.5 ? Math.sign(blockZ - pos.z) * 0.02 : 0;
 
     if (nudgeX !== 0 || nudgeZ !== 0) {
-      (bot as any).entity.velocity.add(new Vec3(nudgeX, 0, nudgeZ));
+      bot.entity.velocity.add(new Vec3(nudgeX, 0, nudgeZ));
     }
   }
 
@@ -698,7 +694,7 @@ class CombatManager {
     const distToTarget = source.distanceTo(target);
 
     const strafeRange =
-      (this.bot as any).runtimeConfig?.get("COMBAT", "STRAFE_RANGE") ??
+      (this.bot as any).runtimeConfig?.get('COMBAT', 'STRAFE_RANGE') ??
       Constants.COMBAT.STRAFE_RANGE;
 
     if (distToTarget > strafeRange + 1) {
@@ -713,7 +709,6 @@ class CombatManager {
     }
 
     if ((this.bot as any).entity.onGround) {
-      // --- Stale strafe point cleanup (ground only) ---
       if (this.strafePoint) {
         const distToPoint = dist2D(source, this.strafePoint);
         if (distToPoint > strafeRange + 1) {
@@ -721,26 +716,24 @@ class CombatManager {
         } else {
           const isBlocked = !utils.isJumpPathClear(source, this.strafePoint);
           if (isBlocked) {
-            this.logger.debug("Clearing blocked strafe point");
+            this.logger.debug('Clearing blocked strafe point');
             this.strafePoint = null;
           } else if (distToPoint < 0.2) {
-            // Reached the point, clear so we pick a new one
             this.strafePoint = null;
           }
         }
       }
 
-      // --- Pick a new strafe point if needed ---
       if (!this.strafePoint && distToTarget <= strafeRange) {
         // Try all 4 cardinal directions relative to the target to find a
         // valid strafe point.  The directions are ordered by preference:
         // perpendicular (orbital), then forward/backward (radial).
         const strafeDist = Constants.MOVEMENT.STRAFE_POINT_MAX_DISTANCE;
         const directions: { dir: number; label: string }[] = [
-          { dir: this.strafeDirection, label: "strafe" },
-          { dir: -this.strafeDirection, label: "opposite" },
-          { dir: 0, label: "forward" },
-          { dir: 2, label: "backward" }, // 2 = PI rad = 180°
+          { dir: this.strafeDirection, label: 'strafe' },
+          { dir: -this.strafeDirection, label: 'opposite' },
+          { dir: 0, label: 'forward' },
+          { dir: 2, label: 'backward' }, // 2 = PI rad = 180°
         ];
 
         for (const { dir, label } of directions) {
@@ -755,32 +748,30 @@ class CombatManager {
             if (dir !== this.strafeDirection) {
               this.strafeDirection = dir;
             }
-            this.logger.debug(`Strafe point found (${label})`, "Combat");
+            this.logger.debug(`Strafe point found (${label})`, 'Combat');
             break;
           }
         }
 
         if (!this.strafePoint) {
-          this.logger.debug("No strafe point found in any direction");
+          this.logger.debug('No strafe point found in any direction');
         }
       }
 
-      // --- Jump toward the strafe point ---
       if (this.strafePoint) {
         // Enable sprint so prismarine-physics uses sprint ground acceleration
         // (otherwise it would use walking acceleration and slow us down).
         // The sprint-jump boost from prismarine-physics gets overwritten
         // by our impulse below, so we include it in getJumpVelocity instead.
-        (this.bot as any).setControlState("sprint", true);
+        (this.bot as any).setControlState('sprint', true);
 
         const impulse = utils.getJumpVelocity(source, this.strafePoint);
         if (impulse) {
           this.logger.combat(`Jump strafe to ${this.strafePoint.x.toFixed(1)}, ${this.strafePoint.z.toFixed(1)} (dist=${distToTarget.toFixed(1)}, dir=${this.strafeDirection})`);
-          utils.applyImpulse(impulse, "set", true);
+          utils.applyImpulse(impulse, 'set', true);
         }
       }
     } else if (this.strafePoint) {
-      // --- Airborne: steer toward the strafe point ---
       const currentSpeed = utils.getHorizontalSpeed();
       if (currentSpeed > 0.001) {
         // Steer velocity toward the strafe point using the air acceleration
@@ -798,7 +789,7 @@ class CombatManager {
           0,
           (dz / len) * airAccel,
         );
-        utils.applyImpulse(impulse, "add");
+        utils.applyImpulse(impulse, 'add');
       }
     }
   }
@@ -825,7 +816,6 @@ class CombatManager {
       await this.bot.waitForTicks!(1);
     }
 
-    // Final snap for precision
     this.bot.entity!.position.set(
       target.x,
       this.bot.entity!.position.y,
@@ -860,8 +850,8 @@ class CombatManager {
  * @param bot - Mineflayer bot instance
  * @returns The same bot instance with combatManager attached
  */
-export default function attach(bot: Bot): Bot {
-  (bot as any).combatManager = new CombatManager(bot);
+export function attachCombat(bot: Bot): Bot {
+  bot.combatManager = new CombatManager(bot);
   return bot;
 }
 

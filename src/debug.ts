@@ -1,12 +1,12 @@
 /**
- * Debug module for Pupa bot
- * Contains test commands and debugging utilities
+ * @fileoverview Debug module for Pupa bot.
+ * Contains test commands and debugging utilities.
  */
 
-import { logger, Logger } from "./logger";
-import { Constants } from "./constants";
-import { Vec3 } from "vec3";
-import { Bot } from "mineflayer";
+import { logger, Logger } from './logger';
+import { Constants } from './constants';
+import { Vec3 } from 'vec3';
+import { Bot } from 'mineflayer';
 
 interface Args {
   [index: number]: string;
@@ -16,16 +16,16 @@ interface Args {
  * Attaches debug commands to a bot instance
  */
 class DebugManager {
-  public bot: Bot;
-  public logger: Logger;
-  public strafeLooping: boolean = false;
+  bot: Bot;
+  logger: Logger;
+  strafeLooping: boolean = false;
 
   /**
    * @param bot - Mineflayer bot instance
    */
   constructor(bot: Bot) {
     this.bot = bot;
-    this.logger = (bot as any).__logger;
+    this.logger = bot.__logger;
     logger.setDebugMode(true);
   }
 
@@ -40,64 +40,64 @@ class DebugManager {
    * Register debug commands with the command registry
    */
   setupDebugCommands(): void {
-    if (!(this.bot as any).commandManager) {
-      this.logger.error(new Error(`Command registry not initialized`));
+    if (!this.bot.commandManager) {
+      this.logger.error(new Error('Command registry not initialized'));
       return;
     }
 
-    const cm = (this.bot as any).commandManager;
+    const cm = this.bot.commandManager;
 
-    cm.registerCommand("debug_strafe_once", {
-      description: "Single strafe test at (+3, 0, 0)",
+    cm.registerCommand('debug_strafe_once', {
+      description: 'Single strafe test at (+3, 0, 0)',
       handler: async (_args: string[]) => {
         await this.debugStrafeOnce();
       },
     });
 
-    cm.registerCommand("debug_strafe_loop", {
-      description: "Loop the strafe test (call again to stop)",
+    cm.registerCommand('debug_strafe_loop', {
+      description: 'Loop the strafe test (call again to stop)',
       handler: async (_args: string[]) => {
         await this.debugStrafeLoop();
       },
     });
 
-    cm.registerCommand("debug_pearl_offsets", {
-      description: "Show calculated offsets for different distances and arcs",
+    cm.registerCommand('debug_pearl_offsets', {
+      description: 'Show calculated offsets for different distances and arcs',
       handler: async (args: string[]) => {
         await this.debugPearlOffsets(args);
-      },
-    }),
+      }
+    })
 
-    cm.registerCommand("debug_pearl_throw", {
-      description: "Throw a pearl at bot position + offset with arc mode",
+    cm.registerCommand('debug_pearl_throw', {
+      description: 'Throw a pearl at bot position + offset with arc mode',
       handler: async (args: string[]) => {
         await this.debugPearlThrow(args);
       },
     });
 
-    cm.registerCommand("debug_jump_path", {
+    cm.registerCommand('debug_jump_path', {
       description:
-        "Test isJumpPathClear against offset (+3, 0, 0) from bot position",
+        'Test isJumpPathClear against offset (+3, 0, 0) from bot position',
       handler: async () => {
         await this.debugJumpPath();
       },
     });
 
-    cm.registerCommand("debug_collision_stress", {
-      description: "Batch test isJumpPathClear with 9 scenarios",
+    cm.registerCommand('debug_collision_stress', {
+      description: 'Batch test isJumpPathClear with 9 scenarios',
       handler: async () => {
         await this.debugCollisionStress();
       },
     });
 
-    cm.registerCommand("debug_jump_test", {
-      description: "Test jump towards a relative point (+3, 0, 0)",
+    cm.registerCommand('debug_jump_test', {
+      description: 'Test jump towards a relative point (+3, 0, 0)',
       handler: async () => {
         await this.debugJumpTest();
       },
     });
 
-    this.logger.debug("Debug commands registered", "Debug");
+    this.logger.debug('Debug commands registered', 'Debug');
   }
 
   /**
@@ -106,31 +106,8 @@ class DebugManager {
    */
   async debugStrafeOnce(): Promise<number> {
     this.strafeLooping = false;
-    const center = new Vec3(
-      Math.floor(this.bot.entity!.position.x) + 0.5,
-      this.bot.entity!.position.y,
-      Math.floor(this.bot.entity!.position.z) + 0.5,
-    );
-    await (this.bot as any).combatManager.nudgeToCenter(center);
-    const targetPos = this.bot.entity!.position.offset(3, 0, 0);
 
-    // Log initial position
-    const initialPos = this.bot.entity!.position.clone();
-    this.logger.debug(
-      `Strafe test: initial position ${initialPos.toString()}`,
-      "Debug",
-    );
-    this.logger.debug(
-      `Strafe test: target position ${targetPos.toString()}`,
-      "Debug",
-    );
-
-    (this.bot as any).combatManager.doStrafe(targetPos);
-
-    // Wait a tick for velocity to apply
-    await this.bot.waitForTicks!(1);
-
-    // Wait for the entity to land after applying impulse
+    // Wait for the bot to land and settle before strafing
     while (
       !this.bot.entity.onGround ||
       this.bot.entity.velocity.x !== 0 ||
@@ -139,38 +116,27 @@ class DebugManager {
       await this.bot.waitForTicks!(1);
     }
 
-    // Log final position and distance check
-    const finalPos = this.bot.entity!.position;
-    const strafePoint = (this.bot as any).combatManager.strafePoint;
-    
-    if (strafePoint) {
-      const dist = Math.hypot(strafePoint.x - finalPos.x, strafePoint.z - finalPos.z);
-      const withinTolerance = dist <= 0.5;
+    const targetPos = this.bot.entity!.position.offset(3, 0, 0);
 
-      this.logger.debug(
-        `Strafe test: final position ${finalPos.toString()}`,
-        "Debug",
-      );
-      this.logger.debug(
-        `Strafe test: strafe point ${strafePoint.toString()}`,
-        "Debug",
-      );
-      this.logger.debug(
-        `Strafe test: distance to strafe point ${dist.toFixed(3)} ${withinTolerance ? "✓ within 0.5 tolerance" : "✗ outside 0.5 tolerance"}`,
-        "Debug",
-      );
-      return dist;
+    this.bot.combatManager.doStrafe(targetPos);
+
+    await this.bot.waitForTicks!(1);
+
+    while (
+      !this.bot.entity.onGround ||
+      this.bot.entity.velocity.x !== 0 ||
+      this.bot.entity.velocity.z !== 0
+    ) {
+      await this.bot.waitForTicks!(1);
+    }
+
+    const finalPos = this.bot.entity!.position;
+    const strafePoint = this.bot.combatManager.strafePoint;
+
+    if (strafePoint) {
+      return Math.hypot(strafePoint.x - finalPos.x, strafePoint.z - finalPos.z);
     } else {
-      const dist = Math.hypot(targetPos.x - finalPos.x, targetPos.z - finalPos.z);
-      this.logger.debug(
-        `Strafe test: final position ${finalPos.toString()}`,
-        "Debug",
-      );
-      this.logger.debug(
-        `Strafe test: no strafe point found, distance to target ${dist.toFixed(3)}`,
-        "Debug",
-      );
-      return dist;
+      return Math.hypot(targetPos.x - finalPos.x, targetPos.z - finalPos.z);
     }
   }
 
@@ -182,41 +148,17 @@ class DebugManager {
   async debugStrafeLoop(): Promise<number[]> {
     if (this.strafeLooping) {
       this.strafeLooping = false;
-      this.logger.debug("Strafe loop test: stopped", "Debug");
       return [];
     }
 
-    // Center once before starting strafing chain
-    const center = new Vec3(
-      Math.floor(this.bot.entity!.position.x) + 0.5,
-      this.bot.entity!.position.y,
-      Math.floor(this.bot.entity!.position.z) + 0.5,
-    );
-    await (this.bot as any).combatManager.nudgeToCenter(center);
-
     const targetPos = this.bot.entity!.position.offset(3, 0, 0);
-
-    // Log initial position
-    const initialPos = this.bot.entity!.position.clone();
-    this.logger.debug(
-      `Strafe loop test: initial position ${initialPos.toString()}`,
-      "Debug",
-    );
-    this.logger.debug(
-      `Strafe loop test: target position ${targetPos.toString()}`,
-      "Debug",
-    );
-
     const distances: number[] = [];
 
-    // Strafe 3 times
     for (let i = 0; i < 3; i++) {
-      (this.bot as any).combatManager.doStrafe(targetPos);
+      this.bot.combatManager.doStrafe(targetPos);
 
-      // Wait a tick for velocity to apply
       await this.bot.waitForTicks!(1);
 
-      // Wait for the entity to land after applying impulse
       while (
         !this.bot.entity.onGround ||
         this.bot.entity.velocity.x !== 0 ||
@@ -225,41 +167,17 @@ class DebugManager {
         await this.bot.waitForTicks!(1);
       }
 
-      // Log position after each strafe
       const finalPos = this.bot.entity!.position;
-      const strafePoint = (this.bot as any).combatManager.strafePoint;
-      
+      const strafePoint = this.bot.combatManager.strafePoint;
+
       if (strafePoint) {
-        const dist = Math.hypot(strafePoint.x - finalPos.x, strafePoint.z - finalPos.z);
-        this.logger.debug(
-          `Strafe loop test: after strafe ${i + 1} position ${finalPos.toString()}`,
-          "Debug",
-        );
-        this.logger.debug(
-          `Strafe loop test: after strafe ${i + 1} strafe point ${strafePoint.toString()}`,
-          "Debug",
-        );
-        this.logger.debug(
-          `Strafe loop test: after strafe ${i + 1} distance to strafe point ${dist.toFixed(3)} ${dist <= 0.5 ? "✓ within 0.5 tolerance" : "✗ outside 0.5 tolerance"}`,
-          "Debug",
-        );
-        distances.push(dist);
+        distances.push(Math.hypot(strafePoint.x - finalPos.x, strafePoint.z - finalPos.z));
       } else {
-        const dist = Math.hypot(targetPos.x - finalPos.x, targetPos.z - finalPos.z);
-        this.logger.debug(
-          `Strafe loop test: after strafe ${i + 1} position ${finalPos.toString()}`,
-          "Debug",
-        );
-        this.logger.debug(
-          `Strafe loop test: after strafe ${i + 1} no strafe point found, distance to target ${dist.toFixed(3)}`,
-          "Debug",
-        );
-        distances.push(dist);
+        distances.push(Math.hypot(targetPos.x - finalPos.x, targetPos.z - finalPos.z));
       }
     }
 
     this.strafeLooping = false;
-    this.logger.debug("Strafe loop test completed (3 iterations)", "Debug");
     return distances;
   }
 
@@ -271,19 +189,16 @@ class DebugManager {
    * @param offset - Offset as Vec3 object (alternative signature)
    */
   async debugPearlThrow(args: Args): Promise<void>;
-  async debugPearlThrow(mode: "low" | "high" | "auto", offset: Vec3): Promise<void>;
-  
-  async debugPearlThrow(arg1: Args | "low" | "high" | "auto", arg2?: Vec3): Promise<void> {
+  async debugPearlThrow(mode: 'low' | 'high' | 'auto', offset: Vec3): Promise<void>;
+
+  async debugPearlThrow(arg1: Args | 'low' | 'high' | 'auto', arg2?: Vec3): Promise<void> {
     const startTime = Date.now();
-    let mode: "low" | "high" | "auto";
+    let mode: 'low' | 'high' | 'auto';
     let offset: Vec3;
 
-    // Handle both calling conventions
     if (Array.isArray(arg1)) {
-      // Command-style calling: debugPearlThrow(["low", "x+2.5", "y-1.0", "z+0.75"])
-      mode = arg1[0] as "low" | "high" | "auto";
-      
-      // Parse axis offsets: "x+2.5" -> 2.5, "y-1.0" -> -1.0
+      mode = arg1[0] as 'low' | 'high' | 'auto';
+
       const parseAxis = (s: string) => parseFloat(s.slice(1));
       offset = new Vec3(
         parseAxis(arg1[1]),
@@ -291,21 +206,12 @@ class DebugManager {
         parseAxis(arg1[3]),
       );
     } else {
-      // Direct calling: debugPearlThrow("low", new Vec3(2.5, -1.0, 0.75))
-      mode = arg1 as "low" | "high" | "auto";
+      mode = arg1 as 'low' | 'high' | 'auto';
       offset = arg2!;
     }
 
-    // Compute target position: bot position + offset
     const targetPos = this.bot.entity!.position.plus(offset);
-    this.logger.debug(
-      `Pearl throw: ${mode} arc at bot position + ${offset.toString()}`,
-      "Debug",
-    );
-
     await this.debugPearlArc(mode, targetPos);
-    const endTime = Date.now();
-    this.logger.debug(`Pearl throw completed in ${(endTime - startTime)}ms`, "Debug");
   }
 
   /**
@@ -316,21 +222,10 @@ class DebugManager {
     const source = this.bot.entity!.position;
     const targetPos = source.offset(3, 0, 0);
 
-    this.logger.debug(
-      `Jump path: target (${targetPos.x.toFixed(1)}, ${targetPos.y.toFixed(1)}, ${targetPos.z.toFixed(1)}) from (${this.bot.entity!.position.x.toFixed(1)}, ${this.bot.entity!.position.y.toFixed(1)}, ${this.bot.entity!.position.z.toFixed(1)})`,
-      "Debug",
-    );
-
     const isClear = (this.bot as any).utilsManager.isJumpPathClear(
       source,
       targetPos,
     );
-
-    if (isClear) {
-      this.logger.debug(`Jump path: CLEAR`, "Debug");
-    } else {
-      this.logger.debug(`Jump path: BLOCKED`, "Debug");
-    }
   }
 
   /**
@@ -344,15 +239,15 @@ class DebugManager {
       name: string;
       obstacle: { x: number; y: number; z: number } | null;
     }[] = [
-      { name: "Test 0", obstacle: null },
-      { name: "Test 1", obstacle: { x: 1, y: 1, z: 0 } },
-      { name: "Test 2", obstacle: { x: 2, y: 1, z: 0 } },
-      { name: "Test 3", obstacle: { x: 1, y: 2, z: 0 } },
-      { name: "Test 4", obstacle: { x: 2, y: 2, z: 0 } },
-      { name: "Test 5", obstacle: { x: 0, y: 3, z: 0 } },
-      { name: "Test 6", obstacle: { x: 1, y: 3, z: 0 } },
-      { name: "Test 7", obstacle: { x: 2, y: 3, z: 0 } },
-      { name: "Test 8", obstacle: { x: 3, y: 3, z: 0 } },
+      { name: 'Test 0', obstacle: null },
+      { name: 'Test 1', obstacle: { x: 1, y: 1, z: 0 } },
+      { name: 'Test 2', obstacle: { x: 2, y: 1, z: 0 } },
+      { name: 'Test 3', obstacle: { x: 1, y: 2, z: 0 } },
+      { name: 'Test 4', obstacle: { x: 2, y: 2, z: 0 } },
+      { name: 'Test 5', obstacle: { x: 0, y: 3, z: 0 } },
+      { name: 'Test 6', obstacle: { x: 1, y: 3, z: 0 } },
+      { name: 'Test 7', obstacle: { x: 2, y: 3, z: 0 } },
+      { name: 'Test 8', obstacle: { x: 3, y: 3, z: 0 } },
     ];
 
     const source = new Vec3(3.5, 1, 0.5);
@@ -370,21 +265,9 @@ class DebugManager {
         await this.bot.waitForTicks!(3);
       }
 
-      // Output positions in requested format
-      this.logger.debug(
-        `Collision stress: ${source.toString()}, ${targetPos.toString()}, ${scenario.obstacle ? scenario.obstacle.x + ", " + scenario.obstacle.y + ", " + scenario.obstacle.z : "none"}`,
-        "Debug",
-      );
-
-      // Test isJumpPathClear
       const isClear = (this.bot as any).utilsManager.isJumpPathClear(
         source,
         targetPos,
-      );
-
-      this.logger.debug(
-        `Collision stress: ${scenario.name}: ${isClear ? "CLEAR" : "BLOCKED"}`,
-        "Debug",
       );
 
       // Remove obstacle for next test (skip if no obstacle)
@@ -398,44 +281,15 @@ class DebugManager {
 
   /**
    * Test a jump towards a relative point (+3, 0, 0).
-   * Centers the bot before jumping.
    * @param offset - Optional relative Vec3 offset from current position
    * @returns The final distance to the target point after jumping
    */
   async debugJumpTest(offset?: Vec3): Promise<number> {
-    const center = new Vec3(
-      Math.floor(this.bot.entity!.position.x) + 0.5,
-      this.bot.entity!.position.y,
-      Math.floor(this.bot.entity!.position.z) + 0.5,
-    );
-    await (this.bot as any).combatManager.nudgeToCenter(center);
-
     const targetPos = offset
       ? this.bot.entity!.position.plus(offset)
-      : this.bot.entity!.position.offset(3, 0, 0);
+      : this.bot.entity!.position.offset(0, 0, 0);
 
-    // Log initial position before jumping
-    const initialPos = this.bot.entity!.position.clone();
-    this.logger.debug(
-      `Jump test: initial position ${initialPos.toString()}`,
-      "Debug",
-    );
-    this.logger.debug(
-      `Jump test: target position ${targetPos.toString()}`,
-      "Debug",
-    );
-
-    const jumpSource = initialPos.clone();
-
-    // Log state before the jump
-    const preDist = Math.hypot(
-      targetPos.x - jumpSource.x,
-      targetPos.z - jumpSource.z,
-    );
-    this.logger.debug(
-      `Jump test: pre-jump distance ${preDist.toFixed(3)}`,
-      "Debug",
-    );
+    const jumpSource = this.bot.entity!.position.clone();
 
     const impulse = (this.bot as any).utilsManager.getJumpVelocity(
       jumpSource,
@@ -443,40 +297,26 @@ class DebugManager {
     );
 
     if (impulse) {
-      this.logger.debug(
-        `Jump test: jumping to ${targetPos.toString()}`,
-        "Debug",
-      );
-
       const utils = (this.bot as any).utilsManager;
       const originalApplyImpulse = utils.applyImpulse.bind(utils);
       const startTick = this.bot.time!.age;
 
-      // Override applyImpulse to log every call for the next 40 ticks
       utils.applyImpulse = (
         imp: Vec3,
-        mode: string = "add",
+        mode: string = 'add',
         force: boolean = false,
       ) => {
-        this.logger.debug(
-          `Jump test: ApplyImpulse (${imp.x.toFixed(4)}, ${imp.y.toFixed(4)}, ${imp.z.toFixed(4)}) [${mode}]`,
-          "Debug",
-        );
         const result = originalApplyImpulse(imp, mode, force);
-
-        // Self-restore after 40 ticks
         if (this.bot.time!.age - startTick >= 40) {
           utils.applyImpulse = originalApplyImpulse;
         }
         return result;
       };
 
-      utils.applyImpulse(impulse, "set", true);
+      utils.applyImpulse(impulse, 'set', true);
 
-      // Wait a tick for velocity to apply
       await this.bot.waitForTicks!(1);
 
-      // Wait for the entity to land after applying impulse
       while (
         !this.bot.entity.onGround ||
         this.bot.entity.velocity.x !== 0 ||
@@ -486,51 +326,12 @@ class DebugManager {
       }
 
       const finalPos = this.bot.entity!.position;
-      const dist = Math.hypot(
+      return Math.hypot(
         targetPos.x - finalPos.x,
         targetPos.z - finalPos.z,
       );
-      const withinTolerance = dist <= 0.3;
-
-      // Log position after jumping
-      this.logger.debug(
-        `Jump test: after jump position ${finalPos.toString()}`,
-        "Debug",
-      );
-      this.logger.debug(
-        `Jump test: distance to target ${dist.toFixed(3)} ${withinTolerance ? "✓ within 0.3 tolerance" : "✗ outside 0.3 tolerance"}`,
-        "Debug",
-      );
-
-      // Calculate overshoot/undershoot along jump direction
-      const jumpDir = new Vec3(
-        targetPos.x - jumpSource.x,
-        0,
-        targetPos.z - jumpSource.z,
-      ).normalize();
-      const toTarget = new Vec3(
-        targetPos.x - finalPos.x,
-        0,
-        targetPos.z - finalPos.z,
-      );
-      const alongJump = toTarget.dot(jumpDir); // negative = overshoot, positive = undershoot
-      const overshoot = alongJump < 0 ? "overshoot" : "undershoot";
-      const overshootAmount = Math.abs(alongJump);
-
-      if (withinTolerance) {
-        this.logger.debug(
-          `Jump test: landed within tolerance (${dist.toFixed(3)} <= 0.3)`,
-          "Debug",
-        );
-      } else {
-        this.logger.debug(
-          `Jump test: ${overshoot} by ${overshootAmount.toFixed(3)} blocks (dist=${dist.toFixed(3)} > 0.3)`,
-          "Debug",
-        );
-      }
-      return dist;
     } else {
-      this.logger.error(new Error("Cannot calculate jump velocity"));
+      this.logger.error(new Error('Cannot calculate jump velocity'));
       return -1;
     }
   }
@@ -541,7 +342,7 @@ class DebugManager {
    * @param targetPos - Target position
    */
   async debugPearlArc(
-    arcType: "low" | "high" | "auto",
+    arcType: 'low' | 'high' | 'auto',
     targetPos: Vec3,
   ): Promise<void> {
     const eyePos = this.bot.entity!.position.offset(
@@ -550,31 +351,53 @@ class DebugManager {
       0,
     );
 
-    // Auto mode delegates to the combat manager's offset selection logic
-    if (arcType === "auto") {
-      const result = (this.bot as any).combatManager.getBestPearlOffset(
-        eyePos,
-        targetPos,
-        'low'
-      );
-      if (!result) {
-        this.logger.error(new Error("Cannot reach target with pearl"));
-        return;
-      }
-      const { offset, arc } = result;
+    if (arcType === 'auto') {
+      await this._debugPearlArcAuto(eyePos, targetPos);
+    } else if (arcType === 'low') {
+      await this._debugPearlArcLow(eyePos, targetPos);
+    } else if (arcType === 'high') {
+      await this._debugPearlArcHigh(eyePos, targetPos);
+    }
+  }
 
-      this.logger.debug(`Pearl arc: ${arc} arc, offset: ${offset.toFixed(2)} blocks`, "Debug");
-      const offsetStartTime = Date.now();
-      await (this.bot as any).inventoryManager.equipPearlWithOffset(targetPos, offset);
-      (this.bot as any).combatManager.lastPearlTime = Date.now();
-      const offsetEndTime = Date.now();
-      this.logger.debug(`Pearl arc (offset-based, ${arc} arc, offset=${offset.toFixed(2)}) completed in ${(offsetEndTime - offsetStartTime)}ms`, "Debug");
+  /**
+   * Handle auto arc selection by delegating to combat manager
+   */
+  private async _debugPearlArcAuto(eyePos: Vec3, targetPos: Vec3): Promise<void> {
+    const result = (this.bot as any).combatManager.getBestPearlOffset(
+      eyePos,
+      targetPos,
+      'low'
+    );
+    if (!result) {
+      this.logger.error(new Error('Cannot reach target with pearl'));
       return;
     }
+    const { offset } = result;
+    await (this.bot as any).inventoryManager.equipPearlWithOffset(targetPos, offset);
+    (this.bot as any).combatManager.lastPearlTime = Date.now();
+  }
 
-    // Use the offset-based approach
+  /**
+   * Handle low arc pearl throws
+   */
+  private async _debugPearlArcLow(eyePos: Vec3, targetPos: Vec3): Promise<void> {
+    await this._debugPearlArcWithType(eyePos, targetPos, 'low');
+  }
+
+  /**
+   * Handle high arc pearl throws
+   */
+  private async _debugPearlArcHigh(eyePos: Vec3, targetPos: Vec3): Promise<void> {
+    await this._debugPearlArcWithType(eyePos, targetPos, 'high');
+  }
+
+  /**
+   * Shared implementation for low/high arc throws
+   */
+  private async _debugPearlArcWithType(eyePos: Vec3, targetPos: Vec3, arcType: 'low' | 'high'): Promise<void> {
     const { VELOCITY, GRAVITY, DRAG } = Constants.COMBAT.ENDER_PEARL;
-    
+
     try {
       const offset = (this.bot as any).utilsManager.getProjectileOffset(
         eyePos,
@@ -584,13 +407,9 @@ class DebugManager {
         DRAG,
         arcType
       );
-      
-      this.logger.debug(`Pearl arc: ${arcType} arc, offset: ${offset.toFixed(2)} blocks`, "Debug");
-      const offsetStartTime = Date.now();
+
       await (this.bot as any).inventoryManager.equipPearlWithOffset(targetPos, offset);
       (this.bot as any).combatManager.lastPearlTime = Date.now();
-      const offsetEndTime = Date.now();
-      this.logger.debug(`Pearl arc (offset-based, ${arcType} arc, offset=${offset.toFixed(2)}) completed in ${(offsetEndTime - offsetStartTime)}ms`, "Debug");
     } catch (error) {
       this.logger.error(new Error(`Cannot reach target with pearl (${arcType} arc): ${error.message}`));
       return;
@@ -598,153 +417,92 @@ class DebugManager {
   }
 
   /**
-   * Setup test environment by teleporting bot to origin
+   * Jump test in a given direction offset.
+   *
+   * @param offset - The jump offset as a Vec3 (e.g. new Vec3(dir.x * distance, 0, dir.z * distance))
+   * @returns The result of the jump test
    */
-  async setupTestEnvironment(pos?: Vec3): Promise<void> {
-    const targetPos = pos || new Vec3(0, 1, 0);
-    await this.bot.waitForChunksToLoad();
-    this.bot.chat!("/tp " + targetPos.toString());
-    await this.bot.waitForChunksToLoad();
-    await new Promise<void>((resolve) => setTimeout(resolve, 1000));
-    const currentPos = this.bot.entity!.position;
-    this.logger.debug(
-      `Test environment setup: bot teleported to (${currentPos.x.toFixed(1)}, ${currentPos.y.toFixed(1)}, ${currentPos.z.toFixed(1)})`,
-      "Debug",
-    );
-    this.logger.debug(`Setting creative mode for tests...`, "Debug");
-    await (this.bot as any).inventoryManager.setGamemode(1);
-  }
-
-  /**
-   * Comprehensive jump test covering all 4 cardinal directions and multiple distances.
-   */
-  async debugJumpComprehensive(): Promise<
-    { direction: string; distance: number; result: number; success: boolean }[]
+  async debugJumpComprehensive(offset: Vec3): Promise<
+    { result: number }
   > {
-    const directions = [
-      { name: "North", offset: (pos: Vec3) => pos.offset(0, 0, -1) },
-      { name: "South", offset: (pos: Vec3) => pos.offset(0, 0, 1) },
-      { name: "East", offset: (pos: Vec3) => pos.offset(1, 0, 0) },
-      { name: "West", offset: (pos: Vec3) => pos.offset(-1, 0, 0) },
-    ];
-    const distances = [1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0];
-    const results = [];
-
-    for (const direction of directions) {
-      for (const distance of distances) {
-        const center = new Vec3(
-          Math.floor(this.bot.entity!.position.x) + 0.5,
-          this.bot.entity!.position.y,
-          Math.floor(this.bot.entity!.position.z) + 0.5,
-        );
-        await (this.bot as any).combatManager.nudgeToCenter(center);
-
-        const directionVec = direction.offset(new Vec3(0, 0, 0)).normalize();
-        const targetPos = this.bot.entity!.position.offset(
-          directionVec.x * distance, 0, directionVec.z * distance,
-        );
-        this.logger.debug(
-          `Comprehensive jump test: ${direction.name} ${distance} blocks to ${targetPos.toString()}`,
-          "Debug",
-        );
-
-        const jumpResult = await this.debugJumpTest(
-          new Vec3(directionVec.x * distance, 0, directionVec.z * distance),
-        );
-        const success = jumpResult >= 0 && jumpResult <= 0.5;
-        results.push({
-          direction: direction.name, distance: distance,
-          result: jumpResult, success: success,
-        });
-        this.logger.debug(
-          `Comprehensive jump test: ${direction.name} ${distance} blocks result: ${jumpResult.toFixed(3)} ${success ? "✓ PASS" : "✗ FAIL"}`,
-          "Debug",
-        );
-      }
-    }
-    return results;
+    const result = await this.debugJumpTest(offset);
+    return { result };
   }
 
   /**
    * Comprehensive pearl test covering all 4 cardinal directions at 20 blocks.
    * Tests both low and high arcs using forcedMove event detection.
    */
-  async debugPearlComprehensive(): Promise<
-    {
-      direction: string;
-      distance: number;
-      arc: string;
-      result: number;
-      success: boolean;
-    }[]
+  private async _testPearlLowArc(directionName: string, targetPos: Vec3): Promise<number> {
+    try { await this.bot.waitForChunksToLoad(); } catch (e) {
+      this.logger.warn(`Chunk loading failed: ${e.message}`, 'Debug');
+    }
+
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      const check = () => {
+        if (settled) return;
+        if (this.bot.entity!.onGround &&
+            Math.abs(this.bot.entity!.velocity.x) < 0.001 &&
+            Math.abs(this.bot.entity!.velocity.z) < 0.001) {
+          settled = true;
+          this.bot.off('physicsTick', check);
+          resolve();
+        }
+      };
+      check();
+      this.bot.on('physicsTick', check);
+      setTimeout(() => { if (!settled) { this.bot.off('physicsTick', check); resolve(); } }, 5000);
+    });
+
+    return await this._testPearlWithForcedMove(directionName, targetPos, 'low');
+  }
+
+  private async _testPearlHighArc(directionName: string, targetPos: Vec3): Promise<number> {
+    try { await this.bot.waitForChunksToLoad(); } catch (e) {
+      this.logger.warn(`Chunk loading failed: ${e.message}`, 'Debug');
+    }
+
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      const check = () => {
+        if (settled) return;
+        if (this.bot.entity!.onGround &&
+            Math.abs(this.bot.entity!.velocity.x) < 0.001 &&
+            Math.abs(this.bot.entity!.velocity.z) < 0.001) {
+          settled = true;
+          this.bot.off('physicsTick', check);
+          resolve();
+        }
+      };
+      check();
+      this.bot.on('physicsTick', check);
+      setTimeout(() => { if (!settled) { this.bot.off('physicsTick', check); resolve(); } }, 5000);
+    });
+
+    return await this._testPearlWithForcedMove(directionName, targetPos, 'high');
+  }
+
+  private async _debugPearlComprehensiveArc(arcType: 'low' | 'high'): Promise<
+    { direction: string; distance: number; arc: string; result: number }[]
   > {
     const startTime = Date.now();
-    const directions = [
-      { name: "North", offset: (pos: Vec3) => pos.offset(0, 0, -1) },
-      { name: "South", offset: (pos: Vec3) => pos.offset(0, 0, 1) },
-      { name: "East", offset: (pos: Vec3) => pos.offset(1, 0, 0) },
-      { name: "West", offset: (pos: Vec3) => pos.offset(-1, 0, 0) },
-    ];
-    const distances = [20];
-    const arcTypes = ["low", "high"];
-    const results = [];
+    const testFn = arcType === 'low'
+      ? (name: string, pos: Vec3) => this._testPearlLowArc(name, pos)
+      : (name: string, pos: Vec3) => this._testPearlHighArc(name, pos);
 
-    for (const direction of directions) {
-      for (const distance of distances) {
-        for (const arcType of arcTypes) {
-          try { await this.bot.waitForChunksToLoad(); } catch (e) {
-            this.logger.warn(`Chunk loading failed: ${e.message}`, "Debug");
-          }
+    const originPos = this.bot.entity!.position.clone();
+    const targetPos = originPos.offset(20, 0, 0);
+    const result = await testFn('East', targetPos);
+    const results = [{ direction: 'East', distance: 20, arc: arcType, result }];
 
-          // Wait for the bot to settle
-          await new Promise<void>((resolve) => {
-            let settled = false;
-            const check = () => {
-              if (settled) return;
-              if (this.bot.entity!.onGround &&
-                  Math.abs(this.bot.entity!.velocity.x) < 0.001 &&
-                  Math.abs(this.bot.entity!.velocity.z) < 0.001) {
-                settled = true;
-                this.bot.off("physicsTick", check);
-                resolve();
-              }
-            };
-            check();
-            this.bot.on("physicsTick", check);
-            setTimeout(() => { if (!settled) { this.bot.off("physicsTick", check); resolve(); } }, 5000);
-          });
-
-
-
-          const directionVec = direction.offset(new Vec3(0, 0, 0)).normalize();
-          const targetPos = this.bot.entity!.position.offset(
-            directionVec.x * distance, 0, directionVec.z * distance,
-          );
-
-          this.logger.debug(
-            `Comprehensive pearl test: ${direction.name} ${distance} blocks ${arcType} arc to ${targetPos.toString()}`,
-            "Debug",
-          );
-
-          const teleportResult = await this._testPearlWithForcedMove(
-            direction.name, targetPos, arcType,
-          );
-
-          const success = teleportResult >= 0 && teleportResult <= 3.0;
-    results.push({
-      direction: direction.name, distance: distance,
-      arc: arcType, result: teleportResult, success: success,
-    });
-    this.logger.debug(
-      `Comprehensive pearl test: ${direction.name} ${distance} blocks ${arcType} arc to ${targetPos.toString()} result: ${teleportResult.toFixed(3)} ${success ? "✓ PASS" : "✗ FAIL"}`,
-      "Debug",
-    );
-        }
-      }
-    }
-    const endTime = Date.now();
-    this.logger.debug(`Comprehensive pearl test completed in ${(endTime - startTime)}ms`, "Debug");
     return results;
+  }
+
+  async debugPearlComprehensiveArc(arcType: 'low' | 'high'): Promise<
+    { direction: string; distance: number; arc: string; result: number }[]
+  > {
+    return this._debugPearlComprehensiveArc(arcType);
   }
 
   private async _testPearlWithForcedMove(
@@ -758,8 +516,11 @@ class DebugManager {
         Math.pow(targetPos.z - eyePos.z, 2),
       );
       const minAcceptable = initialDist * 0.5;
+      let recorded = false; // Track if we've already recorded a result
 
       const listener = () => {
+        if (recorded) return; // Ignore subsequent events after first recording
+
         const newPos = this.bot.entity!.position;
         const moved = Math.sqrt(
           Math.pow(newPos.x - eyePos.x, 2) +
@@ -771,30 +532,25 @@ class DebugManager {
           Math.pow(targetPos.y - newPos.y, 2) +
           Math.pow(targetPos.z - newPos.z, 2),
         );
-        this.logger.debug(
-          `Pearl teleport: ${newPos.toString()}, move: ${moved.toFixed(3)}, thresh: ${minAcceptable.toFixed(3)}, targetDist: ${dist.toFixed(3)}`,
-          "Debug",
-        );
         if (moved >= minAcceptable) {
-          this.bot.off("forcedMove", listener as any);
+          recorded = true;
+          this.bot.off('forcedMove', listener as any);
           resolve(dist);
-        } else {
-          this.logger.debug(`Ignoring small move ${moved.toFixed(3)} < ${minAcceptable.toFixed(3)}`, "Debug");
         }
       };
 
-      this.bot.on("forcedMove", listener as any);
+      this.bot.on('forcedMove', listener as any);
       const timeout = setTimeout(() => {
-        this.bot.off("forcedMove", listener as any);
-        this.logger.warn(`Pearl timeout for ${directionName} ${arcType}`, "Debug");
+        this.bot.off('forcedMove', listener as any);
+        this.logger.warn(`Pearl timeout for ${directionName} ${arcType}`, 'Debug');
         resolve(-1);
       }, 30000).unref();
 
       this._executePearlThrow(eyePos, targetPos, arcType as any, 1)
         .catch((err) => {
           clearTimeout(timeout);
-          this.bot.off("forcedMove", listener as any);
-          this.logger.error(`Pearl failed: ${err.message}`, "Debug");
+          this.bot.off('forcedMove', listener as any);
+          this.logger.error(`Pearl failed: ${err.message}`, 'Debug');
           resolve(-1);
         });
     });
@@ -804,22 +560,20 @@ class DebugManager {
    * Show calculated offsets for different distances and arcs
    */
   private async debugPearlOffsets(args: string[]): Promise<void> {
-    const distances = [5, 10, 15, 20, 25, 30]; // Test distances in blocks
+    const distances = [5, 10, 15, 20, 25, 30];
     const arcTypes: ('low' | 'high')[] = ['low', 'high'];
-    
-    this.logger.debug("=== Pearl Offset Calculator ===", "Debug");
-    
+
     const eyePos = this.bot.entity!.position.offset(
       0,
       Constants.PHYSICS.EYE_HEIGHT_OFFSET,
       0,
     );
-    
+
     for (const distance of distances) {
       for (const arcType of arcTypes) {
         try {
-          const targetPos = eyePos.offset(distance, 0, 0); // East direction
-          
+          const targetPos = eyePos.offset(distance, 0, 0);
+
           const offset = (this.bot as any).utilsManager.getProjectileOffset(
             eyePos,
             targetPos,
@@ -828,7 +582,7 @@ class DebugManager {
             Constants.COMBAT.ENDER_PEARL.DRAG,
             arcType
           );
-          
+
           // Also get pitch for comparison
           const pitches = (this.bot as any).utilsManager.getProjectilePitch(
             eyePos,
@@ -838,73 +592,55 @@ class DebugManager {
             Constants.COMBAT.ENDER_PEARL.DRAG
           );
           const pitch = arcType === 'low' ? pitches[0] : pitches[1] || pitches[0];
-          
+
           this.logger.debug(
             `${distance}b ${arcType} arc: offset=${offset.toFixed(2)} (pitch=${pitch.toFixed(2)}°)`,
-            "Debug"
+            'Debug'
           );
         } catch (error) {
           this.logger.debug(
             `${distance}b ${arcType} arc: ${error.message}`,
-            "Debug"
+            'Debug'
           );
         }
       }
     }
-    
-    this.logger.debug("=== Offset Calculation Complete ===", "Debug");
+
+
   }
 
   private async _executePearlThrow(
-  eyePos: Vec3, targetPos: Vec3,
-  arcType: "auto" | "low" | "high",
-  throwAmount: number = 1,
-): Promise<void> {
-  this.logger.debug(
-    `Starting pearl throw: ${arcType} arc, ${throwAmount} pearls`,
-    "Debug",
-  );
-  this.logger.debug(`Initial pos: ${this.bot.entity!.position.toString()}`, "Debug");
-  this.logger.debug(`Gamemode: ${this.bot.game.gameMode}`, "Debug");
+    eyePos: Vec3, targetPos: Vec3,
+    arcType: 'auto' | 'low' | 'high',
+    throwAmount: number = 1,
+  ): Promise<void> {
+    await (this.bot as any).inventoryManager.getItemViaCommand('ender_pearl', throwAmount);
 
-  this.logger.debug(`Setting ${throwAmount} ender pearl(s) in hand slot...`, "Debug");
-  await (this.bot as any).inventoryManager.getItemViaCommand("ender_pearl", throwAmount);
+    if (arcType === 'auto') {
+      const result = (this.bot as any).combatManager.getBestPearlOffset(eyePos, targetPos, 'low');
+      if (!result) throw new Error('Cannot reach target with pearl (auto arc)');
+      const { offset } = result;
+      await (this.bot as any).inventoryManager.equipPearlWithOffset(targetPos, offset, 'ender_pearl', eyePos);
+    } else {
+      const { VELOCITY, GRAVITY, DRAG } = Constants.COMBAT.ENDER_PEARL;
+      let offset;
+      try {
+        offset = (this.bot as any).utilsManager.getProjectileOffset(
+          eyePos,
+          targetPos,
+          VELOCITY,
+          GRAVITY,
+          DRAG,
+          arcType
+        );
+      } catch (err) {
+        this.logger.error(new Error(`Cannot reach target with pearl (${arcType} arc): ${err.message}`));
+        return;
+      }
+      await (this.bot as any).inventoryManager.equipPearlWithOffset(targetPos, offset, 'ender_pearl', eyePos);
+    }
 
-  const count = (this.bot as any).inventoryManager.getItemCount("ender_pearl");
-  this.logger.debug(`Pearls after give: ${count}`, "Debug");
-  this.logger.debug(`Gamemode after give: ${this.bot.game.gameMode}`, "Debug");
-
-  if (arcType === "auto") {
-    this.logger.debug(`Calculating best pearl offset...`, "Debug");
-    const result = (this.bot as any).combatManager.getBestPearlOffset(eyePos, targetPos, 'low');
-    if (!result) throw new Error("Cannot reach target with pearl (auto arc)");
-    const { offset, arc } = result;
-    this.logger.debug(`Arc: ${arc}, offset: ${offset.toFixed(2)} blocks`, "Debug");
-    const offsetStartTime = Date.now();
-    await (this.bot as any).inventoryManager.equipPearlWithOffset(targetPos, offset);
-    this.logger.debug(`Pearl thrown`, "Debug");
-    const offsetEndTime = Date.now();
-    this.logger.debug(`Pearl arc (offset-based, ${arc} arc, offset=${offset.toFixed(2)}) completed in ${(offsetEndTime - offsetStartTime)}ms`, "Debug");
-  } else {
-    const { VELOCITY, GRAVITY, DRAG } = Constants.COMBAT.ENDER_PEARL;
-    const offset = (this.bot as any).utilsManager.getProjectileOffset(
-      eyePos,
-      targetPos,
-      VELOCITY,
-      GRAVITY,
-      DRAG,
-      arcType
-    );
-    const yaw = Math.atan2(eyePos.x - targetPos.x, eyePos.z - targetPos.z);
-    this.logger.debug(`Arc: ${arcType}, offset: ${offset.toFixed(2)} blocks`, "Debug");
-    const offsetStartTime = Date.now();
-    await (this.bot as any).inventoryManager.equipPearlWithOffset(targetPos, offset);
-    this.logger.debug(`Pearl thrown`, "Debug");
-    const offsetEndTime = Date.now();
-    this.logger.debug(`Pearl arc (offset-based, ${arcType} arc, offset=${offset.toFixed(2)}) completed in ${(offsetEndTime - offsetStartTime)}ms`, "Debug");
-  }
-
-  (this.bot as any).combatManager.lastPearlTime = Date.now();
+    (this.bot as any).combatManager.lastPearlTime = Date.now();
   }
 }
 
@@ -913,9 +649,9 @@ class DebugManager {
  * @param bot - Mineflayer bot instance
  * @returns The same bot instance with debugManager attached
  */
-export default function attach(bot: Bot): Bot {
-  (bot as any).debugManager = new DebugManager(bot);
-  (bot as any).debugManager.bot = bot;
+export function attachDebug(bot: Bot): Bot {
+  bot.debugManager = new DebugManager(bot);
+  bot.debugManager.bot = bot;
   return bot;
 }
 

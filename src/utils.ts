@@ -1,13 +1,15 @@
-import { Vec3 } from "vec3";
-import { Constants } from "./constants";
-import type { Bot } from "mineflayer";
-import type { Entity } from "prismarine-entity";
+import { Vec3 } from 'vec3';
+import { Constants } from './constants';
+import type { Bot } from 'mineflayer';
+import type { Entity } from 'prismarine-entity';
+
+/**
+ * @fileoverview Utility functions for Pupa bot.
+ * Provides AABB collision detection, physics simulation, projectile prediction,
+ * and movement helpers.
+ */
 
 const EPS = 1.0e-7;
-
-// ---------------------------------------------------------------------------
-// AABB
-// ---------------------------------------------------------------------------
 
 /**
  * Minimal AABB class for Minecraft physics simulation
@@ -154,10 +156,6 @@ export class AABB {
   }
 }
 
-// ---------------------------------------------------------------------------
-// SimulateTick input/output types
-// ---------------------------------------------------------------------------
-
 interface SimulateTickState {
   pos: Vec3;
   vel: Vec3;
@@ -188,7 +186,7 @@ export interface PearlTrajectoryResult {
   /** The pitch angle (degrees) to use */
   pitch: number;
   /** Which arc this pitch corresponds to */
-  arc: "low" | "high";
+  arc: 'low' | 'high';
   /** Total flight time in ticks */
   flightTime: number;
   /** The actual landing point of the projectile */
@@ -197,39 +195,31 @@ export interface PearlTrajectoryResult {
   landingDist: number;
 }
 
-// ---------------------------------------------------------------------------
-// UtilsManager
-// ---------------------------------------------------------------------------
-
 export class UtilsManager {
-  public bot: Bot;
-  public isNewSlipperiness: boolean;
-  public isNewCollision: boolean;
-  public isNewThreshold: boolean;
-  public momentumThreshold: number;
-  public applyEffects: boolean;
-  public _solidCacheMaxSize: number;
-  public _solidCache: Map<string, SolidCacheEntry>;
-  public recentPoints: Vec3[];
-  public recentPointsMax: number;
-  public liquidBlockIds: Set<number>;
-  public lastImpulseTick?: number;
-  public logger: any;
+  bot: Bot;
+  isNewSlipperiness: boolean;
+  isNewCollision: boolean;
+  isNewThreshold: boolean;
+  momentumThreshold: number;
+  applyEffects: boolean;
+  _solidCacheMaxSize: number;
+  _solidCache: Map<string, SolidCacheEntry>;
+  recentPoints: Vec3[];
+  recentPointsMax: number;
+  liquidBlockIds: Set<number>;
+  lastImpulseTick?: number;
+  logger: any;
 
   constructor(bot: Bot) {
     this.bot = bot;
-    this.logger = (bot as any).__logger || console;
+    this.logger = bot.__logger || console;
 
-    // Save reference to original bot.chat for any code that needs it
     if (typeof this.bot.chat === 'function') {
-      (this.bot as any)._originalChat = this.bot.chat.bind(this.bot);
-    } else {
-      this.logger.debug("bot.chat method not available, skipping", "Utils");
+      this.bot._originalChat = this.bot.chat.bind(this.bot);
     }
-    
-    this.isNewSlipperiness = this._compareVersion(bot.version, "1.15") >= 0;
-    this.isNewCollision = this._compareVersion(bot.version, "1.14") >= 0;
-    this.isNewThreshold = this._compareVersion(bot.version, "1.9") >= 0;
+    this.isNewSlipperiness = this._compareVersion(bot.version, '1.15') >= 0;
+    this.isNewCollision = this._compareVersion(bot.version, '1.14') >= 0;
+    this.isNewThreshold = this._compareVersion(bot.version, '1.9') >= 0;
     this.momentumThreshold = this.isNewThreshold
       ? Constants.PHYSICS.MOMENTUM_THRESHOLD_1_9
       : Constants.PHYSICS.MOMENTUM_THRESHOLD_1_8;
@@ -248,8 +238,8 @@ export class UtilsManager {
    * @private
    */
   private _compareVersion(v1: string, v2: string): number {
-    const a = v1.split(".").map(Number);
-    const b = v2.split(".").map(Number);
+    const a = v1.split('.').map(Number);
+    const b = v2.split('.').map(Number);
     for (let i = 0; i < Math.max(a.length, b.length); i++) {
       if ((a[i] || 0) > (b[i] || 0)) return 1;
       if ((a[i] || 0) < (b[i] || 0)) return -1;
@@ -263,7 +253,7 @@ export class UtilsManager {
    */
   private _initializeLiquidCache(): void {
     const names = Constants.BLOCK_DETECTION.LIQUID_BLOCK_NAMES;
-    const registry = (this.bot as any).registry;
+    const registry = this.bot.registry;
     for (const name of names) {
       const entry = registry.blocksByName?.[name];
       if (entry?.id !== undefined) this.liquidBlockIds.add(entry.id);
@@ -284,12 +274,12 @@ export class UtilsManager {
     const block = this.bot.blockAt(blockPos);
     if (!block) return Constants.PHYSICS.SLIPPERINESS.DEFAULT;
     switch (block.name) {
-      case "slime_block":
+      case 'slime_block':
         return Constants.PHYSICS.SLIPPERINESS.SLIME;
-      case "ice":
-      case "packed_ice":
+      case 'ice':
+      case 'packed_ice':
         return Constants.PHYSICS.SLIPPERINESS.ICE;
-      case "blue_ice":
+      case 'blue_ice':
         return Constants.PHYSICS.SLIPPERINESS.BLUE_ICE;
       default:
         return Constants.PHYSICS.SLIPPERINESS.DEFAULT;
@@ -313,8 +303,8 @@ export class UtilsManager {
       string,
       { amplifier: number } | undefined
     >;
-    const speedAmp = effects["1"];
-    const slowAmp = effects["2"];
+    const speedAmp = effects['1'];
+    const slowAmp = effects['2'];
     const speedLevel = speedAmp ? speedAmp.amplifier + 1 : 0;
     const slowLevel = slowAmp ? slowAmp.amplifier + 1 : 0;
     const multiplier = (1 + 0.2 * speedLevel) * (1 - 0.15 * slowLevel);
@@ -390,13 +380,14 @@ export class UtilsManager {
    */
   applyImpulse(
     impulse: Vec3,
-    mode: "add" | "set" = "add",
+    mode: 'add' | 'set' = 'add',
     force = false,
   ): void {
+    // mineflayer plugin property access
     const currentTick = (this.bot.time as any).age;
     if (!force && this.lastImpulseTick === currentTick) return;
     const entity = this.bot.entity as any;
-    if (mode === "add") {
+    if (mode === 'add') {
       entity.velocity.add(impulse);
     } else {
       entity.velocity.set(impulse.x, impulse.y, impulse.z);
@@ -430,7 +421,10 @@ export class UtilsManager {
     const v2 = v * v;
     const v4 = v2 * v2;
     const root = v4 - g * (g * x * x + 2 * y * v2);
-    if (root < 0) return [];
+    if (root < 0) {
+      this.logger?.debug?.('getProjectilePitch: target unreachable (negative discriminant)');
+      return [];
+    }
     const rootSq = Math.sqrt(root);
     const lowArc = Math.atan((v2 - rootSq) / (g * x));
     const highArc = Math.atan((v2 + rootSq) / (g * x));
@@ -492,34 +486,151 @@ export class UtilsManager {
     drag = 1,
     arcType: 'low' | 'high' = 'low'
   ): number {
-    // Calculate the horizontal distance
     const dx = target.x - source.x;
     const dz = target.z - source.z;
-    const horizontalDistance = Math.sqrt(dx * dx + dz * dz);
+    const d = Math.sqrt(dx * dx + dz * dz);
     const dy = target.y - source.y;
-    
-    // Calculate the discriminant for the quadratic equation
-    const v2 = v * v;
-    const v4 = v2 * v2;
-    const root = v4 - g * (g * horizontalDistance * horizontalDistance + 2 * dy * v2);
-    
-    if (root < 0) {
+
+    // When drag=1 the old parabolic formula applies; keep it for backwards compat
+    if (drag === 1) {
+      const v2 = v * v;
+      const v4 = v2 * v2;
+      const root = v4 - g * (g * d * d + 2 * dy * v2);
+      if (root < 0) {
+        throw new Error('Target is unreachable with given projectile parameters');
+      }
+      const rootSq = Math.sqrt(root);
+      const lowArcAngle = Math.atan((v2 - rootSq) / (g * d));
+      const highArcAngle = Math.atan((v2 + rootSq) / (g * d));
+      const angle = arcType === 'low' ? lowArcAngle : highArcAngle;
+      return d * Math.tan(angle);
+    }
+
+    // Equations of motion (per tick n):
+    //   x_n = v_x0 * (1 - c^n) / (1 - c)
+    //   y_n = v_y0 * (1 - c^n) / (1 - c) - g/(1-c) * (n - (1 - c^n)/(1 - c))
+    // where c = drag coefficient, g = gravity per tick.
+    //
+    // We binary-search on the aim offset H (vertical aim above target).
+    //   tan(θ) = H / d  →  v_x0 = v·cos(θ), v_y0 = v·sin(θ)
+    // From x_n = d we solve for n:
+    //   c^n = 1 - d(1-c)/v_x0
+    //   n = ln(1 - d(1-c)/v_x0) / ln(c)
+    // Then we evaluate y_n at that n and adjust H until y_n ≈ 0.
+    //
+    // The function is non-monotonic: low arcs have small H and high arcs have
+    // large H. For high arcs, find the second root by scanning from the low arc
+    // root until the trajectory crosses back down.
+
+    const c = drag;
+    const oneMinusC = 1 - c;
+    const lnC = Math.log(c);
+
+    if (c <= 0 || c >= 1) {
       throw new Error('Target is unreachable with given projectile parameters');
     }
-    
-    const rootSq = Math.sqrt(root);
-    
-    // Calculate the two possible angles (low and high arcs)
-    const lowArcAngle = Math.atan((v2 - rootSq) / (g * horizontalDistance));
-    const highArcAngle = Math.atan((v2 + rootSq) / (g * horizontalDistance));
-    
-    // Select the appropriate arc
-    const angle = arcType === 'low' ? lowArcAngle : highArcAngle;
-    
-    // Calculate the vertical offset using the formula: y = R * tan(theta)
-    const offset = horizontalDistance * Math.tan(angle);
-    
-    return offset;
+
+    // Helper: given H, compute the vertical position y at the tick where x = d
+    const verticalAtH = (H: number): number => {
+      const angle = Math.atan2(H, d);
+      const vx0 = v * Math.cos(angle);
+      const vy0 = v * Math.sin(angle);
+
+      // Time of flight from horizontal distance
+      const cToN = 1 - (d * oneMinusC) / vx0;
+      if (cToN <= 0 || cToN >= 1) return Infinity; // unreachable
+      const n = Math.log(cToN) / lnC;
+
+      // Geometric series: S = (1 - c^n) / (1 - c)
+      const cPowN = Math.pow(c, n);
+      const S = (1 - cPowN) / oneMinusC;
+
+      // y_n = vy0 * S - g/(1-c) * (n - S)
+      // Subtract dy so the root finder finds H where the projectile
+      // reaches the target's actual Y level (not just y=0).
+      return vy0 * S - (g / oneMinusC) * (n - S) - dy;
+    };
+
+    const findRoot = (startLo: number, startHi: number): number => {
+      let lo = startLo;
+      let hi = startHi;
+      let yLo = verticalAtH(lo);
+      let yHi = verticalAtH(hi);
+
+      if (!isFinite(yLo) || !isFinite(yHi)) {
+        throw new Error('Target is unreachable with given projectile parameters');
+      }
+
+      for (let i = 0; i < 40 && yLo * yHi > 0; i++) {
+        hi *= 2;
+        yHi = verticalAtH(hi);
+        if (!isFinite(yHi)) {
+          throw new Error('Target is unreachable with given projectile parameters');
+        }
+      }
+
+      if (yLo * yHi > 0) {
+        throw new Error('Target is unreachable with given projectile parameters');
+      }
+
+      for (let i = 0; i < 100; i++) {
+        const mid = (lo + hi) / 2;
+        const yMid = verticalAtH(mid);
+        if (Math.abs(yMid) < 1e-6) return mid;
+        if (yMid * yLo < 0) {
+          hi = mid;
+          yHi = yMid;
+        } else {
+          lo = mid;
+          yLo = yMid;
+        }
+      }
+
+      return (lo + hi) / 2;
+    };
+
+    if (arcType === 'low') {
+      return findRoot(0, 1);
+    }
+
+    // For the high arc, we need the second root of verticalAtH — where the
+    // trajectory peaks and comes back down through y=0.  Scanning from just
+    // above the low root finds the wrong sign change (the initial upward
+    // crossing).  Instead, find the peak first, then scan downward from there.
+    const lowRoot = findRoot(0, 1);
+
+    // Find the peak: walk upward until verticalAtH starts decreasing.
+    let peakH = lowRoot;
+    let peakY = verticalAtH(peakH);
+    for (let h = Math.ceil(lowRoot) + 1; h < 10_000; h += 1) {
+      const y = verticalAtH(h);
+      if (!isFinite(y)) break;
+      if (y > peakY) {
+        peakH = h;
+        peakY = y;
+      } else {
+        break;
+      }
+    }
+
+    if (peakY <= 0) {
+      throw new Error('Target is unreachable with given projectile parameters');
+    }
+
+    // Scan from the peak to find where verticalAtH crosses zero on the way down.
+    let previousH = peakH;
+    let previousY = peakY;
+    for (let highH = peakH + 1; highH < 10_000; highH += 1) {
+      const highY = verticalAtH(highH);
+      if (!isFinite(highY)) break;
+      if (previousY * highY < 0) {
+        return findRoot(previousH, highH);
+      }
+      previousH = highH;
+      previousY = highY;
+    }
+
+    throw new Error('Target is unreachable with given projectile parameters');
   }
 
   /**
@@ -598,7 +709,7 @@ export class UtilsManager {
       const block = this.bot.blockAt(nextPos);
       if (
         block &&
-        block.boundingBox !== "empty" &&
+        block.boundingBox !== 'empty' &&
         this.isPointInBlock(nextPos, block)
       )
         return false;
@@ -647,11 +758,10 @@ export class UtilsManager {
     toleranceRadius: number = 1.5,
     sampleStep: number = 1.0,
   ): PearlTrajectoryResult | null {
-    // ---- 1. Generate candidate landing points within the tolerance sphere ----
     const candidates: Array<{
       point: Vec3;
       pitch: number;
-      arc: "low" | "high";
+      arc: 'low' | 'high';
       blocked: boolean;
       flightTime: number;
       landingPoint: Vec3;
@@ -682,7 +792,6 @@ export class UtilsManager {
       }
     }
 
-    // ---- 2. Evaluate each candidate target point ----
     for (const candidateTarget of candidateTargets) {
       const pitches = this.getProjectilePitch(
         source,
@@ -694,7 +803,7 @@ export class UtilsManager {
 
       for (let i = 0; i < pitches.length; i++) {
         const pitch = pitches[i];
-        const arc: "low" | "high" = i === 0 ? "low" : "high";
+        const arc: 'low' | 'high' = i === 0 ? 'low' : 'high';
 
         const blocked = !this.isProjectilePathClear(
           source,
@@ -762,7 +871,7 @@ export class UtilsManager {
       // Clear paths first
       if (a.blocked !== b.blocked) return a.blocked ? 1 : -1;
       // Prefer low arc over high arc when both are available
-      if (a.arc !== b.arc) return a.arc === "low" ? -1 : 1;
+      if (a.arc !== b.arc) return a.arc === 'low' ? -1 : 1;
       // Then fastest (shortest flight time)
       if (a.flightTime !== b.flightTime) return a.flightTime - b.flightTime;
       // Then most precise (closest to actual target)
@@ -771,7 +880,6 @@ export class UtilsManager {
 
     const best = candidates[0];
 
-    // If even the best candidate is blocked, nothing is reachable
     if (best.blocked) return null;
 
     return {
@@ -824,7 +932,7 @@ export class UtilsManager {
     const entityAny = entity as any;
     let width = entityAny.width;
     let height = entityAny.height;
-    if (entity.type === "player") {
+    if (entity.type === 'player') {
       width = Constants.PHYSICS.PLAYER_WIDTH;
       height = Constants.PHYSICS.PLAYER_HEIGHT;
     }
@@ -1192,8 +1300,8 @@ export class UtilsManager {
           const above = this.bot.blockAt(pos.offset(0, 1, 0));
           if (
             block &&
-            block.boundingBox !== "empty" &&
-            (!above || above.boundingBox === "empty")
+            block.boundingBox !== 'empty' &&
+            (!above || above.boundingBox === 'empty')
           ) {
             const shape = block.shapes[0];
             if (shape) {
@@ -1400,7 +1508,7 @@ export class UtilsManager {
     const startY = Math.floor(pos.y);
     for (let y = startY; y >= startY - 5; y--) {
       const block = this.bot.blockAt(new Vec3(pos.x, y, pos.z));
-      if (block && block.boundingBox !== "empty") {
+      if (block && block.boundingBox !== 'empty') {
         const shape = block.shapes[0];
         if (shape) return y + shape[Constants.SHAPE.MAX_Y];
         return y + 1;
@@ -1431,7 +1539,7 @@ export class UtilsManager {
  * @param bot - Mineflayer bot instance
  * @returns The same bot instance with utilsManager attached
  */
-export default function attach(bot: Bot): Bot {
-  (bot as any).utilsManager = new UtilsManager(bot);
+export function attachUtils(bot: Bot): Bot {
+  bot.utilsManager = new UtilsManager(bot);
   return bot;
 }
