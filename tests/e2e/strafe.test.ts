@@ -1,41 +1,41 @@
 /**
- * E2E integration tests for Pupa strafe functionality.
- * 
+ * @fileoverview E2E integration tests for Pupa strafe functionality.
+ *
  * These tests connect to a real Minecraft server using configuration from `.env`,
  * create a bot instance, load all Pupa managers, and run strafe-related debug methods
  * against the live server.
- * 
+ *
  * Environment variables (`.env`):
  *   E2E_HOST      - Server hostname (default: localhost)
  *   E2E_PORT      - Server port     (default: 25565)
- *   E2E_USERNAME  - Bot username    (default: E2ETestBot)
- *   E2E_VERSION   - Game version    (default: auto-detect)
+ *   E2E_VERSION   - Game version    (default: 1.12.2)
  *   E2E_TIMEOUT   - Seconds per test (default: 30)
  *
  * Skipped automatically when E2E_HOST is not set.
  */
 
-import "dotenv/config";
-import mineflayer, { Bot } from "mineflayer";
-import { pathfinder } from "mineflayer-pathfinder";
-import { plugin as pvpPlugin } from "../src/pvp-manager";
-import attachInventory from "../src/inventory";
-import attachCombat from "../src/pvp";
-import attachCommands from "../src/commands";
-import attachUtils from "../src/utils";
-import attachDebug from "../src/debug";
-import { RuntimeConfig } from "../src/config";
-import { logger } from "../src/logger";
-import { Vec3 } from "vec3";
+import 'dotenv/config';
+import mineflayer, { Bot } from 'mineflayer';
+import { pathfinder } from 'mineflayer-pathfinder';
+import { plugin as pvpPlugin } from '../../src/pvp-manager';
+import { attachInventory } from '../../src/inventory';
+import { attachCombat } from '../../src/pvp';
+import { attachCommands } from '../../src/commands';
+import { attachUtils } from '../../src/utils';
+import { attachDebug } from '../../src/debug';
+import { RuntimeConfig } from '../../src/config';
+import { logger } from '../../src/logger';
+import { Vec3 } from 'vec3';
 
 // ── E2E configuration ───────────────────────────────────────────────
 
 const HOST = process.env.E2E_HOST;
-const PORT = parseInt(process.env.E2E_PORT || "25565", 10);
-const USERNAME = "strafe_test";
+const PORT = parseInt(process.env.E2E_PORT || '25565', 10);
+const USERNAME = 'strafe_test';
 const VERSION = process.env.E2E_VERSION || undefined;
-const TIMEOUT_MS = parseInt(process.env.E2E_TIMEOUT || "60", 10) * 1000;
+const TIMEOUT_MS = parseInt(process.env.E2E_TIMEOUT || '60', 10) * 1000;
 const CONNECT_TIMEOUT_MS = 15_000;
+const POSITION = new Vec3(200, 1, 200);
 
 // ── Conditional test runner ─────────────────────────────────────────
 
@@ -55,23 +55,23 @@ async function createBot(): Promise<Bot> {
 
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => {
-      bot.removeAllListeners("spawn");
-      bot.removeAllListeners("error");
-      bot.removeAllListeners("end");
-      reject(new Error("Connection timed out"));
+      bot.removeAllListeners('spawn');
+      bot.removeAllListeners('error');
+      bot.removeAllListeners('end');
+      reject(new Error('Connection timed out'));
     }, CONNECT_TIMEOUT_MS);
 
-    bot.once("spawn", () => {
+    bot.once('spawn', () => {
       clearTimeout(timer);
       resolve();
     });
-    bot.once("error", (err: Error) => {
+    bot.once('error', (err: Error) => {
       clearTimeout(timer);
       reject(err);
     });
-    bot.once("end", () => {
+    bot.once('end', () => {
       clearTimeout(timer);
-      reject(new Error("Bot disconnected before spawn"));
+      reject(new Error('Bot disconnected before spawn'));
     });
   });
 
@@ -95,66 +95,80 @@ async function createBot(): Promise<Bot> {
 
 // ── E2E test suite ──────────────────────────────────────────────────
 
-describeE2E("E2E Strafe Tests", () => {
+describeE2E('E2E Strafe Tests', () => {
   let bot: Bot;
 
   // Set overall suite timeout to 5 minutes (300 seconds)
-  jest.setTimeout(Math.min(300000, TIMEOUT_MS + CONNECT_TIMEOUT_MS));
+  jest.setTimeout(TIMEOUT_MS * 5);
 
   beforeAll(async () => {
+    // Run before all tests
     bot = await createBot();
-    // Wait for chunks to load before running tests with timeout
-    await Promise.race([
-      bot.waitForChunksToLoad(),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("Chunk loading timeout")), 30000),
-      ),
-    ]);
-
-    // Setup test environment - teleport to origin
-    if (bot.entity) {
-      const dm = (bot as any).debugManager;
-      await dm.setupTestEnvironment(new Vec3(0, 1, 0));
-    }
-  });
-
-  afterAll(async () => {
-    if (bot && bot.end) {
+    if (bot && bot.entity) {
       try {
-        // Immediately stop all physics and movement
-        bot.clearControlStates();
-        
-        // Stop the physics engine: delete the physics reference
-        if ((bot as any).physicsEnabled !== undefined) {
-          (bot as any).physicsEnabled = false;
-        }
-        
-        // Remove all listeners to stop physics ticks from firing after cleanup
-        bot.removeAllListeners();
-        
-        bot.end();
-        // Small delay for cleanup
-        await new Promise((resolve) => setTimeout(resolve, 500));
+        await bot.waitForChunksToLoad!();
+        await bot.waitForTicks!(1);
+        bot.chat!(`/tp ${Object.values(POSITION).join(' ')}`);
+
+        await bot.waitForChunksToLoad!();
+        await bot.waitForTicks!(1);
+        bot.chat!('/gamemode creative'); // Set gamemode to creative
       } catch (error) {
-        console.error("Error ending bot:", error);
+        console.error('beforeAll cleanup failed:', error);
       }
     }
-    // Reset the logger to ensure no lingering references
+  }, TIMEOUT_MS);
+
+  beforeEach(async () => {
+    // Run before each test
+    if (bot && bot.entity) {
+      try {
+        await bot.waitForChunksToLoad!();
+        await bot.waitForTicks!(1);
+        bot.chat!(`/tp ${Object.values(POSITION).join(' ')}`);
+
+        await bot.waitForChunksToLoad!();
+        await bot.waitForTicks!(1);
+        bot.clearControlStates();
+
+        if ((bot as any).pathfinder) {
+          (bot as any).pathfinder.stop();
+        }
+
+        if ((bot as any).pvp) {
+          (bot as any).pvp.stop();
+        }
+      } catch (error) {
+        console.error('beforeEach cleanup failed:', error);
+      }
+    }
+  }, TIMEOUT_MS);
+
+  afterAll(async () => {
+    // Run after all tests
+    if (bot) {
+      try {
+        bot.quit!();
+        bot.end!();
+      } catch (error) {
+        console.error('afterAll cleanup failed:', error);
+      }
+    }
     logger.setDebugMode(false);
-  }, 10000); // 10 second timeout for cleanup
+  }, TIMEOUT_MS);
 
   // ----------------------------------------------------------------
   // Strafe Tests
   // ----------------------------------------------------------------
 
-  test("debugStrafeOnce — executes single strafe", async () => {
+  test('debugStrafeOnce — executes single strafe', async () => {
     const dm = (bot as any).debugManager;
     const dist = await dm.debugStrafeOnce();
     expect(dist).toBeGreaterThanOrEqual(0);
     expect(dist).toBeLessThanOrEqual(0.5);
-  }, 30000); // 30 second timeout
+  }, TIMEOUT_MS);
 
-  test("debugStrafeLoop — loops strafe 3 times", async () => {
+  test('debugStrafeLoop — loops strafe 3 times', async () => {
     const dm = (bot as any).debugManager;
     const distances = await dm.debugStrafeLoop();
     expect(distances.length).toBe(3);
@@ -166,5 +180,5 @@ describeE2E("E2E Strafe Tests", () => {
         expect(dist).toBeLessThanOrEqual(0.5);
       }
     });
-  }, 45000); // 45 second timeout
+  }, TIMEOUT_MS);
 });
