@@ -1,39 +1,37 @@
-import { Logger } from "./logger";
+import { Logger } from './logger';
 // @ts-ignore - prismarine-nbt may not have complete types
-import nbt from "prismarine-nbt";
+import nbt from 'prismarine-nbt';
 // @ts-ignore - prismarine-item exports a versioned factory function
-import prismarineItem from "prismarine-item";
-import { Constants } from "./constants";
-import { Bot } from "mineflayer";
-import { Vec3 } from "vec3";
+import prismarineItem from 'prismarine-item';
+import { Constants } from './constants';
+import { Bot } from 'mineflayer';
+import { Vec3 } from 'vec3';
 
 // Construct the Item class with a game version
-const Item: any = prismarineItem("1.19.3");
+const Item: any = prismarineItem('1.19.3');
 
 /**
- * Manages bot inventory, equipment, and item-related operations
+ * @fileoverview Manages bot inventory, equipment, and item-related operations.
  */
 class InventoryManager {
-  public bot: Bot;
-  public logger: Logger;
-  public _itemCache: Map<string, boolean | number>;
-  public _lastCacheTick: number;
+  bot: Bot;
+  logger: Logger;
+  _itemCache: Map<string, boolean | number>;
+  _lastCacheTick: number;
 
   /**
    * @param bot - Mineflayer bot instance
    */
   constructor(bot: Bot) {
     this.bot = bot;
-    this.logger = (bot as any).__logger;
+    this.logger = bot.__logger;
 
-    // Cache for hasItem and getItemCount results (cleared every tick or on change)
     this._itemCache = new Map();
     this._lastCacheTick = 0;
 
-    // Invalidate cache on inventory changes
     const clearCache = () => this._itemCache.clear();
-    (this.bot as any).inventory.on("windowUpdate", clearCache);
-    (this.bot as any).inventory.on("changedSlot", clearCache);
+    this.bot.inventory.on('windowUpdate', clearCache);
+    this.bot.inventory.on('changedSlot', clearCache);
   }
 
   /**
@@ -42,20 +40,20 @@ class InventoryManager {
    * @returns Total count of the item
    */
   getItemCount(itemName: string): number {
-    const currentTick = (this.bot as any).time.age;
+    const currentTick = this.bot.time.age;
     const cacheKey = `count:${itemName}`;
 
     if (this._lastCacheTick === currentTick && this._itemCache.has(cacheKey)) {
       return this._itemCache.get(cacheKey) as number;
     }
 
-    const itemInfo = (this.bot as any).registry.itemsByName[itemName];
+    const itemInfo = this.bot.registry.itemsByName[itemName];
     if (!itemInfo) return 0;
 
     const itemType = itemInfo.id;
     const allItems: any[] = [
-      ...(this.bot as any).inventory.items(),
-      ...Object.values((this.bot as any).entity.equipment),
+      ...this.bot.inventory.items(),
+      ...Object.values(this.bot.entity.equipment),
     ];
 
     const count = allItems
@@ -72,7 +70,7 @@ class InventoryManager {
    * @returns Whether bot has the item
    */
   hasItem(itemName: string): boolean {
-    const currentTick = (this.bot as any).time.age;
+    const currentTick = this.bot.time.age;
     const cacheKey = `has:${itemName}`;
 
     if (this._lastCacheTick === currentTick && this._itemCache.has(cacheKey)) {
@@ -82,10 +80,10 @@ class InventoryManager {
     const names = [itemName];
 
     const has =
-      (this.bot as any).inventory
+      this.bot.inventory
         .items()
         .some((item: any) => names.includes(item.name)) ||
-      Object.values((this.bot as any).entity.equipment).some((item: any) =>
+      Object.values(this.bot.entity.equipment).some((item: any) =>
         item ? names.includes(item.name) : false,
       );
 
@@ -100,6 +98,7 @@ class InventoryManager {
    * @returns Whether bot has the item
    */
   hasItemWithMetadata(itemName: string, metadata: number): boolean {
+    // mineflayer plugin property access
     const currentTick = (this.bot as any).time.age;
     const cacheKey = `has:${itemName}:${metadata}`;
 
@@ -108,12 +107,12 @@ class InventoryManager {
     }
 
     const has =
-      (this.bot as any).inventory
+      this.bot.inventory
         .items()
         .some(
           (item: any) => item.name === itemName && item.metadata === metadata,
         ) ||
-      Object.values((this.bot as any).entity.equipment).some((item: any) =>
+      Object.values(this.bot.entity.equipment).some((item: any) =>
         item ? item.name === itemName && item.metadata === metadata : false,
       );
 
@@ -126,15 +125,16 @@ class InventoryManager {
    * @returns Whether bot has food
    */
   hasFood(): boolean {
+    // mineflayer plugin property access
     const currentTick = (this.bot as any).time.age;
-    const cacheKey = "has:food";
+    const cacheKey = 'has:food';
 
     if (this._lastCacheTick === currentTick && this._itemCache.has(cacheKey)) {
       return this._itemCache.get(cacheKey) as boolean;
     }
 
     const foodStats = Constants.MATERIALS.FOOD;
-    const has = (this.bot as any).inventory
+    const has = this.bot.inventory
       .items()
       .some(
         (item: any) =>
@@ -175,20 +175,19 @@ class InventoryManager {
    */
   async _equipItem(
     itemName: string,
-    targetSlot: string = "hand",
+    targetSlot: string = 'hand',
   ): Promise<boolean> {
     try {
-      const destSlot = (this.bot as any).getEquipmentDestSlot(targetSlot);
-      const currentItem = (this.bot as any).inventory.slots[destSlot];
+      const destSlot = this.bot.getEquipmentDestSlot(targetSlot);
+      const currentItem = this.bot.inventory.slots[destSlot];
 
       if (currentItem && currentItem.name === itemName) return true;
 
-      const item = (this.bot as any).inventory
+      const item = this.bot.inventory
         .items()
         .find((i: any) => i.name === itemName);
 
       if (!item) {
-        //  throw new Error(`Item ${itemName} not found in inventory`);
         return false;
       }
 
@@ -200,7 +199,7 @@ class InventoryManager {
       return true;
     } catch (error: unknown) {
       const err = error as Error;
-      if (!err.message.includes("not found")) {
+      if (!err.message.includes('not found')) {
         err.message = `Failed to equip ${itemName}: ${err.message}`;
       }
       this.logger.error(err);
@@ -209,7 +208,7 @@ class InventoryManager {
   }
 
   /** Map gamemode numbers to their string names as stored in bot.game.gameMode */
-  private static readonly GAMEMODE_NAMES = ["survival", "creative", "adventure", "spectator"];
+  private static readonly GAMEMODE_NAMES = ['survival', 'creative', 'adventure', 'spectator'];
 
   /**
    * Clear the entire inventory via creative mode.
@@ -221,8 +220,8 @@ class InventoryManager {
       throw new Error(`clearInventory requires creative mode, current gamemode is ${(this.bot.game as any).gameMode}`);
     }
     try {
-      await (this.bot as any).creative.clearInventory();
-      this.logger.inventory(`Inventory cleared`);
+      await this.bot.creative.clearInventory();
+      this.logger.inventory('Inventory cleared');
     } catch (error: unknown) {
       const err = error as Error;
       err.message = `Failed to clear inventory: ${err.message}`;
@@ -240,24 +239,21 @@ class InventoryManager {
   async getItemViaCommand(
     itemName: string,
     count: number = 1,
-    targetSlot: string = "hand",
+    targetSlot: string = 'hand',
   ): Promise<void> {
-    // Use /give command which works in any gamemode
     await this.clearInventory();
     await this.bot.chat!(`/give @p ${itemName} ${count}`);
     await this.bot.waitForTicks!(Constants.TIMING.EQUIP_WAIT_TICKS);
 
-    // Wait for item to appear in hand slot
     for (let attempt = 0; attempt < 10; attempt++) {
-      const destSlot = (this.bot as any).getEquipmentDestSlot(targetSlot);
-      const slotItem: any = (this.bot as any).inventory.slots[destSlot];
+      const destSlot = this.bot.getEquipmentDestSlot(targetSlot);
+      const slotItem: any = this.bot.inventory.slots[destSlot];
       if (slotItem && slotItem.name === itemName) {
         return;
       }
       await this.bot.waitForTicks!(1);
     }
 
-    // Fallback: try to equip from inventory
     const equipped = await this._equipItem(itemName, targetSlot);
     if (!equipped) {
       throw new Error(`Failed to obtain ${itemName}: not found in inventory after /give`);
@@ -281,9 +277,8 @@ class InventoryManager {
     }
 
     try {
-      // Use creative mode API to set item directly
       await this.bot.creative.setInventorySlot(slot, item);
-      this.logger.debug(`Set item ${item.name} in slot ${slot} using creative API`, "Inventory");
+      this.logger.debug(`Set item ${item.name} in slot ${slot} using creative API`, 'Inventory');
     } catch (error: unknown) {
       const err = error as Error;
       err.message = `Failed to set item ${item.name} in creative mode: ${err.message}`;
@@ -300,9 +295,8 @@ class InventoryManager {
    */
   createItemInstance(itemName: string, count: number = 1): any {
     try {
-      // Create an item instance using mineflayer's item registry
       // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const Item = require("prismarine-item")("1.16"); // Use appropriate version
+      const Item = require('prismarine-item')('1.16'); // Use appropriate version
       return new Item(itemName, count);
     } catch (error: unknown) {
       const err = error as Error;
@@ -318,8 +312,8 @@ class InventoryManager {
    */
   async recordInventory(slot: number | string = 0): Promise<void> {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const fs = require("node:fs");
-    const array = (this.bot as any).inventory.slots.filter(
+    const fs = require('node:fs');
+    const array = this.bot.inventory.slots.filter(
       (item: any) => item?.type,
     );
     const data = array.map(
@@ -357,8 +351,8 @@ class InventoryManager {
    */
   async restoreInventory(slot: number | string = 0): Promise<void> {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const fs = require("node:fs");
-    const raw = fs.readFileSync(`./recording-${slot}.json`, "utf8");
+    const fs = require('node:fs');
+    const raw = fs.readFileSync(`./recording-${slot}.json`, 'utf8');
     const data = JSON.parse(raw);
     await this.setGamemode(1);
 
@@ -370,7 +364,7 @@ class InventoryManager {
           item.metadata,
           item.nbt,
         );
-        await (this.bot as any).creative.setInventorySlot(item.slot, newItem);
+        await this.bot.creative.setInventorySlot(item.slot, newItem);
         await this.bot.waitForTicks!(Constants.TIMING.EQUIP_WAIT_TICKS);
         this.logger.inventory(`Slot ${item.slot} (item: ${item.displayName})`);
       } catch (error: unknown) {
@@ -396,12 +390,10 @@ class InventoryManager {
     const modeName = InventoryManager.GAMEMODE_NAMES[mode] || String(mode);
     const t0 = Date.now();
     if ((this.bot.game as any).gameMode !== modeName) {
-      // Send the command once, then wait for the gamemode to update
       this.logger.status(
         `Current gamemode: ${(this.bot.game as any).gameMode}, setting to ${modeName}`,
       );
       await this.bot.chat!(`/gamemode ${mode}`);
-      // Wait for the gamemode to update
       while ((this.bot.game as any).gameMode !== modeName) {
         if (Date.now() - t0 > timeout) {
           this.logger.warning(
@@ -418,10 +410,10 @@ class InventoryManager {
    * Unequip all armor slots.
    */
   async unequipAllItems(): Promise<void> {
-    const destinations = ["head", "torso", "legs", "feet", "off-hand"];
+    const destinations = ['head', 'torso', 'legs', 'feet', 'off-hand'];
     for (const destination of destinations) {
-      const slot = (this.bot as any).getEquipmentDestSlot(destination);
-      if ((this.bot as any).inventory.slots[slot] !== null) {
+      const slot = this.bot.getEquipmentDestSlot(destination);
+      if (this.bot.inventory.slots[slot] !== null) {
         await this.bot.waitForTicks!(Constants.TIMING.EQUIP_WAIT_TICKS);
         await this.bot.unequip!(destination as any);
       }
@@ -432,7 +424,7 @@ class InventoryManager {
    * Toss every item from the inventory.
    */
   async tossAllItems(): Promise<void> {
-    const items = (this.bot as any).inventory.items();
+    const items = this.bot.inventory.items();
     for (const item of items) {
       await this.bot.waitForTicks!(Constants.TIMING.EQUIP_WAIT_TICKS);
       await this.bot.toss!(item.type, item.metadata, item.count);
@@ -446,14 +438,14 @@ class InventoryManager {
     const materialStats = Constants.MATERIALS.ARMOR;
     const slotMap = Constants.MATERIALS.SLOT_MAP;
 
-    const allArmorItems = (this.bot as any).inventory
+    const allArmorItems = this.bot.inventory
       .items()
       .filter(
         (item: any) =>
-          item.name.endsWith("_helmet") ||
-          item.name.endsWith("_chestplate") ||
-          item.name.endsWith("_leggings") ||
-          item.name.endsWith("_boots"),
+          item.name.endsWith('_helmet') ||
+          item.name.endsWith('_chestplate') ||
+          item.name.endsWith('_leggings') ||
+          item.name.endsWith('_boots'),
       );
 
     const armorBySlot: Record<string, any[]> = {
@@ -486,8 +478,8 @@ class InventoryManager {
         return itemScore > bestScore ? item : best;
       });
 
-      const equipSlot = (this.bot as any).getEquipmentDestSlot(slot);
-      const currentArmor = (this.bot as any).inventory.slots[equipSlot];
+      const equipSlot = this.bot.getEquipmentDestSlot(slot);
+      const currentArmor = this.bot.inventory.slots[equipSlot];
 
       const bestScore = this._computeArmorScore(
         bestItem,
@@ -524,7 +516,7 @@ class InventoryManager {
     if (!item?.name) return -1;
     const material = item.name.replace(
       /_(helmet|chestplate|leggings|boots)$/,
-      "",
+      '',
     );
     const stats = materialStats[material]?.[slotName];
     if (!stats) return 0;
@@ -534,18 +526,18 @@ class InventoryManager {
 
     if (item.enchants && Array.isArray(item.enchants)) {
       const protection = item.enchants.find(
-        (e: any) => e.name === "protection",
+        (e: any) => e.name === 'protection',
       );
       protectionLVL = protection ? protection.lvl || 0 : 0;
 
       const nonProtection = item.enchants.filter(
-        (e: any) => e.name !== "protection",
+        (e: any) => e.name !== 'protection',
       );
       const bindingCurse = nonProtection.some(
-        (e: any) => e.name === "binding_curse",
+        (e: any) => e.name === 'binding_curse',
       );
       otherEnchantWeight =
-        nonProtection.filter((e: any) => e.name !== "binding_curse").length *
+        nonProtection.filter((e: any) => e.name !== 'binding_curse').length *
         0.1;
       if (bindingCurse) otherEnchantWeight -= 1;
     }
@@ -562,21 +554,20 @@ class InventoryManager {
    * Activates and waits for the regeneration effect.
    */
   async equipGapple(): Promise<void> {
+    // mineflayer plugin property access
     const items = (this.bot as any).inventory
       .items()
-      .filter((i: any) => i.name === "golden_apple");
+      .filter((i: any) => i.name === 'golden_apple');
     if (items.length === 0) return;
 
-    // Don't use if already having regeneration
-    if ((this.bot as any).entity.effects["10"]) return;
+    if (this.bot.entity.effects['10']) return;
 
-    // Prioritize enchanted (metadata 1)
     const bestGapple = items.sort(
       (a: any, b: any) => (b.metadata || 0) - (a.metadata || 0),
     )[0];
 
-    const destSlot = (this.bot as any).getEquipmentDestSlot("off-hand");
-    const currentItem = (this.bot as any).inventory.slots[destSlot];
+    const destSlot = this.bot.getEquipmentDestSlot('off-hand');
+    const currentItem = this.bot.inventory.slots[destSlot];
 
     if (
       !currentItem ||
@@ -586,17 +577,17 @@ class InventoryManager {
       this.logger.inventory(
         `Equipping ${bestGapple.displayName} to off-hand...`,
       );
-      await this.bot.equip!(bestGapple, "off-hand" as any);
+      await this.bot.equip!(bestGapple, 'off-hand' as any);
       await this.bot.waitForTicks!(Constants.TIMING.EQUIP_WAIT_TICKS);
     }
 
     this.logger.inventory(`Using ${bestGapple.displayName}...`);
     try {
-      (this.bot as any).activateItem(true);
+      this.bot.activateItem(true);
       const t0 = Date.now();
-      while (!(this.bot as any).entity.effects["10"]) {
+      while (!this.bot.entity.effects['10']) {
         if (Date.now() - t0 > Constants.TIMING.DEFAULT_TIMEOUT) {
-          throw new Error("Timeout reached while using item");
+          throw new Error('Timeout reached while using item');
         }
         await this.bot.waitForTicks!(2);
       }
@@ -606,7 +597,7 @@ class InventoryManager {
       err.message = `Failed to use ${bestGapple.displayName}: ${err.message}`;
       this.logger.error(err);
     } finally {
-      (this.bot as any).deactivateItem();
+      this.bot.deactivateItem();
     }
   }
 
@@ -615,12 +606,11 @@ class InventoryManager {
    * Skips if food or health is full, or if regeneration is active.
    */
   async equipFood(): Promise<void> {
-    // Skip if full or regeneration active (prevents waste during combat)
-    if (this.bot.food! >= 20 || (this.bot as any).entity.effects["10"]) return;
+    if (this.bot.food! >= 20 || this.bot.entity.effects['10']) return;
 
     const inventory: any[] = [
-      ...(this.bot as any).inventory.items(),
-      ...Object.values((this.bot as any).entity.equipment).filter(
+      ...this.bot.inventory.items(),
+      ...Object.values(this.bot.entity.equipment).filter(
         (i: any) => i != null,
       ),
     ];
@@ -632,7 +622,6 @@ class InventoryManager {
     );
     if (items.length === 0) return;
 
-    // Best food: prioritize saturation then hunger
     const food = items.reduce((best: any, current: any) => {
       const bStats = (
         foodStats as Record<string, { saturation: number; hunger: number }>
@@ -649,18 +638,18 @@ class InventoryManager {
       return best;
     });
 
-    if (await this._equipItem(food.name, "off-hand")) {
+    if (await this._equipItem(food.name, 'off-hand')) {
       const stats = (
         foodStats as Record<string, { saturation: number; hunger: number }>
       )[food.name];
       const expectedHunger = this.bot.food! + stats.hunger;
       this.logger.inventory(`Using ${food.displayName}...`);
       try {
-        (this.bot as any).activateItem(true);
+        this.bot.activateItem(true);
         const t0 = Date.now();
         while (this.bot.food! < expectedHunger && this.bot.food! < 20) {
           if (Date.now() - t0 > Constants.TIMING.DEFAULT_TIMEOUT) {
-            throw new Error("Timeout reached while eating");
+            throw new Error('Timeout reached while eating');
           }
           await this.bot.waitForTicks!(2);
         }
@@ -670,7 +659,7 @@ class InventoryManager {
         err.message = `Failed to eat ${food.displayName}: ${err.message}`;
         this.logger.error(err);
       } finally {
-        (this.bot as any).deactivateItem();
+        this.bot.deactivateItem();
       }
     }
   }
@@ -680,34 +669,33 @@ class InventoryManager {
    * Prefers strong_strength over regular strength.
    */
   async equipBuff(): Promise<void> {
-    // Skip if strength already active
-    if ((this.bot as any).entity.effects["5"]) return;
+    if (this.bot.entity.effects['5']) return;
 
     const inventory: any[] = [
-      ...(this.bot as any).inventory.items(),
-      ...Object.values((this.bot as any).entity.equipment).filter(
+      ...this.bot.inventory.items(),
+      ...Object.values(this.bot.entity.equipment).filter(
         (i: any) => i != null,
       ),
     ];
-    const potions = inventory.filter((item: any) => item.name === "potion");
+    const potions = inventory.filter((item: any) => item.name === 'potion');
     const potion =
       potions.find(
         (i: any) =>
-          (nbt as any).simplify(i.nbt).Potion === "minecraft:strong_strength",
+          (nbt as any).simplify(i.nbt).Potion === 'minecraft:strong_strength',
       ) ||
       potions.find(
         (i: any) =>
-          (nbt as any).simplify(i.nbt).Potion === "minecraft:strength",
+          (nbt as any).simplify(i.nbt).Potion === 'minecraft:strength',
       );
 
-    if (potion && (await this._equipItem(potion.name, "off-hand"))) {
+    if (potion && (await this._equipItem(potion.name, 'off-hand'))) {
       this.logger.inventory(`Using ${potion.displayName}...`);
       try {
-        (this.bot as any).activateItem(true);
+        this.bot.activateItem(true);
         const t0 = Date.now();
-        while (!(this.bot as any).entity.effects["5"]) {
+        while (!this.bot.entity.effects['5']) {
           if (Date.now() - t0 > Constants.TIMING.DEFAULT_TIMEOUT) {
-            throw new Error("Timeout reached while using potion");
+            throw new Error('Timeout reached while using potion');
           }
           await this.bot.waitForTicks!(2);
         }
@@ -717,7 +705,7 @@ class InventoryManager {
         err.message = `Failed to use ${potion.displayName}: ${err.message}`;
         this.logger.error(err);
       } finally {
-        (this.bot as any).deactivateItem();
+        this.bot.deactivateItem();
       }
     }
   }
@@ -727,7 +715,7 @@ class InventoryManager {
    * @returns Whether equipping succeeded
    */
   async equipTotem(): Promise<boolean> {
-    return this._equipItem("totem_of_undying", "off-hand");
+    return this._equipItem('totem_of_undying', 'off-hand');
   }
 
   /**
@@ -740,15 +728,14 @@ class InventoryManager {
   async equipPearl(
     yaw: number | null = null,
     pitch: number | null = null,
-    itemType: string = "ender_pearl",
+    itemType: string = 'ender_pearl',
   ): Promise<void> {
-    const equipped = await this._equipItem(itemType, "hand");
+    const equipped = await this._equipItem(itemType, 'hand');
     if (!equipped) {
       throw new Error(`Cannot throw ${itemType}: not found in inventory`);
     }
-    // Ensure the bot stops moving before the throw
-    (this.bot as any).clearControlStates();
-    await (this.bot as any).pathfinder.stop();
+    this.bot.clearControlStates();
+    await this.bot.pathfinder.stop();
     await this.bot.waitForTicks!(1);
 
     if (yaw !== null && pitch !== null) {
@@ -769,7 +756,7 @@ class InventoryManager {
       await this.bot.look!(yaw, adjustedPitch, true);
       await this.bot.waitForTicks!(1);
     }
-    (this.bot as any).activateItem(false); // Right click once
+    this.bot.activateItem(false); // Right click once
     await this.bot.waitForTicks!(1);
     this.logger.inventory(`Tossed ${itemType} successfully`);
   }
@@ -785,37 +772,33 @@ class InventoryManager {
   async equipPearlWithOffset(
     targetPos: Vec3,
     offset: number,
-    itemType: string = "ender_pearl"
+    itemType: string = 'ender_pearl',
+    sourcePos?: Vec3,
   ): Promise<void> {
-    const equipped = await this._equipItem(itemType, "hand");
+    const equipped = await this._equipItem(itemType, 'hand');
     if (!equipped) {
       throw new Error(`Cannot throw ${itemType}: not found in inventory`);
     }
-    
-    // Ensure the bot stops moving before the throw
-    (this.bot as any).clearControlStates();
-    await (this.bot as any).pathfinder.stop();
+
+    this.bot.clearControlStates();
+    await this.bot.pathfinder.stop();
     await this.bot.waitForTicks!(1);
-    
-    // Calculate the aim point by applying the offset to the target
+
+    // The offset is relative to the source Y level (where the projectile
+    // is launched from). Use sourcePos if provided, otherwise fall back
+    // to the bot's eye position.
+    const srcY = sourcePos
+      ? sourcePos.y
+      : this.bot.entity!.position.y + this.bot.entity!.height!;
     const aimPoint = targetPos.clone();
-    aimPoint.y += offset;
+    aimPoint.y = srcY + offset;
     
-    // Look at the aim point (bot.look uses true for body+head look)
-    const yaw = Math.atan2(targetPos.x - this.bot.entity.position.x, targetPos.z - this.bot.entity.position.z);
-    const pitch = Math.atan2(
-      aimPoint.y - (this.bot.entity.position.y + Constants.PHYSICS.EYE_HEIGHT_OFFSET),
-      Math.sqrt(
-        Math.pow(targetPos.x - this.bot.entity.position.x, 2) +
-        Math.pow(targetPos.z - this.bot.entity.position.z, 2)
-      )
-    );
-    
-    // Mineflayer uses positive pitch for looking UP, so we need to invert
-    await this.bot.look!(yaw, -pitch, true);
+    // Use lookAt which handles the pitch/yaw calculation internally
+    // This is more reliable than manually calculating and inverting pitch
+    await this.bot.lookAt!(aimPoint, true);
     await this.bot.waitForTicks!(1);
     
-    (this.bot as any).activateItem(false); // Right click once
+    this.bot.activateItem(false); // Right click once
     await this.bot.waitForTicks!(1);
     this.logger.inventory(`Tossed ${itemType} with offset ${offset.toFixed(2)} successfully`);
   }
@@ -825,15 +808,15 @@ class InventoryManager {
    */
   async equipWeapon(): Promise<void> {
     const materialStats = Constants.MATERIALS.WEAPONS;
-    const weapons = (this.bot as any).inventory
+    const weapons = this.bot.inventory
       .items()
       .filter(
         (item: any) =>
-          item.name.endsWith("_sword") ||
-          item.name.endsWith("_axe") ||
-          item.name.endsWith("_pickaxe") ||
-          item.name.endsWith("_shovel") ||
-          item.name.endsWith("_hoe"),
+          item.name.endsWith('_sword') ||
+          item.name.endsWith('_axe') ||
+          item.name.endsWith('_pickaxe') ||
+          item.name.endsWith('_shovel') ||
+          item.name.endsWith('_hoe'),
       );
     if (weapons.length === 0) return;
 
@@ -844,7 +827,7 @@ class InventoryManager {
         : best;
     }, null);
 
-    const held = (this.bot as any).heldItem;
+    const held = this.bot.heldItem;
     const currentScore = held
       ? this._computeWeaponScore(held, materialStats)
       : -1;
@@ -854,7 +837,7 @@ class InventoryManager {
       this.logger.inventory(
         `Equipping ${weapon.displayName} (#${weapon.type}) (DPS: ${bestScore.toFixed(2)}) to hand...`,
       );
-      await this.bot.equip!(weapon, "hand" as any);
+      await this.bot.equip!(weapon, 'hand' as any);
       await this.bot.waitForTicks!(Constants.TIMING.EQUIP_WAIT_TICKS);
     }
   }
@@ -873,7 +856,7 @@ class InventoryManager {
     const baseDPS = (stats as any).damage * (stats as any).speed;
     let sharpnessBonus = 0;
     if (item.enchants && Array.isArray(item.enchants)) {
-      const sharpness = item.enchants.find((e: any) => e.name === "sharpness");
+      const sharpness = item.enchants.find((e: any) => e.name === 'sharpness');
       if (sharpness)
         sharpnessBonus = (sharpness.lvl || 0) * 1.25 * (stats as any).speed;
     }
@@ -885,17 +868,16 @@ class InventoryManager {
    * Used as a utility fallback.
    */
   async equipUtility(): Promise<void> {
-    const items = (this.bot as any).inventory
+    const items = this.bot.inventory
       .items()
-      .filter((i: any) => i.name === "golden_apple");
+      .filter((i: any) => i.name === 'golden_apple');
     if (items.length === 0) return;
 
-    // Prioritize enchanted (metadata 1)
     const bestGapple = items.sort(
       (a: any, b: any) => (b.metadata || 0) - (a.metadata || 0),
     )[0];
 
-    await this.bot.equip!(bestGapple, "off-hand" as any);
+    await this.bot.equip!(bestGapple, 'off-hand' as any);
     await this.bot.waitForTicks!(Constants.TIMING.EQUIP_WAIT_TICKS);
   }
 }
@@ -905,8 +887,8 @@ class InventoryManager {
  * @param bot - Mineflayer bot instance
  * @returns The same bot instance with inventoryManager attached
  */
-export default function attach(bot: Bot): Bot {
-  (bot as any).inventoryManager = new InventoryManager(bot);
+export function attachInventory(bot: Bot): Bot {
+  bot.inventoryManager = new InventoryManager(bot);
   return bot;
 }
 
