@@ -1,6 +1,6 @@
 /**
- * Centralized constants for Pupa bot
- * Organized by category: Physics, Geometry, Movement, Block Detection, Timing, Combat, and Materials
+ * @fileoverview Centralized constants for Pupa bot.
+ * Organized by category: Physics, Geometry, Movement, Block Detection, Timing, Combat, and Materials.
  */
 
 export const Constants = {
@@ -33,8 +33,6 @@ export const Constants = {
       STRAFE_MULTIPLIER: 0.98,
       STRAFE_45_MULTIPLIER: 1.0,
     },
-    /** Projectile gravity context (specific to projectile motion simulation) */
-    GRAVITY: 1.6, // Keep for projectiles, but movement uses TICK_GRAVITY
     /** Initial upwards vertical velocity for a jump (V_Y,1) */
     JUMP_VELOCITY: 0.42,
     /** Instantaneous horizontal velocity boost applied during a sprint-jump takeoff */
@@ -72,10 +70,21 @@ export const Constants = {
     UNWANTED_CHECK_HEIGHT: 1.8,
     /** Horizontal offset for sampling points around the entity position */
     UNWANTED_CHECK_OFFSET: 0.3,
-    /** Number of horizontal corners checked for collision/unwanted blocks */
-    BOX_CORNERS: 4,
-    /** Number of vertical layers sampled for unwanted blocks */
-    UNWANTED_CHECK_LAYERS: 2,
+    /** Number of vertical layers for unwanted block detection */
+    UNWANTED_CHECK_LAYERS: 3,
+
+  },
+
+  // ============================================================================
+  // SHAPE INDICES (for block shapes arrays: [minX, minY, minZ, maxX, maxY, maxZ])
+  // ============================================================================
+  SHAPE: {
+    MIN_X: 0,
+    MIN_Y: 1,
+    MIN_Z: 2,
+    MAX_X: 3,
+    MAX_Y: 4,
+    MAX_Z: 5,
   },
 
   // ============================================================================
@@ -231,9 +240,9 @@ export const Constants = {
     /** Maximum depth to search downwards for a solid block surface */
     WALKABLE_SEARCH_DEPTH: 2,
     /** Block names identified as liquid for physics/navigation */
-    LIQUID_BLOCK_NAMES: ["water", "lava"],
+    LIQUID_BLOCK_NAMES: ['water', 'lava'],
     /** Blocks to avoid entirely due to hazard or movement impairment */
-    UNWANTED_BLOCK_NAMES: ["water", "lava", "web", "cactus"],
+    UNWANTED_BLOCK_NAMES: ['water', 'lava', 'web', 'cactus'],
   },
 
   // ============================================================================
@@ -308,10 +317,10 @@ export const Constants = {
     },
     /** Mapping of generic equipment slots to internal armor names */
     SLOT_MAP: {
-      head: "helmet",
-      torso: "chestplate",
-      legs: "leggings",
-      feet: "boots",
+      head: 'helmet',
+      torso: 'chestplate',
+      legs: 'leggings',
+      feet: 'boots',
     },
     /** Hunger restoration and saturation values for food items */
     FOOD: {
@@ -357,16 +366,5 @@ export const Constants = {
     },
   },
 
-  // ============================================================================
-  // SHAPE & BOUNDING BOX
-  // ============================================================================
-  SHAPE: {
-    /** Index mapping for block collision shape arrays [minX, minY, minZ, maxX, maxY, maxZ] */
-    MIN_X: 0,
-    MIN_Y: 1,
-    MIN_Z: 2,
-    MAX_X: 3,
-    MAX_Y: 4,
-    MAX_Z: 5,
-  },
+
 } as const;

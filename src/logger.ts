@@ -1,11 +1,11 @@
 /**
- * Unified Logger facade for Pupa bot.
+ * @fileoverview Unified Logger facade for Pupa bot.
  * Wraps the TUI/headless backend and provides level-based and semantic logging APIs.
  */
 
-import { createTerminalUI } from "./tui.js";
+import { createTerminalUI } from './tui.js';
 
-type LogLevel = "DEBUG" | "INFO" | "WARN" | "ERROR";
+type LogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'ERROR';
 
 interface UIBackend {
   log(message: unknown, tag: string, level: LogLevel): void;
@@ -43,10 +43,8 @@ export class Logger {
    * Returns a format suitable for prepending to tags, e.g., "[bot1] " or "".
    */
   private _botPrefix(): string {
-    return this.botNumber > 0 ? `[bot${this.botNumber}]` : "";
+    return this.botNumber > 0 ? `[bot${this.botNumber}]` : '';
   }
-
-  // ── Low-level call ────────────────────────────────────────────
 
   /**
    * Log a structured entry through the backend.
@@ -54,90 +52,78 @@ export class Logger {
    */
   private _log(message: unknown, tag: string, level: LogLevel, caller?: string): void {
     const botTag = this._botPrefix();
-    // If we have a bot tag, integrate it with the tag for cleaner output
-    // e.g., "[bot1 Status]" instead of "[bot1] [Status]"
     const combinedTag = botTag && tag ? `${botTag} ${tag}` : botTag || tag;
-    
-    // Format the message to include the caller function if available
     const messageWithCaller = caller ? `[${caller}] ${message}` : message;
-    
     this._backend.log(messageWithCaller, combinedTag, level);
   }
 
-  // ── Level-based API ───────────────────────────────────────────
-
-  debug(msg: unknown, tag = "", caller?: string): void {
-    this._log(msg, tag, "DEBUG", caller);
+  debug(msg: unknown, tag = '', caller?: string): void {
+    this._log(msg, tag, 'DEBUG', caller);
   }
 
-  info(msg: unknown, tag = "", caller?: string): void {
-    this._log(msg, tag, "INFO", caller);
+  info(msg: unknown, tag = '', caller?: string): void {
+    this._log(msg, tag, 'INFO', caller);
   }
 
-  warn(msg: unknown, tag = "", caller?: string): void {
-    this._log(msg, tag, "WARN", caller);
+  warn(msg: unknown, tag = '', caller?: string): void {
+    this._log(msg, tag, 'WARN', caller);
   }
 
-  error(msg: unknown, tag = "", caller?: string): void {
-    this._log(msg, tag, "ERROR", caller);
+  error(msg: unknown, tag = '', caller?: string): void {
+    this._log(msg, tag, 'ERROR', caller);
   }
 
-  // ── Semantic helpers ──────────────────────────────────────────
-
-  client(msg: unknown, level: LogLevel = "INFO", caller?: string): void {
-    this._log(msg, "Client", level, caller);
+  client(msg: unknown, level: LogLevel = 'INFO', caller?: string): void {
+    this._log(msg, 'Client', level, caller);
   }
 
-  combat(msg: unknown, level: LogLevel = "INFO", caller?: string): void {
-    this._log(msg, "Combat", level, caller);
+  combat(msg: unknown, level: LogLevel = 'INFO', caller?: string): void {
+    this._log(msg, 'Combat', level, caller);
   }
 
-  inventory(msg: unknown, level: LogLevel = "INFO", caller?: string): void {
-    this._log(msg, "Inventory", level, caller);
+  inventory(msg: unknown, level: LogLevel = 'INFO', caller?: string): void {
+    this._log(msg, 'Inventory', level, caller);
   }
 
-  command(msg: unknown, level: LogLevel = "INFO", caller?: string): void {
-    this._log(msg, "Command", level, caller);
+  command(msg: unknown, level: LogLevel = 'INFO', caller?: string): void {
+    this._log(msg, 'Command', level, caller);
   }
 
-  status(msg: unknown, level: LogLevel = "INFO", caller?: string): void {
-    this._log(msg, "Status", level, caller);
+  status(msg: unknown, level: LogLevel = 'INFO', caller?: string): void {
+    this._log(msg, 'Status', level, caller);
   }
 
-  config(msg: unknown, level: LogLevel = "INFO", caller?: string): void {
-    this._log(msg, "Config", level, caller);
+  config(msg: unknown, level: LogLevel = 'INFO', caller?: string): void {
+    this._log(msg, 'Config', level, caller);
   }
 
   chat(msg: unknown, caller?: string): void {
-    this._log(msg, "Chat", "INFO", caller);
+    this._log(msg, 'Chat', 'INFO', caller);
   }
 
   exception(msg: unknown, caller?: string): void {
-    this._log(msg, "Exception", "ERROR", caller);
+    this._log(msg, 'Exception', 'ERROR', caller);
   }
 
   warning(msg: unknown, caller?: string): void {
-    this._log(msg, "Warning", "WARN", caller);
+    this._log(msg, 'Warning', 'WARN', caller);
   }
 
-  // ── Additional semantic helpers ──────────────────────────────────
-
-  movement(msg: unknown, level: LogLevel = "INFO", caller?: string): void {
-    this._log(msg, "Movement", level, caller);
+  movement(msg: unknown, level: LogLevel = 'INFO', caller?: string): void {
+    this._log(msg, 'Movement', level, caller);
   }
 
-  pathfinding(msg: unknown, level: LogLevel = "INFO", caller?: string): void {
-    this._log(msg, "Pathfinding", level, caller);
+  pathfinding(msg: unknown, level: LogLevel = 'INFO', caller?: string): void {
+    this._log(msg, 'Pathfinding', level, caller);
   }
 
-  entity(msg: unknown, level: LogLevel = "INFO", caller?: string): void {
-    this._log(msg, "Entity", level, caller);
+  entity(msg: unknown, level: LogLevel = 'INFO', caller?: string): void {
+    this._log(msg, 'Entity', level, caller);
   }
 
-  packet(msg: unknown, level: LogLevel = "INFO", caller?: string): void {
-    this._log(msg, "Packet", level, caller);
+  packet(msg: unknown, level: LogLevel = 'INFO', caller?: string): void {
+    this._log(msg, 'Packet', level, caller);
   }
 }
 
 export const logger = new Logger();
-export default logger;

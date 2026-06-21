@@ -1,28 +1,25 @@
 /**
- * Terminal UI module for Pupa bot.
+ * @fileoverview Terminal UI module for Pupa bot.
  * Provides createTerminalUI() which either builds a full blessed-based TUI
  * or returns a minimal headless console logger depending on the environment.
+ *
+ * The headless UI intentionally uses console.log for output — this is its
+ * primary purpose, not a bypass of the logger facade.
  */
+/* eslint-disable no-console */
 
-import * as cli from "./cli-engine";
-import type { CommandNode } from "./cli-engine";
+import { tokenize, resolve, getHelp, getSuggestions, expandAbbreviation } from './cli-engine';
+import type { CommandNode } from './cli-engine';
 
-// Lazily-initialized instance (singleton)
 let uiInstance: UIBackend | null = null;
 
-// Command history and cursor state
 let commandHistory: string[] = [];
 let historyIndex = -1;
-let currentInput = "";
+let currentInput = '';
 
-// ── Headless mode detection ────────────────────────────────────────
-// Check argv before blessed is even required
-// Also detect Jest test environment
 const HEADLESS =
-  process.argv.includes("--headless") ||
+  process.argv.includes('--headless') ||
   process.env.JEST_WORKER_ID !== undefined;
-
-// ── Interface definitions ──────────────────────────────────────────
 
 interface UIBackend {
   _debugMode: boolean;
@@ -45,106 +42,95 @@ interface CliBackend {
   destroy(): void;
 }
 
-// ── Helpers ────────────────────────────────────────────────────────
-
 function getLevelPrefix(level: string): string {
   switch (level) {
-    case "DEBUG":
-      return "{gray-fg}[DEBUG]{/}";
-    case "WARN":
-      return "{yellow-fg}[WARN]{/}";
-    case "ERROR":
-      return "{red-fg}[ERROR]{/}";
+    case 'DEBUG':
+      return '{gray-fg}[DEBUG]{/}';
+    case 'WARN':
+      return '{yellow-fg}[WARN]{/}';
+    case 'ERROR':
+      return '{red-fg}[ERROR]{/}';
     default:
-      return "{cyan-fg}[INFO]{/}";
+      return '{cyan-fg}[INFO]{/}';
   }
 }
-
-// ── Factory ────────────────────────────────────────────────────────
 
 /**
  * Creates the terminal UI (either blessed TUI or headless console logger).
  * Returns the same instance on subsequent calls (singleton).
  */
 function createTerminalUI(): UIBackend {
-  // If already initialized, return the instance
   if (uiInstance) return uiInstance;
 
-  // Headless mode: return a plain console logger, no blessed/TUI
   if (HEADLESS) {
     uiInstance = createHeadlessUI();
     return uiInstance;
   }
 
-  // ── Full TUI mode ──────────────────────────────────────────────
-  // @ts-ignore - blessed is optional and may not resolve in all environments
+    // @ts-ignore - blessed is optional and may not resolve in all environments
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const blessed = require("blessed");
+  const blessed = require('blessed');
   // @ts-ignore - blessed-contrib is optional
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const contrib = require("blessed-contrib");
+  const contrib = require('blessed-contrib');
 
   const screen: any = blessed.screen({
     smartCSR: true,
-    title: "Terminal UI",
+    title: 'Terminal UI',
     fullUnicode: true,
     dockBorders: true,
   });
 
   const grid = new contrib.grid({ rows: 1, cols: 1, screen });
   const logBox: any = grid.set(0, 0, 0.75, 1, blessed.log, {
-    label: " Log ",
+    label: ' Log ',
     tags: true,
     scrollable: true,
     alwaysScroll: true,
-    scrollbar: { ch: "▓", track: { bg: "grey" }, style: { bg: "lightblue" } },
-    border: { type: "line", fg: "blue" },
-    style: { fg: "white", border: { fg: "#f0f0f0" } },
+    scrollbar: { ch: '▓', track: { bg: 'grey' }, style: { bg: 'lightblue' } },
+    border: { type: 'line', fg: 'blue' },
+    style: { fg: 'white', border: { fg: '#f0f0f0' } },
   });
 
   const inputBox: any = grid.set(0, 0, 0.25, 1, blessed.textbox, {
     bottom: 0,
     height: 3,
-    width: "100%",
-    label: " Input ",
+    width: '100%',
+    label: ' Input ',
     inputOnFocus: true,
-    border: { type: "line", fg: "green" },
+    border: { type: 'line', fg: 'green' },
     style: {
-      fg: "yellow",
-      bg: "black",
-      focus: { bg: "#333333" },
-      border: { fg: "#a0a0a0" },
+      fg: 'yellow',
+      bg: 'black',
+      focus: { bg: '#333333' },
+      border: { fg: '#a0a0a0' },
     },
   });
 
-  logBox.add("{bold}Terminal UI Initialized{/bold}");
-  logBox.add("┌─────────────────────────────────────┐");
-  logBox.add("│ Type text and press {blue-fg}Enter{/} to submit │");
-  logBox.add("│ Press {blue-fg}Esc{/} to clear input            │");
-  logBox.add("│ Use {blue-fg}↑/↓{/} for command history         │");
-  logBox.add("│ Use {blue-fg}←/→{/} to move cursor             │");
-  logBox.add("│ Press {blue-fg}Tab{/} for auto-completion      │");
-  logBox.add("└─────────────────────────────────────┘");
+  logBox.add('{bold}Terminal UI Initialized{/bold}');
+  logBox.add('┌─────────────────────────────────────┐');
+  logBox.add('│ Type text and press {blue-fg}Enter{/} to submit │');
+  logBox.add('│ Press {blue-fg}Esc{/} to clear input            │');
+  logBox.add('│ Use {blue-fg}↑/↓{/} for command history         │');
+  logBox.add('│ Use {blue-fg}←/→{/} to move cursor             │');
+  logBox.add('│ Press {blue-fg}Tab{/} for auto-completion      │');
+  logBox.add('└─────────────────────────────────────┘');
 
-  // ── Input callbacks ────────────────────────────────────────────
   const inputCallbacks: ((text: string) => void)[] = [];
-  inputBox.on("submit", (text: string) => {
+  inputBox.on('submit', (text: string) => {
     const timestamp = new Date().toISOString().substring(11, 19);
     logBox.add(`{cyan-fg}[${timestamp}]{/} ${text}`);
     
-    // Add non-empty commands to history
     const trimmedText = text.trim();
     if (trimmedText && (commandHistory.length === 0 || commandHistory[commandHistory.length - 1] !== trimmedText)) {
       commandHistory.push(trimmedText);
-      // Keep history to a reasonable size (e.g., 100 commands)
       if (commandHistory.length > 100) {
         commandHistory.shift();
       }
     }
-    
-    // Reset history navigation state
+
     historyIndex = -1;
-    currentInput = "";
+    currentInput = '';
     
     inputCallbacks.forEach((cb) => {
       try {
@@ -160,21 +146,18 @@ function createTerminalUI(): UIBackend {
     screen.render();
   });
 
-  inputBox.key("escape", () => {
+  inputBox.key('escape', () => {
     inputBox.clearValue();
     screen.render();
   });
 
-  // Up arrow: Navigate command history
-  inputBox.key("up", () => {
+  inputBox.key('up', () => {
     if (commandHistory.length === 0) return;
-    
-    // Save current input if we're at the end of history
+
     if (historyIndex === -1) {
       currentInput = inputBox.getValue();
     }
-    
-    // Move up in history
+
     if (historyIndex < commandHistory.length - 1) {
       historyIndex++;
       inputBox.setValue(commandHistory[commandHistory.length - 1 - historyIndex]);
@@ -182,24 +165,20 @@ function createTerminalUI(): UIBackend {
     }
   });
 
-  // Down arrow: Navigate command history (or restore current input)
-  inputBox.key("down", () => {
+  inputBox.key('down', () => {
     if (historyIndex === -1) return;
-    
-    // Move down in history
+
     if (historyIndex > 0) {
       historyIndex--;
       inputBox.setValue(commandHistory[commandHistory.length - 1 - historyIndex]);
     } else {
-      // Restore original input
       historyIndex = -1;
       inputBox.setValue(currentInput);
     }
     screen.render();
   });
 
-  // Left arrow: Move cursor left
-  inputBox.key("left", () => {
+  inputBox.key('left', () => {
     const currentValue = inputBox.getValue();
     const cursorPos = inputBox.getCursorPos();
     if (cursorPos > 0) {
@@ -208,8 +187,7 @@ function createTerminalUI(): UIBackend {
     screen.render();
   });
 
-  // Right arrow: Move cursor right
-  inputBox.key("right", () => {
+  inputBox.key('right', () => {
     const currentValue = inputBox.getValue();
     const cursorPos = inputBox.getCursorPos();
     if (cursorPos < currentValue.length) {
@@ -218,10 +196,9 @@ function createTerminalUI(): UIBackend {
     screen.render();
   });
 
-  // Tab: auto-complete current token
-  inputBox.key("tab", () => {
+  inputBox.key('tab', () => {
     const text = inputBox.getValue();
-    const { tokens, trailingSpace } = cli.tokenize(text);
+    const { tokens, trailingSpace } = tokenize(text);
 
     if (tokens.length === 0) return;
 
@@ -229,8 +206,8 @@ function createTerminalUI(): UIBackend {
     const cmdMgr = (uiInstance as UIBackend)._commandManager;
     if (!cmdMgr || !cmdMgr.tree) return;
 
-    const result = cli.resolve(cmdMgr.tree, tokens);
-    const partial = trailingSpace ? "" : tokens[tokens.length - 1];
+    const result = resolve(cmdMgr.tree, tokens);
+    const partial = trailingSpace ? '' : tokens[tokens.length - 1];
 
     // Get the subtree to explore for suggestions/help
     const getSubTree = (): Record<string, CommandNode> => {
@@ -241,17 +218,15 @@ function createTerminalUI(): UIBackend {
     };
 
     if (trailingSpace) {
-      // User wants suggestions for next arg
       const subTree = getSubTree();
-      const { commands } = cli.getSuggestions(subTree, "");
+      const { commands } = getSuggestions(subTree, '');
       if (commands.length > 0) {
-        const helpStr = cli.getHelp(subTree, result.matched);
-        (uiInstance as UIBackend).log(`Completions:\n${helpStr}`, "Command");
+        const helpStr = getHelp(subTree, result.matched);
+        (uiInstance as UIBackend).log(`Completions:\n${helpStr}`, 'Command');
       }
     } else {
-      // User is typing a token — try to expand
       const subTree = getSubTree();
-      const full = cli.expandAbbreviation(subTree, partial);
+      const full = expandAbbreviation(subTree, partial);
       if (full) {
         // Replace last token with its full form
         const prefix = text.slice(0, text.lastIndexOf(partial));
@@ -259,89 +234,87 @@ function createTerminalUI(): UIBackend {
         screen.render();
       } else {
         // Show possible completions
-        const { commands } = cli.getSuggestions(subTree, partial);
+        const { commands } = getSuggestions(subTree, partial);
         if (commands.length > 0) {
-          const helpStr = cli.getHelp(subTree, result.matched);
-          (uiInstance as UIBackend).log(`Completions:\n${helpStr}`, "Command");
+          const helpStr = getHelp(subTree, result.matched);
+          (uiInstance as UIBackend).log(`Completions:\n${helpStr}`, 'Command');
         }
       }
     }
   });
 
-  inputBox.key("?", () => {
+  inputBox.key('?', () => {
     const text = inputBox.getValue().trim();
     const cmdMgr = (uiInstance as UIBackend)._commandManager;
     if (!cmdMgr || !cmdMgr.tree) return;
 
     if (!text) {
-      // Top-level help
-      const helpStr = cli.getHelp(cmdMgr.tree, []);
+      const helpStr = getHelp(cmdMgr.tree, []);
       (uiInstance as UIBackend).log(
         `Available commands:\n${helpStr}`,
-        "Command",
+        'Command',
       );
       return;
     }
 
-    const { tokens } = cli.tokenize(text);
-    const result = cli.resolve(cmdMgr.tree, tokens);
+    const { tokens } = tokenize(text);
+    const result = resolve(cmdMgr.tree, tokens);
     const subTree = result.node?.subcommands || cmdMgr.tree;
-    const helpStr = cli.getHelp(subTree, result.matched);
-    (uiInstance as UIBackend).log(`Help for "${text}":\n${helpStr}`, "Command");
+    const helpStr = getHelp(subTree, result.matched);
+    (uiInstance as UIBackend).log(`Help for "${text}":\n${helpStr}`, 'Command');
   });
 
-  screen.key(["up", "down", "pageup", "pagedown"], (_: any, key: any) => {
+  screen.key(['up', 'down', 'pageup', 'pagedown'], (_: any, key: any) => {
     const h = logBox.height - 2;
     switch (key.name) {
-      case "up":
+      case 'up':
         logBox.scroll(-1);
         break;
-      case "down":
+      case 'down':
         logBox.scroll(1);
         break;
-      case "pageup":
+      case 'pageup':
         logBox.scroll(-h);
         break;
-      case "pagedown":
+      case 'pagedown':
         logBox.scroll(h);
+        break;
+      default:
         break;
     }
     screen.render();
   });
 
-  screen.key("enter", () => {
+  screen.key('enter', () => {
     inputBox.focus();
     screen.render();
   });
 
-  screen.key(["C-c", "escape"], () => {
+  screen.key(['C-c', 'escape'], () => {
     if (uiInstance) {
       uiInstance.destroy();
     }
     process.exit(0);
   });
 
-  // ── Resize handling ────────────────────────────────────────────
   const resize = () => {
     logBox.height = Math.max(3, Math.floor(screen.height * 0.75));
     inputBox.height = 3;
     inputBox.top = screen.height - 3;
     screen.render();
   };
-  screen.on("resize", resize);
+  screen.on('resize', resize);
   resize();
 
   inputBox.focus();
   screen.render();
 
-  // ── Log deduplication state ────────────────────────────────────
   let lastLogMessage: string | null = null;
   let lastLogTag: string | null = null;
   let lastLogLevel: string | null = null;
   let lastLogCount = 0;
   let lastLogTimestamp: string | null = null;
 
-  // ── Build and return the UI instance ───────────────────────────
   uiInstance = {
     _debugMode: false,
     _commandManager: null,
@@ -356,12 +329,12 @@ function createTerminalUI(): UIBackend {
      * @param tag - Optional tag (e.g., 'Combat', 'Inventory')
      * @param level - Log level: 'DEBUG', 'INFO', 'WARN', 'ERROR'
      */
-    log(message: unknown, tag: string = "", level: string = "INFO"): void {
-      if (!this._debugMode && level === "DEBUG") return;
+    log(message: unknown, tag: string = '', level: string = 'INFO'): void {
+      if (!this._debugMode && level === 'DEBUG') return;
       let formattedMessage: string;
       if (message instanceof Error) {
         formattedMessage = message.stack || String(message);
-      } else if (typeof message === "object" && message !== null) {
+      } else if (typeof message === 'object' && message !== null) {
         formattedMessage = JSON.stringify(message, null, 2);
       } else {
         formattedMessage = String(message);
@@ -374,7 +347,7 @@ function createTerminalUI(): UIBackend {
       ) {
         lastLogCount++;
         // Tag is already formatted by Logger (e.g., "[bot1 Status]")
-        const tagStr = tag ? `{bold}${tag}{/bold} ` : "";
+        const tagStr = tag ? `{bold}${tag}{/bold} ` : '';
         const levelStr = getLevelPrefix(level);
         const newLine = `{cyan-fg}[${lastLogTimestamp}]{/} ${tagStr}${levelStr} ${formattedMessage} {yellow-fg}(x${lastLogCount}){/}`;
 
@@ -391,7 +364,7 @@ function createTerminalUI(): UIBackend {
         lastLogTimestamp = new Date().toISOString().substring(11, 19);
 
         // Tag is already formatted by Logger (e.g., "[bot1 Status]")
-        const tagStr = tag ? `{bold}${tag}{/bold} ` : "";
+        const tagStr = tag ? `{bold}${tag}{/bold} ` : '';
         const levelStr = getLevelPrefix(level);
         logBox.log(
           `{cyan-fg}[${lastLogTimestamp}]{/} ${tagStr}${levelStr} ${formattedMessage}`,
@@ -405,8 +378,8 @@ function createTerminalUI(): UIBackend {
      * @param cb - Callback receiving the input text string
      */
     onInput(cb: (text: string) => void): void {
-      if (typeof cb !== "function") {
-        throw new Error("onInput callback must be a function");
+      if (typeof cb !== 'function') {
+        throw new Error('onInput callback must be a function');
       }
       inputCallbacks.push(cb);
     },
@@ -416,7 +389,7 @@ function createTerminalUI(): UIBackend {
      * @returns Array of log lines
      */
     getHistory(): string[] {
-      return logBox.getText().split("\n");
+      return logBox.getText().split('\n');
     },
 
     /**
@@ -435,8 +408,7 @@ function createTerminalUI(): UIBackend {
         try {
           screen.destroy();
         } catch (error: unknown) {
-          // eslint-disable-next-line no-console
-          console.error("Error destroying screen:", error);
+          console.error('Error destroying screen:', error);
         }
       }
       uiInstance = null;
@@ -459,7 +431,7 @@ function createHeadlessUI(): UIBackend {
   function formatMessage(message: unknown): string {
     if (message instanceof Error) {
       return message.stack || String(message);
-    } else if (typeof message === "object" && message !== null) {
+    } else if (typeof message === 'object' && message !== null) {
       return JSON.stringify(message);
     }
     return String(message);
@@ -476,19 +448,17 @@ function createHeadlessUI(): UIBackend {
      * @param tag - Optional tag
      * @param level - Log level
      */
-    log(message: unknown, tag: string = "", level: string = "INFO"): void {
-      if (!this._debugMode && level === "DEBUG") return;
+    log(message: unknown, tag: string = '', level: string = 'INFO'): void {
+      if (!this._debugMode && level === 'DEBUG') return;
       const formatted = formatMessage(message);
       // Tag is already formatted by Logger (e.g., "[bot1 Status]")
-      const tagStr = tag ? `${tag} ` : "";
+      const tagStr = tag ? `${tag} ` : '';
       const levelStr = `[${level}]`;
       const timestamp = new Date().toISOString().substring(11, 19);
       const line = `${timestamp} ${tagStr}${levelStr} ${formatted}`;
-      if (level === "ERROR") {
-        // eslint-disable-next-line no-console
+      if (level === 'ERROR') {
         console.error(line);
       } else {
-        // eslint-disable-next-line no-console
         console.log(line);
       }
     },
@@ -520,6 +490,5 @@ function createHeadlessUI(): UIBackend {
 
 // ── Exports ────────────────────────────────────────────────────────
 
-export default createTerminalUI;
 export { createTerminalUI };
 export type { UIBackend, CliBackend };

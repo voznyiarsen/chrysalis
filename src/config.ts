@@ -1,12 +1,12 @@
 /**
- * Runtime configuration manager for Pupa bot
+ * @fileoverview Runtime configuration manager for Pupa bot.
  * Provides mutable wrappers around combat and movement constants
  * that can be adjusted at runtime without restarting the bot.
  */
-import { Constants } from "./constants";
+import { Constants } from './constants';
 
 export class RuntimeConfig {
-  private _overrides: Map<string, unknown> = new Map();
+  private readonly _overrides: Map<string, unknown> = new Map();
 
   /**
    * Get a config value, checking overrides first, then falling back to Constants.
@@ -14,14 +14,14 @@ export class RuntimeConfig {
    * @param key - Key within the category (e.g., "ATTACK_RANGE")
    * @returns The configured value
    */
-  get(category: string, key: string): unknown {
+  get<T = unknown>(category: string, key: string): T {
     const overrideKey = `${category}.${key}`;
     if (this._overrides.has(overrideKey)) {
-      return this._overrides.get(overrideKey);
+      return this._overrides.get(overrideKey) as T;
     }
     return (Constants as Record<string, Record<string, unknown>>)[category]?.[
       key
-    ];
+    ] as T;
   }
 
   /**

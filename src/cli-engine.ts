@@ -1,5 +1,5 @@
 /**
- * CLI Engine for Pupa bot
+ * @fileoverview CLI Engine for Pupa bot.
  * Provides tokenization, suggestions, abbreviation expansion, and context-sensitive help
  * for a hierarchical command tree.
  *
@@ -43,7 +43,7 @@ export function tokenize(input: string): TokenizeResult {
   const tokens = trimmed.length === 0 ? [] : trimmed.split(/\s+/);
   return {
     tokens,
-    trailingSpace: input.length > 0 && input[input.length - 1] === " ",
+    trailingSpace: input.length > 0 && input[input.length - 1] === ' ',
   };
 }
 
@@ -58,7 +58,7 @@ export function isPositional(name: string): boolean {
  * Strip angle brackets from a positional arg name.
  */
 export function stripBrackets(name: string): string {
-  return name.replace(/^<|>$/g, "");
+  return name.replace(/^<|>$/g, '');
 }
 
 /**
@@ -86,10 +86,6 @@ export function flattenTree(
   return results;
 }
 
-/**
- * Traverse the tree following the given tokens, returning the deepest matching node
- * and the unused token tail.
- */
 /**
  * Return the effective lookup table for a node — its subcommands if they exist,
  * or the node itself if treated as a flat map (for the root tree).
@@ -158,10 +154,10 @@ export function getSuggestions(
   const descriptions: string[] = [];
 
   for (const [name, child] of Object.entries(node)) {
-    if (isPositional(name)) continue; // skip positional parameters
+    if (isPositional(name)) continue;
     if (!partial || name.startsWith(partial)) {
       commands.push(name);
-      descriptions.push(child.description || "");
+      descriptions.push(child.description || '');
     }
   }
 
@@ -191,21 +187,21 @@ export function getHelp(
   const lines: string[] = [];
 
   if (matchedPath.length > 0) {
-    lines.push(`Context: ${matchedPath.join(" ")}`);
-    lines.push("");
+    lines.push(`Context: ${matchedPath.join(' ')}`);
+    lines.push('');
   }
 
   for (const [name, child] of Object.entries(node)) {
     if (isPositional(name)) continue;
-    const desc = child.description || "";
-    const hasSubs = child.subcommands ? " (subcommands)" : "";
-    lines.push(`  ${name}${hasSubs ? "*" : ""}  ${desc}`);
+    const desc = child.description || '';
+    const hasSubs = child.subcommands ? ' (subcommands)' : '';
+    lines.push(`  ${name}${hasSubs ? '*' : ''}  ${desc}`);
   }
 
   // If there are positional params at this level, show them too
   const positional = Object.keys(node).filter(isPositional);
   if (positional.length > 0) {
-    lines.push("");
+    lines.push('');
     for (const pos of positional) {
       const child = node[pos];
       const desc = child.description || stripBrackets(pos);
@@ -214,8 +210,8 @@ export function getHelp(
   }
 
   if (lines.length === 0) {
-    lines.push("  (no commands available)");
+    lines.push('  (no commands available)');
   }
 
-  return lines.join("\n");
+  return lines.join('\n');
 }
