@@ -143,8 +143,8 @@ vite.config.ts.timestamp-*
 .vite/
 
 # Misc
-.geminiignore
 minecraft-clients/
 temporary/
+plans/
+ignore/
 documentation/
-module-documentation/

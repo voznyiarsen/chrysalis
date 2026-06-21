@@ -6,6 +6,37 @@ Pupa is a Node.js Minecraft bot written in TypeScript.
 
 ---
 
+## Table of Contents
+
+- [Quick Start](#quick-start)
+- [TypeScript Infrastructure](#typescript-infrastructure)
+- [Development Guidelines](#development-guidelines)
+- [Naming Conventions](#naming-conventions)
+- [Logging Conventions](#logging-conventions)
+- [Command & Interaction Model](#command--interaction-model)
+- [Testing](#testing)
+- [Environment Variables](#environment-variables)
+- [File Map](#file-map)
+- [Common Pitfalls](#common-pitfalls)
+- [Session-Specific Notes](#session-specific-notes)
+- [Rules for Agents](#rules-for-agents)
+
+---
+
+## Quick Start
+
+```bash
+npm install          # Install dependencies
+npm run build        # Compile TypeScript (output -> dist/)
+npm test             # Run Jest tests
+npm start            # Run the bot (after build)
+npm start -- --headless --bot1 "command"   # Headless mode for testing
+npm run lint         # ESLint with auto-fix
+npm run format       # Prettier
+```
+
+---
+
 ## TypeScript Infrastructure
 
 All source code is written in TypeScript under `src/`. Key configuration:
@@ -18,13 +49,14 @@ All source code is written in TypeScript under `src/`. Key configuration:
 - **Type definitions**: `@types/blessed`, `@types/node`, `@types/jest` installed.
   Mineflayer ships its own types; `vec3` types come from `@minecraft/` packages.
   Plugin-added properties (e.g., `bot.inventoryManager`, `bot.combatManager`) are
-  accessed via `(bot as any)` casts where mineflayer's type declarations don't cover them.
+  declared via module augmentation in `src/types/mineflayer.d.ts`, extending the
+  `Bot` interface so they can be accessed directly without `(bot as any)` casts.
 
-**API Documentation**: For Mineflayer library and Minecraft protocol documentation, see the `module-documentation` directory.
+**API Documentation**: For Mineflayer library and Minecraft protocol documentation, see the `documentation/module-documentation` directory.
 
 ### Module Documentation Index
 
-The `module-documentation` directory contains API documentation for the following modules:
+The `documentation/module-documentation` directory contains API documentation for the following modules:
 
 - `flying-squid_api.md`
 - `mineflayer-cmd_api.md`
@@ -52,9 +84,9 @@ The `module-documentation` directory contains API documentation for the followin
 - **Language**: TypeScript. Source files live under `src/` with a `.ts` extension.
   Compiled JavaScript output goes to `dist/`.
 - **Linting**: ESLint (`eslint.config.mjs`) with Prettier (`.prettierrc`).
-- **Style**: Follow the TypeScript styleguide in `styleguide.md`.
+- **Style**: Follow the naming and style conventions in the [Naming Conventions](#naming-conventions) section below.
   The `tsconfig.json` targets ES2022 with CommonJS module output (`"type": "commonjs"` in package.json).
-- **Environment**: Configuration goes into `.env`.
+- **Environment**: Configuration goes into `.env` (see [Environment Variables](#environment-variables)).
 - **Dependencies**: Use `npm install` / `npm ci`; do not add heavy native modules without discussion.
 - **File naming**: Use lowercase with hyphens for multi-word module names (e.g., `cli-engine.ts`, `pvp-manager.ts`).
   Single-word names are acceptable (e.g., `utils.ts`, `config.ts`). Avoid camelCase file names.
@@ -63,74 +95,99 @@ The `module-documentation` directory contains API documentation for the followin
 
 ## Naming Conventions
 
+### General Rules
+
+- **Identifiers** must use only ASCII letters, digits, underscores (for constants), and (rarely) the `$` sign.
+- **Names must be descriptive** and clear to a new reader. Do not use abbreviations that are ambiguous or unfamiliar.
+  - **Exception**: Variables in scope for 10 lines or fewer, including non-exported arguments, may use short (e.g. single-letter) names.
+- **Do not** use trailing or leading underscores for private properties or methods (except as noted below for private properties).
+- **Do not** use the `opt_` prefix for optional parameters.
+- **Do not** mark interfaces specially (e.g. `IMyInterface`) unless idiomatic in their environment.
+- Treat abbreviations like acronyms as whole words: `loadHttpUrl`, not `loadHTTPURL`, unless required by a platform name.
+
 ### Variables
 
-- **Constants**: `SCREAMING_SNAKE_CASE` (e.g., `TICK_GRAVITY`, `MOMENTUM_THRESHOLD_1_8`)
-- **Private properties**: `_camelCase` with leading underscore (e.g., `_itemCache`, `_edgeSneaking`, `_runRunning`)
-- **Local variables**: `camelCase` (e.g., `eyePos`, `targetPos`, `dist2D`, `strafeRange`)
-- **Loop counters/indices**: Short names like `i`, `j`, `k` or descriptive short names like `dx`, `dy`, `dz` for deltas
+| Style | Category | Examples |
+| --- | --- | --- |
+| `SCREAMING_SNAKE_CASE` | Constants (module-level, static readonly, enum values) | `TICK_GRAVITY`, `MOMENTUM_THRESHOLD_1_8` |
+| `_camelCase` | Private properties (project convention; note: Google styleguide disallows `_` prefix, but this project uses it) | `_itemCache`, `_edgeSneaking`, `_runRunning` |
+| `camelCase` | Local variables, parameters | `eyePos`, `targetPos`, `dist2D` |
+| Short (`i`, `j`, `k`, `dx`, `dy`, `dz`) | Loop counters, indices, deltas | `i`, `dx` |
 
 ### Methods
 
-- **Public methods**: `camelCase` (e.g., `getItemCount`, `equipArmor`, `doStrafe`, `setupDecisions`)
-- **Private methods**: `_camelCase` with leading underscore (e.g., `_equipItem`, `_computeArmorScore`, `_initializeLiquidCache`)
-- **Async methods**: `camelCase` with `async` keyword (e.g., `async equipGapple`, `async restoreInventory`)
+| Style | Category | Examples |
+| --- | --- | --- |
+| `camelCase` | Public methods | `getItemCount`, `equipArmor`, `doStrafe` |
+| `_camelCase` | Private methods | `_equipItem`, `_computeArmorScore` |
+| `camelCase` + `async` | Async methods | `async equipGapple`, `async restoreInventory` |
+
+#### Method Naming Patterns
+
+| Pattern | Convention | Examples |
+| --- | --- | --- |
+| Getters | `get<Thing>` | `getItemCount`, `getTargetFilter`, `getHealthStatus` |
+| Checkers | `has<Thing>` or `is<Thing>` | `hasItem`, `hasFood`, `isInLiquid`, `isJumpPathClear` |
+| Actions | `do<Thing>` or `equip<Thing>` | `doStrafe`, `doAvoid`, `equipArmor`, `equipWeapon` |
+| Async operations | `async` with descriptive name | `async equipGapple`, `async recordInventory` |
 
 ### Classes
 
-- **Classes**: `PascalCase` (e.g., `CombatManager`, `InventoryManager`, `UtilsManager`, `AABB`)
+| Style | Category | Examples |
+| --- | --- | --- |
+| `PascalCase` | Classes, interfaces, types, enums, decorators, type parameters | `CombatManager`, `InventoryManager`, `AABB` |
+
+### Type Parameters
+
+Type parameters may use a single uppercase character (`T`) or `UpperCamelCase`.
+
+### Imports
+
+Module namespace imports are `lowerCamelCase` while files are `kebab-case`:
+```ts
+import * as fooBar from './foo_bar';
+```
+
+### Aliases
+
+When creating a local-scope alias of an existing symbol, match the naming format of the source identifier:
+```ts
+const {BrewStateEnum} = SomeType;
+const CAPACITY = 5;
+```
 
 ### Abbreviations
 
-Common abbreviations used throughout the codebase:
-
-| Abbreviation               | Meaning                                 |
-| -------------------------- | --------------------------------------- |
-| `bot`                      | Mineflayer bot instance                 |
-| `svc`                      | Service or saved context                |
-| `pos`                      | Position (Vec3)                         |
-| `AABB`                     | Axis-Aligned Bounding Box               |
-| `St`                       | Slipperiness factor                     |
-| `Mt`                       | Momentum                                |
-| `Et`                       | Effective speed multiplier              |
-| `dx`, `dy`, `dz`           | Delta/difference in X, Y, Z coordinates |
+| Abbreviation | Meaning |
+| --- | --- |
+| `bot` | Mineflayer bot instance |
+| `svc` | Service or saved context |
+| `pos` | Position (Vec3) |
+| `AABB` | Axis-Aligned Bounding Box |
+| `St` | Slipperiness factor |
+| `Mt` | Momentum |
+| `Et` | Effective speed multiplier |
+| `dx`, `dy`, `dz` | Delta/difference in X, Y, Z coordinates |
 | `dist`, `dist2D`, `distSq` | Distance, 2D distance, squared distance |
-| `GAPPLE`                   | Golden Apple                            |
-| `EGAPPLE`                   | Enchanted Golden Apple                  |
-| `HP`                       | Health Points                           |
-| `AP`                       | Absorption Points                       |
+| `GAPPLE` | Golden Apple |
+| `EGAPPLE` | Enchanted Golden Apple |
+| `HP` | Health Points |
+| `AP` | Absorption Points |
 
 ### Units
 
-| Term  | Alias | Definition                                                                                                            |
-| ----- | ----- | --------------------------------------------------------------------------------------------------------------------- |
-| Tick  | t     | The standard unit of time in Minecraft, equal to 50ms. Minecraft's physics and inputs are updated once every tick. |
-| Block | b     | The standard unit of distance in Minecraft, 1b is equal to 1m.                                                        |
-| Pixel | px    | A sub-unit of distance. A pixel is 1/16th of a block, which is equal to 0.0625b                                    |
-
-### Pitch Calculation
-The Mineflayer library uses an inverted pitch compared to Minecraft.
-
-- **Positive pitch** means looking **UP**
-- **Negative pitch** means looking **DOWN**
-
-Since the pitch is applied using the Mineflayer library, the input pitch values should be inverted.
-
-This is the absolute truth; do not question it.
-
-### Method Naming Patterns
-
-- **Getters**: `get<Thing>` (e.g., `getItemCount`, `getTargetFilter`, `getHealthStatus`)
-- **Checkers**: `has<Thing>` or `is<Thing>` (e.g., `hasItem`, `hasFood`, `isInLiquid`, `isJumpPathClear`)
-- **Actions**: `do<Thing>` or `equip<Thing>` (e.g., `doStrafe`, `doAvoid`, `equipArmor`, `equipWeapon`)
-- **Async operations**: Often use `async` with descriptive names (e.g., `async equipGapple`, `async recordInventory`)
+| Term | Alias | Definition |
+| --- | --- | --- |
+| Tick | t | The standard unit of time in Minecraft, equal to 50ms. Minecraft's physics and inputs are updated once every tick. |
+| Block | b | The standard unit of distance in Minecraft, 1b is equal to 1m. |
+| Pixel | px | A sub-unit of distance. A pixel is 1/16th of a block, which is equal to 0.0625b. |
 
 ---
 
 ## Logging Conventions
 
-All output flows through the unified Logger facade in `logger.ts`. **Do not call
-`ui.log()` or `console.log/error` directly** from any module other than `tui.ts` or `logger.ts`.
+All output flows through the unified Logger facade in `src/logger.ts`. **Do not call
+`ui.log()` or `console.log/error` directly** from any module other than `src/tui.ts` or `src/logger.ts`.
 
 ### Available API
 
@@ -163,33 +220,35 @@ logger.packet(msg, level?, caller?);
 
 ### Canonical Tags
 
-| Tag           | Domain                                                                                 | Default Level |
-| ------------ | -------------------------------------------------------------------------------------- | ------------- |
-| `Client`     | Bot lifecycle (login, kick, end, reconnect)                                            | INFO          |
-| `Combat`     | Decisions, modes, pearls, strafing                                                     | INFO/DEBUG    |
-| `Inventory`  | Equip, toss, record, restore, consume                                                  | INFO          |
-| `Command`    | User commands, run loops, pause                                                        | INFO          |
-| `Status`     | Health, food, position, version                                                        | INFO          |
-| `Config`     | Runtime config get/set/list                                                            | INFO          |
-| `Chat`       | Incoming chat messages                                                                 | INFO          |
-| `Error`      | Recoverable failures                                                                   | ERROR         |
-| `Exception`  | Uncaught exceptions, unhandled rejections                                              | ERROR         |
-| `Warning`    | Node warnings                                                                          | WARN          |
-| `Debug`      | Verbose debug commands (debug_strafe_once, debug_strafe_loop, debug_pearl_throw, etc.) | DEBUG         |
-| `Movement`   | Movement logic, path execution, navigation                                             | INFO/DEBUG    |
-| `Pathfinding`| Path computation, goal setting, A* search                                               | INFO/DEBUG    |
-| `Entity`     | Entity tracking, targeting, interaction                                                | INFO/DEBUG    |
-| `Packet`     | Packet handling, protocol events                                                       | DEBUG         |
+| Tag | Domain | Default Level |
+| --- | --- | --- |
+| `Client` | Bot lifecycle (login, kick, end, reconnect) | INFO |
+| `Combat` | Decisions, modes, pearls, strafing | INFO/DEBUG |
+| `Inventory` | Equip, toss, record, restore, consume | INFO |
+| `Command` | User commands, run loops, pause | INFO |
+| `Status` | Health, food, position, version | INFO |
+| `Config` | Runtime config get/set/list | INFO |
+| `Chat` | Incoming chat messages | INFO |
+| `Error` | Recoverable failures | ERROR |
+| `Exception` | Uncaught exceptions, unhandled rejections | ERROR |
+| `Warning` | Node warnings | WARN |
+| `Debug` | Verbose debug commands (debug_strafe_once, debug_strafe_loop, debug_pearl_throw, etc.) | DEBUG |
+| `Movement` | Movement logic, path execution, navigation | INFO/DEBUG |
+| `Pathfinding` | Path computation, goal setting, A* search | INFO/DEBUG |
+| `Entity` | Entity tracking, targeting, interaction | INFO/DEBUG |
+| `Packet` | Packet handling, protocol events | DEBUG |
 
 ### Debug Mode
 
-DEBUG-level logs are suppressed by default. The `DebugManager` (`debug.ts`)
+DEBUG-level logs are suppressed by default. The `DebugManager` (`src/debug.ts`)
 enables debug mode in its constructor. To enable/disable manually:
 
 ```js
-logger.setDebugMode(true); // enable DEBUG output
+logger.setDebugMode(true);  // enable DEBUG output
 logger.setDebugMode(false); // suppress DEBUG output
 ```
+
+Prefer `DebugManager` for production use; `setDebugMode` is for manual/testing scenarios.
 
 ---
 
@@ -205,18 +264,18 @@ Commands are categorized based on how they are executed and registered:
 ### Command System Architecture
 
 The command system uses a **hierarchical command tree** instead of flat regex matching
-(`cli-engine.ts` + `commands.ts`).
+(`src/cli-engine.ts` + `src/commands.ts`).
 
 **Key features for agents:**
 
 - **Tree nodes** have `{ name, description, handler?, subcommands?, positional? }` shape.
 - **Positional params** use `<argName>` syntax and are matched by position, not by name.
 - **`resolve(tree, tokens)`** walks the tree following tokens, returns deepest match.
-- **`registerCommand(name, node)`** is the plugin API used by `debug.js` to inject debug commands.
+- **`registerCommand(name, node)`** is the plugin API used by `src/debug.ts` to inject debug commands.
 - **Variable substitution**: `${variable}` tokens in commands are resolved by `evaluatePlaceholders()`
   against built-in variables (`${x}`, `${y}`, `${z}`, `${health}`, `${food}`, `${yaw}`, `${pitch}`,
   `${version}`, `${target}`) before execution.
-- **Tab completion** and **`?` context-sensitive help** are handled by `tui.ts` using the CLI engine,
+- **Tab completion** and **`?` context-sensitive help** are handled by `src/tui.ts` using the CLI engine,
   not by the command tree itself.
 
 Combat and movement constants can be adjusted at runtime via the `cfg` command,
@@ -228,8 +287,8 @@ cfg COMBAT.STRAFE_RANGE 4.0
 cfg                    # list all active overrides
 ```
 
-Adjustable values are routed through `config.ts` (the `RuntimeConfig` class),
-which wraps `constants.ts` and allows per-key overrides via a `Map`.
+Adjustable values are routed through `src/config.ts` (the `RuntimeConfig` class),
+which wraps `src/constants.ts` and allows per-key overrides via a `Map`.
 
 ---
 
@@ -237,16 +296,30 @@ which wraps `constants.ts` and allows per-key overrides via a `Map`.
 
 ### Unit Tests (Jest)
 
-Test files live in `tests/` and follow the `*.test.ts` naming convention. Suites:
+Unit tests live in `tests/unit/` and follow the `*.test.ts` naming convention. They do not
+require a running Minecraft server and use mocked bot instances. Suites:
 
-- `tests/utils.test.ts` — AABB collision detection, fall damage, projectile prediction
-- `tests/pvp.test.ts` — CombatDecision, health status, targeting, fall protection
-- `tests/e2e.test.ts` — End-to-end debug method tests (requires E2E_HOST env var)
+- `tests/unit/utils.test.ts` — AABB collision detection, fall damage, projectile prediction
+- `tests/unit/pvp.test.ts` — CombatDecision, health status, targeting, fall protection
+- `tests/unit/config.test.ts` — RuntimeConfig get/set/reset/overrides
+- `tests/unit/pvp-manager.test.ts` — Attack speed, cooldown, damage multiplier
 
-Run all tests:
+### E2E Tests (Jest)
+
+End-to-end tests live in `tests/e2e/` and follow the `*.test.ts` naming convention. They
+connect to a real Minecraft server using configuration from `.env` and are
+automatically skipped when `E2E_HOST` is not set. Suites:
+
+- `tests/e2e/jump.test.ts` — Jump and collision debug methods
+- `tests/e2e/pearl.test.ts` — Ender pearl throw trajectory and accuracy
+- `tests/e2e/strafe.test.ts` — Strafe movement and pathfinding
+
+### Running Tests
 
 ```bash
-npm test
+npm test                  # Run all tests (unit + e2e)
+npm test -- tests/unit       # Run only unit tests
+npm test -- tests/e2e       # Run only E2E tests (skipped without E2E_HOST)
 ```
 
 ### Headless Testing
@@ -267,35 +340,89 @@ npm start -- --headless --bot1 "run debug_strafe_once 10 1"
 
 ---
 
-## Session-Specific Notes
+## Environment Variables
 
-- Operating system: Linux.
-- Temporary workspace: `/home/tsuchinoko/.gemini/tmp/pupa` may be used for
-  intermediate artifacts but **the canonical project is at
-  `/home/tsuchinoko/code-nodejs/pupa`**.
-- Ignore the `temporary` directory in the root of the workspace – it is for intermediate artifacts only.
+Configuration is loaded from `.env` via `dotenv`. See `.env.example` for the full template.
+
+### Bot Connection
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `PUPA_HOST` | `localhost` | Minecraft server hostname |
+| `PUPA_PORT` | `25565` | Minecraft server port |
+| `PUPA_NAME` | `Pupa` | Bot player name |
+| `PUPA_VERSION` | `1.12.2` | Minecraft protocol version |
+| `DEBUG_COMMANDS` | `0` | Set to `1` to enable debug command registration |
+
+### E2E Test Configuration
+
+| Variable | Description |
+| --- | --- |
+| `E2E_HOST` | Hostname of the E2E test server |
+| `E2E_PORT` | Port of the E2E test server |
+| `E2E_USERNAME` | Username for the E2E test bot |
+| `E2E_VERSION` | Minecraft version for E2E tests |
+| `E2E_TIMEOUT` | Timeout in seconds for E2E test operations |
 
 ---
 
-## Rules for agents
+## File Map
 
-- **Divide-Verify-Refine**: For complex tasks, break them down into smaller, manageable sub-tasks (Divide). After each sub-task, verify the result through builds, tests, or manual inspection (Verify). If issues are found, refine the implementation before proceeding to the next sub-task (Refine).
-- When implementing new features, prefer enhancing existing modules over creating new top-level files.
-- **Formatting**: Run linters to auto-fix formatting issues instead of manual fixes:
-  ```bash
-  npm run lint   # Run ESLint (includes --fix)
-  npm run format # Run Prettier
-  ```
-- **Build & Verify**: After making code changes, run `npm run build` to compile TypeScript and `npm start -- --headless --bot1` to verify functionality.
-- **Documentation**: After making code changes, update `README.md` and `AGENTS.md` to reflect any changes to:
-  - Command signatures and behavior
-  - File structure and architecture overview
-  - Test commands and examples
-  - API signatures and type definitions
-  - Configuration options and environment variables
+| File | Purpose |
+| --- | --- |
+| `src/index.ts` | Entry point; bot initialization and main loop |
+| `src/bot-registry.ts` | Multi-bot registry (BotRegistry class) |
+| `src/cli-engine.ts` | Hierarchical command tree engine |
+| `src/commands.ts` | Command registration and handlers |
+| `src/config.ts` | Runtime config with per-key overrides |
+| `src/constants.ts` | Combat/movement constants |
+| `src/debug.ts` | Debug commands and `DebugManager` |
+| `src/inventory.ts` | Inventory management (equip, toss, consume) |
+| `src/listener-manager.ts` | Event listener lifecycle management |
+| `src/logger.ts` | Unified logging facade |
+| `src/pvp.ts` | PvP combat logic |
+| `src/pvp-manager.ts` | PvP state machine and targeting |
+| `src/tui.ts` | Terminal UI (blessed-based) |
+| `src/types/mineflayer.d.ts` | Type augmentations for mineflayer Bot/Entity interfaces |
+| `src/utils.ts` | Utility functions (AABB, math, projectile prediction) |
 
-- **Jest Tests**: Always aim to resolve the underlying issue causing a test failure. Do not bypass failures by modifying values inside `.expect()` calls unless all other options have been exhausted.
-- **Troubleshooting**: If issues arise during development or testing, assume they are caused by the codebase. The server is never at fault.
+---
+
+## Common Pitfalls
+
+- **Don't call `ui.log()` or `console.log/error` directly** from any module other than `src/tui.ts` or `src/logger.ts`. Use the `logger` facade.
+- **Don't send client-only commands via `bot.chat()`**. Client-only commands (no `/` prefix) are handled by internal bot logic and will fail or cause errors if sent as chat.
+- **Don't add new top-level files** when an existing module can be extended. Prefer enhancing existing modules.
+- **Don't modify `.expect()` values in tests** to force a pass. Always fix the underlying issue.
+- **Don't assume the server is at fault.** If issues arise, the cause is in the codebase.
+
+---
+
+## Session-Specific Notes
+
+- Operating system: Linux.
+- Temporary workspace: `temporary` may be used for intermediate artifacts.
+
+---
+
+## Rules for Agents
+
+1. **Divide-Verify-Refine**: For complex tasks, break them down into smaller, manageable sub-tasks (Divide). After each sub-task, verify the result through builds, tests, or manual inspection (Verify). If issues are found, refine the implementation before proceeding to the next sub-task (Refine).
+2. When implementing new features, prefer enhancing existing modules over creating new top-level files.
+3. **Formatting**: Run linters to auto-fix formatting issues instead of manual fixes:
+   ```bash
+   npm run lint   # Run ESLint (includes --fix)
+   npm run format # Run Prettier
+   ```
+4. **Build & Verify**: After making code changes, run `npm run build` to compile TypeScript and `npm start -- --headless --bot1` to verify functionality.
+5. **Documentation**: After making code changes, update `README.md` and `AGENTS.md` to reflect any changes to:
+   - Command signatures and behavior
+   - File structure and architecture overview
+   - Test commands and examples
+   - API signatures and type definitions
+   - Configuration options and environment variables
+6. **Jest Tests**: Always aim to resolve the underlying issue causing a test failure. **NEVER** bypass failures by modifying values inside `.expect()` calls to force a test to pass. Doing so masks real bugs and undermines the reliability of the test suite. Modifying an expectation is only acceptable if you have verified that the test expectation itself is incorrect.
+7. **Troubleshooting**: If issues arise during development or testing, assume they are caused by the codebase. The server is never at fault.
 
 ---
 
