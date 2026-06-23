@@ -3,22 +3,21 @@
  * configs, and coordinated lifecycle. Supports 1-4 concurrent bot connections.
  */
 
-import mineflayer, { Bot } from 'mineflayer';
-import { pathfinder } from 'mineflayer-pathfinder';
-import { plugin as pvpPlugin } from './pvp-manager';
-import { logger, Logger } from './logger';
-import { attachInventory } from './inventory';
-import { attachCombat } from './pvp';
-import { attachCommands } from './commands';
-import { attachUtils } from './utils';
-import { attachDebug } from './debug';
-import { RuntimeConfig } from './config';
-import { Constants } from './constants';
-import { ListenerManager } from './listener-manager';
+import mineflayer, { Bot } from "mineflayer";
+import { pathfinder } from "mineflayer-pathfinder";
+import { PVPManager } from "./pvp";
+import { logger, Logger } from "./logger";
+import { attachInventory } from "./inventory";
+import { attachCombat } from "./pvp";
+import { attachCommands } from "./commands";
+import { attachUtils } from "./utils";
+import { RuntimeConfig } from "./config";
+import { Constants } from "./constants";
+import { ListenerManager } from "./listener-manager";
 
-const HEADLESS = process.argv.includes('--headless');
+const HEADLESS = process.argv.includes("--headless");
 
-const timeoutIdx = process.argv.indexOf('--timeout');
+const timeoutIdx = process.argv.indexOf("--timeout");
 const HEADLESS_TIMEOUT_MS: number | null =
   timeoutIdx !== -1 ? parseInt(process.argv[timeoutIdx + 1], 10) * 1000 : null;
 
@@ -122,26 +121,25 @@ export class BotRegistry {
     const botLog = this.getLogger(botNumber);
     const lm = new ListenerManager();
 
-    lm.on(bot, 'login', () => {
-      botLog.client('Successfully logged into account');
+    lm.on(bot, "login", () => {
+      botLog.client("Successfully logged into account");
 
       // Load standard plugins
-      botLog.client('Loading standard plugins...');
+      botLog.client("Loading standard plugins...");
       try {
         bot.loadPlugin(pathfinder);
-        bot.loadPlugin(pvpPlugin);
-        botLog.client('  ✓ Standard plugins loaded (pathfinder, pvp)');
+        bot.pvp = new PVPManager(bot);
+        botLog.client("  ✓ Standard plugins loaded (pathfinder, pvp)");
       } catch (e: unknown) {
         botLog.error(`  ✗ Standard plugins failed: ${(e as Error).message}`);
       }
 
       // Load Pupa managers
       const managers: { name: string; plugin: (bot: Bot) => Bot }[] = [
-        { name: 'InventoryManager', plugin: attachInventory },
-        { name: 'CombatManager', plugin: attachCombat },
-        { name: 'CommandManager', plugin: attachCommands },
-        { name: 'UtilsManager', plugin: attachUtils },
-        { name: 'DebugManager', plugin: attachDebug },
+        { name: "InventoryManager", plugin: attachInventory },
+        { name: "CombatManager", plugin: attachCombat },
+        { name: "CommandManager", plugin: attachCommands },
+        { name: "UtilsManager", plugin: attachUtils },
       ];
 
       const loaded: string[] = [];
@@ -157,31 +155,24 @@ export class BotRegistry {
       }
 
       if (loaded.length > 0) {
-        botLog.client(`  ✓ Loaded: ${loaded.join(', ')}`);
+        botLog.client(`  ✓ Loaded: ${loaded.join(", ")}`);
       }
       if (failed.length > 0) {
-        botLog.error(`  ✗ Failed: ${failed.map((f) => f.name).join(', ')}`);
+        botLog.error(`  ✗ Failed: ${failed.map((f) => f.name).join(", ")}`);
       }
 
       botLog.client(
         `Pupa managers: ${loaded.length}/${managers.length} loaded`,
       );
 
-      // Initialize DebugManager after all managers are loaded (especially CommandManager)
-      if (loaded.includes('DebugManager') && bot.debugManager) {
-        try {
-          bot.debugManager.initialize();
-        } catch (e: unknown) {
-          botLog.error(`DebugManager initialization failed: ${(e as Error).message}`);
-        }
-      }
-
       // Update CommandManager function registry with any newly available manager functions
-      if (loaded.includes('CommandManager') && bot.commandManager) {
+      if (loaded.includes("CommandManager") && bot.commandManager) {
         try {
           (bot.commandManager as any)._addManagerFunctions();
         } catch (e: unknown) {
-          botLog.error(`CommandManager function registry update failed: ${(e as Error).message}`);
+          botLog.error(
+            `CommandManager function registry update failed: ${(e as Error).message}`,
+          );
         }
       }
 
@@ -200,18 +191,9 @@ export class BotRegistry {
 
       // Apply PVP movement settings using runtime config
       bot.runtimeConfig = new RuntimeConfig();
-      bot.pvp.attackRange = bot.runtimeConfig.get(
-        'COMBAT',
-        'ATTACK_RANGE',
-      );
-      bot.pvp.followRange = bot.runtimeConfig.get(
-        'COMBAT',
-        'FOLLOW_RANGE',
-      );
-      bot.pvp.viewDistance = bot.runtimeConfig.get(
-        'COMBAT',
-        'VIEW_DISTANCE',
-      );
+      bot.pvp.attackRange = bot.runtimeConfig.get("COMBAT", "ATTACK_RANGE");
+      bot.pvp.followRange = bot.runtimeConfig.get("COMBAT", "FOLLOW_RANGE");
+      bot.pvp.viewDistance = bot.runtimeConfig.get("COMBAT", "VIEW_DISTANCE");
 
       bot.listenerManager = lm;
       bot.botNumber = botNumber;
@@ -220,9 +202,9 @@ export class BotRegistry {
       if (HEADLESS) {
         const def = this._getDefinition(botNumber);
         if (def && def.headlessCommand) {
-          const commands = def.headlessCommand.split(';').map((c) => c.trim());
-          botLog.client(`Headless mode: executing [${commands.join(', ')}]`);
-          bot.once('physicsTick' as any, async () => {
+          const commands = def.headlessCommand.split(";").map((c) => c.trim());
+          botLog.client(`Headless mode: executing [${commands.join(", ")}]`);
+          bot.once("physicsTick" as any, async () => {
             try {
               for (const cmd of commands) {
                 if (!cmd) continue;
@@ -245,7 +227,7 @@ export class BotRegistry {
       }
     });
 
-    lm.on(bot, 'kicked', (reason: string) => {
+    lm.on(bot, "kicked", (reason: string) => {
       botLog.client(
         `Bot kicked from ${cfg.host}:${cfg.port}, reason: '${reason}'`,
       );
@@ -254,14 +236,14 @@ export class BotRegistry {
       }
     });
 
-    lm.on(bot, 'end', (reason: string) => {
+    lm.on(bot, "end", (reason: string) => {
       botLog.client(
         `Bot ended from ${cfg.host}:${cfg.port}, reason: '${reason}'`,
       );
       if (HEADLESS) {
         this._countCompletion();
       } else {
-        botLog.client('Attempting reconnect in 6s...');
+        botLog.client("Attempting reconnect in 6s...");
         if (bot.listenerManager) {
           bot.listenerManager.offAll(bot);
         }
@@ -279,22 +261,20 @@ export class BotRegistry {
       }
     });
 
-    lm.on(bot, 'error', (err: Error) => {
+    lm.on(bot, "error", (err: Error) => {
       err.message = `Mineflayer Error: ${err.message}`;
       botLog.error(err);
     });
 
-    lm.on(bot, 'chat', (username: string, message: string) => {
+    lm.on(bot, "chat", (username: string, message: string) => {
       botLog.chat(`<${username}> ${message}`);
     });
 
-    lm.on(bot, 'entityHurt' as any, async (entity: any) => {
-      if (entity.type === 'player' && entity.username === bot.username) {
+    lm.on(bot, "entityHurt" as any, async (entity: any) => {
+      if (entity.type === "player" && entity.username === bot.username) {
         await bot.waitForTicks!(1);
         bot.combatManager.getLastDamage();
-        botLog.status(
-          `Health: ${bot.health.toFixed(1)}, Food: ${bot.food}`,
-        );
+        botLog.status(`Health: ${bot.health.toFixed(1)}, Food: ${bot.food}`);
       }
     });
   }
@@ -351,7 +331,7 @@ export class BotRegistry {
     const match = input.match(/^bot([\d,\s]+)\s(.+)/);
     if (match) {
       const list = match[1]
-        .split(',')
+        .split(",")
         .map((s) => parseInt(s.trim(), 10))
         .filter((n) => n >= 1 && n <= 4);
       if (list.length === 0) return null;

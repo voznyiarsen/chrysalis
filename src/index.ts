@@ -6,15 +6,15 @@
  * command execution, sharing a single logger/TUI instance.
  */
 
-import 'dotenv/config';
+import "dotenv/config";
 
-import { logger } from './logger';
-import { createTerminalUI } from './tui';
-import { BotRegistry, BotDefinition, BotConfig } from './bot-registry';
+import { logger } from "./logger";
+import { createTerminalUI } from "./tui";
+import { BotRegistry, BotDefinition, BotConfig } from "./bot-registry";
 
 (process as any).noDeprecation = true;
 
-const HEADLESS = process.argv.includes('--headless');
+const HEADLESS = process.argv.includes("--headless");
 
 /**
  * Parse --bot1 through --bot4 flags and per-bot config overrides.
@@ -22,14 +22,14 @@ const HEADLESS = process.argv.includes('--headless');
  */
 function parseBotDefinitions(): BotDefinition[] {
   const bots: BotDefinition[] = [];
-  const botFlags = ['bot1', 'bot2', 'bot3', 'bot4'];
+  const botFlags = ["bot1", "bot2", "bot3", "bot4"];
 
   for (const flag of botFlags) {
     const idx = process.argv.indexOf(`--${flag}`);
     if (idx === -1) continue;
 
     // Deduplicate: only the first occurrence counts
-    const num = parseInt(flag.replace('bot', ''), 10);
+    const num = parseInt(flag.replace("bot", ""), 10);
     if (bots.some((b) => b.number === num)) continue;
 
     const def: BotDefinition = { number: num };
@@ -57,7 +57,7 @@ function parseBotDefinitions(): BotDefinition[] {
       if (cmdStart < process.argv.length) {
         const next = process.argv[cmdStart];
         // Only consume if it looks like a command (not a --flag)
-        if (!next.startsWith('--')) {
+        if (!next.startsWith("--")) {
           def.headlessCommand = next;
         }
       }
@@ -85,10 +85,10 @@ function parseBotDefinitions(): BotDefinition[] {
  */
 function resolveConfig(def: BotDefinition): BotConfig {
   // Global overrides (--host, --port, --username, --version)
-  const globalHostIdx = process.argv.indexOf('--host');
-  const globalPortIdx = process.argv.indexOf('--port');
-  const globalUsernameIdx = process.argv.indexOf('--username');
-  const globalVersionIdx = process.argv.indexOf('--version');
+  const globalHostIdx = process.argv.indexOf("--host");
+  const globalPortIdx = process.argv.indexOf("--port");
+  const globalUsernameIdx = process.argv.indexOf("--username");
+  const globalVersionIdx = process.argv.indexOf("--version");
 
   const baseUsername =
     def.username ||
@@ -96,7 +96,7 @@ function resolveConfig(def: BotDefinition): BotConfig {
       ? process.argv[globalUsernameIdx + 1]
       : undefined) ||
     process.env.PUPA_NAME ||
-    'Pupa';
+    "Pupa";
 
   // Append bot number to username to prevent conflicts when multiple bots
   // connect to the same server. Single-bot mode (bot 1) gets "Pupa1".
@@ -107,13 +107,13 @@ function resolveConfig(def: BotDefinition): BotConfig {
       def.host ||
       (globalHostIdx !== -1 ? process.argv[globalHostIdx + 1] : undefined) ||
       process.env.PUPA_HOST ||
-      'localhost',
+      "localhost",
     port:
       def.port ||
       (globalPortIdx !== -1
         ? parseInt(process.argv[globalPortIdx + 1], 10)
         : undefined) ||
-      parseInt(process.env.PUPA_PORT || '25565', 10),
+      parseInt(process.env.PUPA_PORT || "25565", 10),
     username,
     version:
       def.version ||
@@ -148,7 +148,7 @@ async function start(): Promise<void> {
 
   // In headless mode, if no bots were created, exit
   if (HEADLESS && registry.bots.size === 0) {
-    logger.error('No bots created. Exiting.');
+    logger.error("No bots created. Exiting.");
     process.exit(1);
   }
 }
@@ -166,7 +166,7 @@ tui.onInput((text: string) => {
 
     // Execute chained commands (semicolons) on each selected bot
     const chained = cmd
-      .split(';')
+      .split(";")
       .map((c) => c.trim())
       .filter(Boolean);
     for (const botNum of botNumbers) {
@@ -186,7 +186,7 @@ tui.onInput((text: string) => {
     }
   } else {
     const chained = trimmed
-      .split(';')
+      .split(";")
       .map((c) => c.trim())
       .filter(Boolean);
     for (const [botNum, bot] of allBots) {
@@ -205,14 +205,14 @@ tui.onInput((text: string) => {
   }
 });
 
-process.on('uncaughtException', (err: Error, origin: string) => {
+process.on("uncaughtException", (err: Error, origin: string) => {
   err.message = `Uncaught Exception: ${err.message} at ${origin}`;
   logger.exception(err);
   if (HEADLESS) process.exit(1);
 });
 
 process.on(
-  'unhandledRejection',
+  "unhandledRejection",
   (reason: unknown, promise: Promise<unknown>) => {
     const err = reason instanceof Error ? reason : new Error(String(reason));
     err.message = `Unhandled Rejection at: ${promise}, reason: ${err.message}`;
@@ -220,22 +220,22 @@ process.on(
   },
 );
 
-process.on('warning', (warn: Error) => {
+process.on("warning", (warn: Error) => {
   const msg = warn?.message || String(warn);
-  if (msg.includes('physicTick')) return;
-  if (msg.includes('punycode')) return;
+  if (msg.includes("physicTick")) return;
+  if (msg.includes("punycode")) return;
   logger.warning(warn);
 });
 
 const originalWarn = console.warn;
 console.warn = (...args: any[]) => {
-  const msg = args.join(' ');
-  if (msg.includes('physicTick') || msg.includes('punycode')) return;
+  const msg = args.join(" ");
+  if (msg.includes("physicTick") || msg.includes("punycode")) return;
   originalWarn.apply(console, args);
 };
 
-process.on('SIGINT', () => {
-  logger.client('Shutting down all bots...');
+process.on("SIGINT", () => {
+  logger.client("Shutting down all bots...");
   registry.shutdownAll();
   setTimeout(() => process.exit(0), 500);
 });

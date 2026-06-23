@@ -3,11 +3,10 @@
  * Processes and executes user commands via a hierarchical command tree.
  */
 
-import util from 'node:util';
-import { Logger } from './logger';
-import { tokenize, resolve, getHelp, CommandNode } from './cli-engine';
-import type { Bot, EquipmentDestination } from 'mineflayer';
-
+import util from "node:util";
+import { Logger } from "./logger";
+import { tokenize, resolve, getHelp, CommandNode } from "./cli-engine";
+import type { Bot, EquipmentDestination } from "mineflayer";
 
 /**
  * Manages the command tree and execution flow
@@ -22,7 +21,7 @@ export class CommandManager {
   private _runRunning = false;
   private _runCounter = 0;
   private _runTotal = 0;
-  private _runCmd = '';
+  private _runCmd = "";
 
   constructor(bot: Bot) {
     this.bot = bot;
@@ -37,23 +36,23 @@ export class CommandManager {
   setupCommandTree(): void {
     this.tree = {
       as: {
-        description: 'Toggle autosend mode (unmatched commands sent as chat)',
+        description: "Toggle autosend mode (unmatched commands sent as chat)",
         handler: () => {
           this.autosend = !this.autosend;
           this.logger.command(
-            `Autosending ${this.autosend ? 'enabled' : 'disabled'}`,
+            `Autosending ${this.autosend ? "enabled" : "disabled"}`,
           );
         },
       },
       ts: {
-        description: 'Toss a single item or stack',
+        description: "Toss a single item or stack",
         subcommands: {
-          '<item>': {
-            description: 'Item name or numeric ID',
+          "<item>": {
+            description: "Item name or numeric ID",
             positional: true,
             subcommands: {
-              '<count>': {
-                description: 'Number of items to toss (default: 1)',
+              "<count>": {
+                description: "Number of items to toss (default: 1)",
                 positional: true,
                 handler: async (args: string[]) => {
                   await this.tossSingle(args);
@@ -67,21 +66,21 @@ export class CommandManager {
         },
       },
       tsall: {
-        description: 'Toss all items from inventory',
+        description: "Toss all items from inventory",
         handler: async () => {
           await this.tossAll();
         },
       },
       eq: {
-        description: 'Equip an item to a slot',
+        description: "Equip an item to a slot",
         subcommands: {
-          '<item>': {
-            description: 'Item name or numeric ID',
+          "<item>": {
+            description: "Item name or numeric ID",
             positional: true,
             subcommands: {
-              '<slot>': {
+              "<slot>": {
                 description:
-                  'Destination slot (hand, off-hand, head, torso, legs, feet)',
+                  "Destination slot (hand, off-hand, head, torso, legs, feet)",
                 positional: true,
                 handler: async (args: string[]) => {
                   await this.equip(args);
@@ -92,11 +91,11 @@ export class CommandManager {
         },
       },
       uneq: {
-        description: 'Unequip an item from a slot',
+        description: "Unequip an item from a slot",
         subcommands: {
-          '<slot>': {
+          "<slot>": {
             description:
-              'Slot to unequip from (head, torso, legs, feet, off-hand)',
+              "Slot to unequip from (head, torso, legs, feet, off-hand)",
             positional: true,
             handler: async (args: string[]) => {
               await this.unequip(args);
@@ -105,16 +104,16 @@ export class CommandManager {
         },
       },
       uneqall: {
-        description: 'Unequip all items',
+        description: "Unequip all items",
         handler: async () => {
           await this.unequipAll();
         },
       },
       rec: {
-        description: 'Record inventory to a JSON file',
+        description: "Record inventory to a JSON file",
         subcommands: {
-          '<slot>': {
-            description: 'Recording slot index (default: 0)',
+          "<slot>": {
+            description: "Recording slot index (default: 0)",
             positional: true,
             handler: async (args: string[]) => {
               await this.record(args);
@@ -122,14 +121,14 @@ export class CommandManager {
           },
         },
         handler: async () => {
-          await this.record(['rec', '0']);
+          await this.record(["rec", "0"]);
         },
       },
       res: {
-        description: 'Restore inventory from a recorded JSON file',
+        description: "Restore inventory from a recorded JSON file",
         subcommands: {
-          '<slot>': {
-            description: 'Recording slot index (default: 0)',
+          "<slot>": {
+            description: "Recording slot index (default: 0)",
             positional: true,
             handler: async (args: string[]) => {
               await this.restore(args);
@@ -137,57 +136,61 @@ export class CommandManager {
           },
         },
         handler: async () => {
-          await this.restore(['res', '0']);
+          await this.restore(["res", "0"]);
         },
       },
       clear: {
-        description: 'Clear inventory via creative mode',
+        description: "Clear inventory via creative mode",
         handler: async () => {
           // mineflayer plugin property access
           await (this.bot as any).inventoryManager.clearInventory();
         },
       },
       v: {
-        description: 'Show bot\'s Minecraft version',
+        description: "Show bot's Minecraft version",
         handler: () => this.showVersion(),
       },
       pos: {
-        description: 'Show bot\'s current position',
+        description: "Show bot's current position",
         handler: () => this.showPosition(),
       },
       com: {
-        description: 'Toggle combat mode on/off',
+        description: "Toggle combat mode on/off",
         handler: () => this.toggleCombat(),
       },
       cm: {
         description:
-          'Change combat mode (0=Mobs, 1=Players Survival, 2=Players All, 3=All Entities)',
+          "Change combat mode (0=Mobs, 1=Players Survival, 2=Players All, 3=All Entities)",
         subcommands: {
-          '<mode>': {
-            description: 'Mode number 0-3',
+          "<mode>": {
+            description: "Mode number 0-3",
             positional: true,
             handler: (args: string[]) => this.changeMode(args),
           },
         },
-        handler: () => this.changeMode(['cm']),
+        handler: () => this.changeMode(["cm"]),
       },
       s: {
-        description: 'Pacify bot — stop combat and any active run loop',
+        description: "Pacify bot — stop combat and any active run loop",
         handler: () => this.pacify(),
       },
       q: {
-        description: 'Quit the bot',
+        description: "Quit the bot",
         handler: () => this.quit(),
       },
+      blockat: {
+        description: "Get the block at the bot's current position",
+        handler: () => this.logger.info(`${this.bot.world.getBlock(this.bot.entity.position).displayName}\n${this.bot.entity.position}`),
+      },
       cfg: {
-        description: 'View or edit runtime configuration',
+        description: "View or edit runtime configuration",
         subcommands: {
-          '<path>': {
-            description: 'Config path (e.g., COMBAT.ATTACK_RANGE)',
+          "<path>": {
+            description: "Config path (e.g., COMBAT.ATTACK_RANGE)",
             positional: true,
             subcommands: {
-              '<value>': {
-                description: 'New value to set',
+              "<value>": {
+                description: "New value to set",
                 positional: true,
                 handler: (args: string[]) => this.configCommand(args),
               },
@@ -199,18 +202,18 @@ export class CommandManager {
       },
       run: {
         description:
-          'Run a command N times with M ticks between each (run <cmd> <N> <M>)',
+          "Run a command N times with M ticks between each (run <cmd> <N> <M>)",
         subcommands: {
-          '<cmd>': {
-            description: 'Command string to execute',
+          "<cmd>": {
+            description: "Command string to execute",
             positional: true,
             subcommands: {
-              '<N>': {
-                description: 'Number of iterations',
+              "<N>": {
+                description: "Number of iterations",
                 positional: true,
                 subcommands: {
-                  '<M>': {
-                    description: 'Ticks between iterations',
+                  "<M>": {
+                    description: "Ticks between iterations",
                     positional: true,
                     handler: async (args: string[]) => {
                       await this.run(args);
@@ -223,13 +226,13 @@ export class CommandManager {
         },
       },
       dud: {
-        description: 'Dud command for headless mode testing',
+        description: "Dud command for headless mode testing",
         handler: () => {
-          this.logger.command('Dud command ran successfully');
+          this.logger.command("Dud command ran successfully");
         },
       },
       vel: {
-        description: 'Show bot\'s current velocity',
+        description: "Show bot's current velocity",
         handler: () => {
           this.logger.command(
             `Velocity: ${this.bot.entity!.velocity.toString()}`,
@@ -237,10 +240,10 @@ export class CommandManager {
         },
       },
       pause: {
-        description: 'Pause the bot for N ticks',
+        description: "Pause the bot for N ticks",
         subcommands: {
-          '<ticks>': {
-            description: 'Number of ticks to pause',
+          "<ticks>": {
+            description: "Number of ticks to pause",
             positional: true,
             handler: async (args: string[]) => {
               await this.pause(args);
@@ -249,30 +252,31 @@ export class CommandManager {
         },
       },
       query_player_db: {
-        description: 'Query player database by username',
+        description: "Query player database by username",
         subcommands: {
-          '<username>': {
-            description: 'Player username',
+          "<username>": {
+            description: "Player username",
             positional: true,
             handler: (args: string[]) => this.queryPlayerDB(args),
           },
         },
       },
       query_slot_db: {
-        description: 'Query inventory slot info by slot number',
+        description: "Query inventory slot info by slot number",
         subcommands: {
-          '<slot>': {
-            description: 'Slot number',
+          "<slot>": {
+            description: "Slot number",
             positional: true,
             handler: (args: string[]) => this.querySlotDB(args),
           },
         },
       },
       func: {
-        description: 'Call a function directly by name or list available functions',
+        description:
+          "Call a function directly by name or list available functions",
         subcommands: {
-          '<functionName>': {
-            description: 'Function name to call',
+          "<functionName>": {
+            description: "Function name to call",
             positional: true,
             handler: async (args: string[]) => {
               await this.callFunction(args);
@@ -357,8 +361,8 @@ export class CommandManager {
 
     // No command matched at all
     const status = this.autosend
-      ? 'sending as message...'
-      : 'not sending as a message';
+      ? "sending as message..."
+      : "not sending as a message";
     this.logger.command(`Command ${data} not found, ${status}`);
     if (this.autosend) this.bot.chat(data);
   }
@@ -376,7 +380,7 @@ export class CommandManager {
   toggleAutosend(): void {
     this.autosend = !this.autosend;
     this.logger.command(
-      `Autosending ${this.autosend ? 'enabled' : 'disabled'}`,
+      `Autosending ${this.autosend ? "enabled" : "disabled"}`,
     );
   }
 
@@ -413,7 +417,7 @@ export class CommandManager {
       // mineflayer plugin property access
       await (this.bot as any).inventoryManager.tossAllItems();
       this.logger.inventory(
-        `Tossed ${count} ${count === 1 ? 'item' : 'items'}`,
+        `Tossed ${count} ${count === 1 ? "item" : "items"}`,
       );
     } catch (error: unknown) {
       const err = error instanceof Error ? error : new Error(String(error));
@@ -526,15 +530,15 @@ export class CommandManager {
   toggleCombat(): void {
     // mineflayer plugin property access
     const listener = (this.bot as any).combatManager.doDecide;
-    if ((this.bot as any).listenerCount('physicsTick', listener) > 0) {
-      this.logger.combat('Combat disabled');
-      (this.bot as any).off('physicsTick', listener);
+    if ((this.bot as any).listenerCount("physicsTick", listener) > 0) {
+      this.logger.combat("Combat disabled");
+      (this.bot as any).off("physicsTick", listener);
       // mineflayer plugin property access
       (this.bot as any).pvp.stop();
     } else {
-      this.logger.combat('Combat enabled');
+      this.logger.combat("Combat enabled");
       // mineflayer plugin property access
-      (this.bot as any).on('physicsTick', listener);
+      (this.bot as any).on("physicsTick", listener);
     }
   }
 
@@ -553,7 +557,7 @@ export class CommandManager {
    * Pacify the bot — stops combat and any active run loop.
    */
   pacify(): void {
-    this.logger.combat('Pacifying bot...');
+    this.logger.combat("Pacifying bot...");
     // mineflayer plugin property access
     (this.bot as any).combatManager.setMode(4);
     this._stopRun();
@@ -571,10 +575,10 @@ export class CommandManager {
       this.logger.error(new Error(`Player '${username}' not found`));
       return;
     }
-    this.logger.debug(`Player Debug: '${player.username}'`, 'Debug');
+    this.logger.debug(`Player Debug: '${player.username}'`, "Debug");
     this.logger.debug(
       util.inspect(player, { depth: 1, colors: true }),
-      'Debug',
+      "Debug",
     );
   }
 
@@ -591,9 +595,9 @@ export class CommandManager {
     }
     this.logger.debug(
       `Slot Debug: '${(item as any).displayName}' (slot ${slotNumber})`,
-      'Debug',
+      "Debug",
     );
-    this.logger.debug(util.inspect(item, { depth: 1, colors: true }), 'Debug');
+    this.logger.debug(util.inspect(item, { depth: 1, colors: true }), "Debug");
   }
 
   /**
@@ -611,7 +615,7 @@ export class CommandManager {
     // mineflayer plugin property access
     const rc = (this.bot as any).runtimeConfig;
     if (!rc) {
-      this.logger.error(new Error('Runtime config not available'));
+      this.logger.error(new Error("Runtime config not available"));
       return;
     }
 
@@ -619,9 +623,9 @@ export class CommandManager {
       const overrides: Record<string, unknown> = rc.getAllOverrides();
       const keys = Object.keys(overrides);
       if (keys.length === 0) {
-        this.logger.config('No active runtime overrides');
+        this.logger.config("No active runtime overrides");
       } else {
-        this.logger.config('Runtime overrides:');
+        this.logger.config("Runtime overrides:");
         for (const key of keys) {
           this.logger.config(`  ${key} = ${overrides[key]}`);
         }
@@ -630,8 +634,8 @@ export class CommandManager {
     }
 
     const path = args[1];
-    const [category, ...keyParts] = path.split('.');
-    const key = keyParts.join('.');
+    const [category, ...keyParts] = path.split(".");
+    const key = keyParts.join(".");
 
     if (args.length === 2) {
       const value = rc.get(category, key);
@@ -639,21 +643,23 @@ export class CommandManager {
       return;
     }
 
-    const rawValue = args.slice(2).join(' ');
+    const rawValue = args.slice(2).join(" ");
     const numValue = parseFloat(rawValue);
     const value = isNaN(numValue) ? rawValue : numValue;
 
     rc.set(category, key, value);
     this.logger.config(`Set ${category}.${key} = ${value}`);
 
-    if (category === 'COMBAT') {
+    if (category === "COMBAT") {
       // mineflayer plugin property access
       const pvp = (this.bot as any).pvp;
-      if (key === 'ATTACK_RANGE') pvp.attackRange = value;
-      if (key === 'FOLLOW_RANGE') pvp.followRange = value;
-      if (key === 'VIEW_DISTANCE') pvp.viewDistance = value;
-      if (key === 'USE_OFFSET_BASED_PEARLS') {
-        this.logger.config(`Offset-based pearl throwing ${value ? 'enabled' : 'disabled'}`);
+      if (key === "ATTACK_RANGE") pvp.attackRange = value;
+      if (key === "FOLLOW_RANGE") pvp.followRange = value;
+      if (key === "VIEW_DISTANCE") pvp.viewDistance = value;
+      if (key === "USE_OFFSET_BASED_PEARLS") {
+        this.logger.config(
+          `Offset-based pearl throwing ${value ? "enabled" : "disabled"}`,
+        );
       }
     }
   }
@@ -674,7 +680,7 @@ export class CommandManager {
   private _stopRun(): void {
     if (this._runRunning) {
       this._runRunning = false;
-      this.logger.command('Stopped run loop');
+      this.logger.command("Stopped run loop");
     }
   }
 
@@ -688,7 +694,7 @@ export class CommandManager {
     const m = parseInt(args[3], 10);
 
     if (n <= 0 || m < 0) {
-      this.logger.error('Invalid arguments: run <cmd> <N> <M> where N>0, M>=0');
+      this.logger.error("Invalid arguments: run <cmd> <N> <M> where N>0, M>=0");
       return;
     }
 
@@ -764,23 +770,6 @@ export class CommandManager {
    * This can be called multiple times to update the registry as managers load.
    */
   private _addManagerFunctions(): void {
-    // Add debug functions if debug manager is available
-    // mineflayer plugin property access
-    if ((this.bot as any).debugManager) {
-      const dm = (this.bot as any).debugManager;
-      const debugFunctions = {
-        debugStrafeOnce: this._safeBind(dm, dm.debugStrafeOnce),
-        debugStrafeLoop: this._safeBind(dm, dm.debugStrafeLoop),
-        debugPearlThrow: this._safeBind(dm, dm.debugPearlThrow),
-        debugJumpPath: this._safeBind(dm, dm.debugJumpPath),
-        debugCollisionStress: this._safeBind(dm, dm.debugCollisionStress),
-        debugJumpTest: this._safeBind(dm, dm.debugJumpTest),
-        debugJumpComprehensive: this._safeBind(dm, dm.debugJumpComprehensive),
-        debugPearlComprehensiveArc: this._safeBind(dm, dm.debugPearlComprehensiveArc),
-      };
-      Object.assign(this.functionRegistry, debugFunctions);
-    }
-
     // Add inventory manager functions if available
     // mineflayer plugin property access
     if ((this.bot as any).inventoryManager) {
@@ -809,7 +798,9 @@ export class CommandManager {
    * Safely bind a method if it exists, otherwise return undefined.
    */
   private _safeBind(context: any, method: any): any {
-    return method && typeof method === 'function' ? method.bind(context) : undefined;
+    return method && typeof method === "function"
+      ? method.bind(context)
+      : undefined;
   }
 
   /**
@@ -818,16 +809,16 @@ export class CommandManager {
   async listFunctions(): Promise<void> {
     const functionNames = Object.keys(this.functionRegistry).sort();
     if (functionNames.length === 0) {
-      this.logger.info('No functions available.');
+      this.logger.info("No functions available.");
       return;
     }
 
-    this.logger.info('Available functions:');
+    this.logger.info("Available functions:");
     for (const funcName of functionNames) {
       this.logger.info(`  ${funcName}`);
     }
-    this.logger.info('\nUsage: func <functionName> [args...]');
-    this.logger.info('Example: func showVersion');
+    this.logger.info("\nUsage: func <functionName> [args...]");
+    this.logger.info("Example: func showVersion");
   }
 
   /**
@@ -836,7 +827,9 @@ export class CommandManager {
    */
   async callFunction(args: string[]): Promise<void> {
     if (args.length < 2) {
-      this.logger.error('Function name required. Usage: func <functionName> [args...]');
+      this.logger.error(
+        "Function name required. Usage: func <functionName> [args...]",
+      );
       return;
     }
 
@@ -845,7 +838,9 @@ export class CommandManager {
 
     if (!this.functionRegistry[functionName]) {
       const availableFunctions = Object.keys(this.functionRegistry).sort();
-      this.logger.error(`Function '${functionName}' not found. Available functions:\n  ${availableFunctions.join(', ')}`);
+      this.logger.error(
+        `Function '${functionName}' not found. Available functions:\n  ${availableFunctions.join(", ")}`,
+      );
       return;
     }
 
@@ -853,7 +848,9 @@ export class CommandManager {
       const result = await this.functionRegistry[functionName](functionArgs);
 
       if (result !== undefined) {
-        this.logger.info(`Function '${functionName}' returned: ${JSON.stringify(result)}`);
+        this.logger.info(
+          `Function '${functionName}' returned: ${JSON.stringify(result)}`,
+        );
       } else {
         this.logger.info(`Function '${functionName}' executed successfully.`);
       }
@@ -871,7 +868,7 @@ export function attachCommands(bot: Bot): Bot {
   try {
     bot.commandManager = new CommandManager(bot);
   } catch (error: unknown) {
-    console.error('CommandManager attachment failed:', error);
+    console.error("CommandManager attachment failed:", error);
     throw error;
   }
   return bot;
