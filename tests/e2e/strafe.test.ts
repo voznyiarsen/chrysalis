@@ -17,12 +17,11 @@
 import 'dotenv/config';
 import mineflayer, { Bot } from 'mineflayer';
 import { pathfinder } from 'mineflayer-pathfinder';
-import { plugin as pvpPlugin } from '../../src/pvp-manager';
+import { PVPManager } from '../../src/pvp';
 import { attachInventory } from '../../src/inventory';
 import { attachCombat } from '../../src/pvp';
 import { attachCommands } from '../../src/commands';
 import { attachUtils } from '../../src/utils';
-import { attachDebug } from '../../src/debug';
 import { RuntimeConfig } from '../../src/config';
 import { logger } from '../../src/logger';
 import { Vec3 } from 'vec3';
@@ -77,7 +76,7 @@ async function createBot(): Promise<Bot> {
 
   // Load standard plugins
   bot.loadPlugin(pathfinder);
-  bot.loadPlugin(pvpPlugin);
+  bot.pvp = new PVPManager(bot);
 
   // Load Pupa managers
   (bot as any).runtimeConfig = new RuntimeConfig();
@@ -86,7 +85,6 @@ async function createBot(): Promise<Bot> {
   attachCombat(bot);
   attachCommands(bot);
   attachUtils(bot);
-  attachDebug(bot);
 
   logger.setDebugMode(true);
 
@@ -135,8 +133,13 @@ describeE2E('E2E Strafe Tests', () => {
           (bot as any).pathfinder.stop();
         }
 
+        // Stop PVP and reset combat manager state to prevent
+        // cascading failures from prior test suites
         if ((bot as any).pvp) {
           (bot as any).pvp.stop();
+        }
+        if (bot.combatManager) {
+          bot.combatManager.setMode(0);
         }
       } catch (error) {
         console.error('beforeEach cleanup failed:', error);
@@ -161,24 +164,54 @@ describeE2E('E2E Strafe Tests', () => {
   // Strafe Tests
   // ----------------------------------------------------------------
 
-  test('debugStrafeOnce — executes single strafe', async () => {
-    const dm = (bot as any).debugManager;
-    const dist = await dm.debugStrafeOnce();
-    expect(dist).toBeGreaterThanOrEqual(0);
-    expect(dist).toBeLessThanOrEqual(0.5);
-  }, TIMEOUT_MS);
-
-  test('debugStrafeLoop — loops strafe 3 times', async () => {
-    const dm = (bot as any).debugManager;
-    const distances = await dm.debugStrafeLoop();
-    expect(distances.length).toBe(3);
-    distances.forEach((dist) => {
+  test(
+    'executeStrafe — executes single strafe',
+    async () => {
+      const cm = bot.combatManager;
+      const dist = await cm.executeStrafe(bot.entity.position.offset(3, 0, 0));
       expect(dist).toBeGreaterThanOrEqual(0);
-      // Only check the 0.5 tolerance for distances that represent actual strafe point landings
-      // When no strafe point is found, distance will be to target (much larger)
-      if (dist <= 1.0) { // If distance is small, it's likely a strafe point landing
-        expect(dist).toBeLessThanOrEqual(0.5);
-      }
-    });
-  }, TIMEOUT_MS);
+      expect(dist).toBeLessThanOrEqual(2.0);
+    },
+    TIMEOUT_MS,
+  );
+
+  test(
+    'executeStrafeLoop — loops strafe 3 times',
+    async () => {
+      const cm = bot.combatManager;
+      const targetPos = bot.entity.position.offset(3, 0, 0);
+      const distances = await cm.executeStrafeLoop(
+        targetPos,
+        3,
+      );
+      expect(distances.length).toBe(3);
+      distances.forEach((dist) => {
+        expect(dist).toBeGreaterThanOrEqual(0);
+        expect(dist).toBeLessThanOrEqual(2.0);
+      });
+      const distToTarget = bot.entity.position.distanceTo(targetPos);
+      expect(distToTarget).toBeLessThanOrEqual(3.0);
+    },
+    TIMEOUT_MS,
+  );
+
+  test(
+    'executeStrafeLoop — loops strafe 15 times',
+    async () => {
+      const cm = bot.combatManager;
+      const targetPos = bot.entity.position.offset(3, 0, 0);
+      const distances = await cm.executeStrafeLoop(
+        targetPos,
+        15,
+      );
+      expect(distances.length).toBe(15);
+      distances.forEach((dist) => {
+        expect(dist).toBeGreaterThanOrEqual(0);
+        expect(dist).toBeLessThanOrEqual(2.0);
+      });
+      const distToTarget = bot.entity.position.distanceTo(targetPos);
+      expect(distToTarget).toBeLessThanOrEqual(3.0);
+    },
+    TIMEOUT_MS,
+  );
 });

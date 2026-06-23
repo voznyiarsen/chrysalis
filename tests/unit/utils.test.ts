@@ -3,12 +3,12 @@
  * Tests AABB collision detection, projectile trajectory prediction, and fall damage calculations.
  */
 
-import { AABB, UtilsManager } from '../../src/utils';
-import { Vec3 } from 'vec3';
+import { AABB, UtilsManager } from "../../src/utils";
+import { Vec3 } from "vec3";
 
-describe('AABB - Collision Detection', () => {
-  describe('constructor and basic properties', () => {
-    test('creates an AABB with correct bounds', () => {
+describe("AABB - Collision Detection", () => {
+  describe("constructor and basic properties", () => {
+    test("creates an AABB with correct bounds", () => {
       const box = new AABB(0, 0, 0, 1, 2, 1);
       expect(box.minX).toBe(0);
       expect(box.minY).toBe(0);
@@ -19,8 +19,8 @@ describe('AABB - Collision Detection', () => {
     });
   });
 
-  describe('offset', () => {
-    test('translates the AABB by given deltas', () => {
+  describe("offset", () => {
+    test("translates the AABB by given deltas", () => {
       const box = new AABB(0, 0, 0, 1, 1, 1);
       const moved = box.offset(2, 3, 4);
       expect(moved.minX).toBe(2);
@@ -31,29 +31,29 @@ describe('AABB - Collision Detection', () => {
       expect(moved.maxZ).toBe(5);
     });
 
-    test('does not mutate original AABB', () => {
+    test("does not mutate original AABB", () => {
       const box = new AABB(0, 0, 0, 1, 1, 1);
       box.offset(5, 5, 5);
       expect(box.minX).toBe(0);
     });
   });
 
-  describe('extend', () => {
-    test('extends AABB in positive direction', () => {
+  describe("extend", () => {
+    test("extends AABB in positive direction", () => {
       const box = new AABB(0, 0, 0, 1, 1, 1);
       const ext = box.extend(2, 0, 0);
       expect(ext.minX).toBe(0);
       expect(ext.maxX).toBe(3);
     });
 
-    test('extends AABB in negative direction', () => {
+    test("extends AABB in negative direction", () => {
       const box = new AABB(0, 0, 0, 1, 1, 1);
       const ext = box.extend(-2, 0, 0);
       expect(ext.minX).toBe(-2);
       expect(ext.maxX).toBe(1);
     });
 
-    test('extends in all directions', () => {
+    test("extends in all directions", () => {
       const box = new AABB(0, 0, 0, 1, 1, 1);
       const ext = box.extend(-1, 1, -1);
       expect(ext.minX).toBe(-1);
@@ -65,8 +65,8 @@ describe('AABB - Collision Detection', () => {
     });
   });
 
-  describe('expand', () => {
-    test('expands uniformly on all sides', () => {
+  describe("expand", () => {
+    test("expands uniformly on all sides", () => {
       const box = new AABB(1, 1, 1, 3, 3, 3);
       const expanded = box.expand(0.5);
       expect(expanded.minX).toBe(0.5);
@@ -78,72 +78,72 @@ describe('AABB - Collision Detection', () => {
     });
   });
 
-  describe('intersects', () => {
-    test('two overlapping AABBs intersect', () => {
+  describe("intersects", () => {
+    test("two overlapping AABBs intersect", () => {
       const a = new AABB(0, 0, 0, 2, 2, 2);
       const b = new AABB(1, 1, 1, 3, 3, 3);
       expect(a.intersects(b)).toBe(true);
     });
 
-    test('two non-overlapping AABBs do not intersect', () => {
+    test("two non-overlapping AABBs do not intersect", () => {
       const a = new AABB(0, 0, 0, 1, 1, 1);
       const b = new AABB(2, 2, 2, 3, 3, 3);
       expect(a.intersects(b)).toBe(false);
     });
 
-    test('adjacent AABBs with exact boundary do not intersect (EPS threshold)', () => {
+    test("adjacent AABBs with exact boundary do not intersect (EPS threshold)", () => {
       const a = new AABB(0, 0, 0, 1, 1, 1);
       const b = new AABB(1, 0, 0, 2, 1, 1);
       expect(a.intersects(b)).toBe(false);
     });
 
-    test('identical AABBs intersect', () => {
+    test("identical AABBs intersect", () => {
       const a = new AABB(0, 0, 0, 1, 1, 1);
       const b = new AABB(0, 0, 0, 1, 1, 1);
       expect(a.intersects(b)).toBe(true);
     });
 
-    test('one AABB fully inside another intersects', () => {
+    test("one AABB fully inside another intersects", () => {
       const outer = new AABB(0, 0, 0, 5, 5, 5);
       const inner = new AABB(1, 1, 1, 2, 2, 2);
       expect(outer.intersects(inner)).toBe(true);
     });
   });
 
-  describe('calculateXOffset', () => {
-    test('returns dx unchanged when no Y overlap', () => {
+  describe("calculateXOffset", () => {
+    test("returns dx unchanged when no Y overlap", () => {
       const player = new AABB(0, 0, 0, 0.6, 1.8, 0.6);
       const block = new AABB(0, 2, 0, 1, 3, 1);
       expect(player.calculateXOffset(block, 0.5)).toBe(0.5);
     });
 
-    test('returns dx unchanged when no Z overlap', () => {
+    test("returns dx unchanged when no Z overlap", () => {
       const player = new AABB(0, 0, 0, 0.6, 1.8, 0.6);
       const block = new AABB(0.6, 0, 2, 1.6, 1, 3);
       expect(player.calculateXOffset(block, 0.5)).toBe(0.5);
     });
 
-    test('stops at block edge when moving right into block', () => {
+    test("stops at block edge when moving right into block", () => {
       const player = new AABB(0, 0, 0, 0.6, 1.8, 0.6);
       const block = new AABB(0.6, 0, 0, 1.6, 1, 1);
       const dx = player.calculateXOffset(block, 0.5);
       expect(dx).toBeCloseTo(0);
     });
 
-    test('stops at block edge when moving left into block', () => {
+    test("stops at block edge when moving left into block", () => {
       const player = new AABB(1, 0, 0, 1.6, 1.8, 0.6);
       const block = new AABB(0, 0, 0, 1, 1, 1);
       const dx = player.calculateXOffset(block, -0.5);
       expect(dx).toBeCloseTo(0);
     });
 
-    test('returns full dx when no collision', () => {
+    test("returns full dx when no collision", () => {
       const player = new AABB(0, 0, 0, 0.6, 1.8, 0.6);
       const block = new AABB(3, 0, 0, 4, 1, 1);
       expect(player.calculateXOffset(block, 0.5)).toBe(0.5);
     });
 
-    test('respects margin parameter', () => {
+    test("respects margin parameter", () => {
       const player = new AABB(0, 0, 0, 0.6, 1.8, 0.6);
       const block = new AABB(0.6, 0.1, 0, 1.6, 1, 1);
       const dx = player.calculateXOffset(block, 0.5, 0);
@@ -151,27 +151,27 @@ describe('AABB - Collision Detection', () => {
     });
   });
 
-  describe('calculateYOffset', () => {
-    test('returns dy unchanged when no X overlap', () => {
+  describe("calculateYOffset", () => {
+    test("returns dy unchanged when no X overlap", () => {
       const player = new AABB(0, 0, 0, 0.6, 1.8, 0.6);
       const block = new AABB(3, 0, 0, 4, 1, 1);
       expect(player.calculateYOffset(block, -0.5)).toBe(-0.5);
     });
 
-    test('returns dy unchanged when no Z overlap', () => {
+    test("returns dy unchanged when no Z overlap", () => {
       const player = new AABB(0, 0, 0, 0.6, 1.8, 0.6);
       const block = new AABB(0, 0, 3, 1, 1, 4);
       expect(player.calculateYOffset(block, -0.5)).toBe(-0.5);
     });
 
-    test('stops at block floor when falling onto block', () => {
+    test("stops at block floor when falling onto block", () => {
       const player = new AABB(0, 1, 0, 0.6, 2.8, 0.6);
       const block = new AABB(0, 0, 0, 1, 1, 1);
       const dy = player.calculateYOffset(block, -0.5);
       expect(dy).toBeCloseTo(0);
     });
 
-    test('stops at block ceiling when jumping into block', () => {
+    test("stops at block ceiling when jumping into block", () => {
       const player = new AABB(0, 0, 0, 0.6, 1.8, 0.6);
       const block = new AABB(0, 1.8, 0, 1, 2.8, 1);
       const dy = player.calculateYOffset(block, 0.5);
@@ -179,27 +179,27 @@ describe('AABB - Collision Detection', () => {
     });
   });
 
-  describe('calculateZOffset', () => {
-    test('returns dz unchanged when no X overlap', () => {
+  describe("calculateZOffset", () => {
+    test("returns dz unchanged when no X overlap", () => {
       const player = new AABB(0, 0, 0, 0.6, 1.8, 0.6);
       const block = new AABB(3, 0, 0, 4, 1, 1);
       expect(player.calculateZOffset(block, 0.5)).toBe(0.5);
     });
 
-    test('returns dz unchanged when no Y overlap', () => {
+    test("returns dz unchanged when no Y overlap", () => {
       const player = new AABB(0, 0, 0, 0.6, 1.8, 0.6);
       const block = new AABB(0, 3, 0, 1, 4, 1);
       expect(player.calculateZOffset(block, 0.5)).toBe(0.5);
     });
 
-    test('stops at block edge when moving positive Z into block', () => {
+    test("stops at block edge when moving positive Z into block", () => {
       const player = new AABB(0, 0, 0, 0.6, 1.8, 0.6);
       const block = new AABB(0, 0, 0.6, 1, 1, 1.6);
       const dz = player.calculateZOffset(block, 0.5);
       expect(dz).toBeCloseTo(0);
     });
 
-    test('stops at block edge when moving negative Z into block', () => {
+    test("stops at block edge when moving negative Z into block", () => {
       const player = new AABB(0, 0, 1, 0.6, 1.8, 1.6);
       const block = new AABB(0, 0, 0, 1, 1, 1);
       const dz = player.calculateZOffset(block, -0.5);
@@ -208,12 +208,12 @@ describe('AABB - Collision Detection', () => {
   });
 });
 
-describe('Fall Damage Calculations', () => {
+describe("Fall Damage Calculations", () => {
   let utilsManager: any;
 
   beforeAll(() => {
     const mockBot: any = {
-      version: '1.12.2',
+      version: "1.12.2",
       registry: { blocksByName: {} },
       entity: { effects: {} },
       blockAt: () => null,
@@ -221,53 +221,53 @@ describe('Fall Damage Calculations', () => {
     utilsManager = new UtilsManager(mockBot);
   });
 
-  test('falls of 3 blocks or less deal 0 damage', () => {
+  test("falls of 3 blocks or less deal 0 damage", () => {
     expect(utilsManager.getFallDamage(0)).toBe(0);
     expect(utilsManager.getFallDamage(1)).toBe(0);
     expect(utilsManager.getFallDamage(2)).toBe(0);
     expect(utilsManager.getFallDamage(3)).toBe(0);
   });
 
-  test('falls of 4 blocks deal 1 damage', () => {
+  test("falls of 4 blocks deal 1 damage", () => {
     expect(utilsManager.getFallDamage(4)).toBe(1);
   });
 
-  test('falls of 10 blocks deal 7 damage', () => {
+  test("falls of 10 blocks deal 7 damage", () => {
     expect(utilsManager.getFallDamage(10)).toBe(7);
   });
 
-  test('falls of 23 blocks deal 20 damage (typically fatal)', () => {
+  test("falls of 23 blocks deal 20 damage (typically fatal)", () => {
     expect(utilsManager.getFallDamage(23)).toBe(20);
   });
 
-  test('falls of 100 blocks deal 97 damage', () => {
+  test("falls of 100 blocks deal 97 damage", () => {
     expect(utilsManager.getFallDamage(100)).toBe(97);
   });
 
-  test('falls at exactly safe distance (3.0) deal 0 damage', () => {
+  test("falls at exactly safe distance (3.0) deal 0 damage", () => {
     expect(utilsManager.getFallDamage(3.0)).toBe(0);
   });
 
-  test('falls slightly above safe distance (3.1) deal 0 damage due to floor', () => {
+  test("falls slightly above safe distance (3.1) deal 0 damage due to floor", () => {
     expect(utilsManager.getFallDamage(3.1)).toBe(0);
   });
 
-  test('falls at 4.0 deal exactly 1 damage', () => {
+  test("falls at 4.0 deal exactly 1 damage", () => {
     expect(utilsManager.getFallDamage(4.0)).toBe(1);
   });
 
-  test('negative fall distance returns 0 damage', () => {
+  test("negative fall distance returns 0 damage", () => {
     expect(utilsManager.getFallDamage(-1)).toBe(0);
     expect(utilsManager.getFallDamage(-100)).toBe(0);
   });
 });
 
-describe('Projectile Trajectory Prediction', () => {
+describe("Projectile Trajectory Prediction", () => {
   let utilsManager: any;
 
   beforeAll(() => {
     const mockBot: any = {
-      version: '1.12.2',
+      version: "1.12.2",
       registry: { blocksByName: {} },
       entity: { effects: {} },
       blockAt: () => null,
@@ -275,14 +275,14 @@ describe('Projectile Trajectory Prediction', () => {
     utilsManager = new UtilsManager(mockBot);
   });
 
-  test('return empty array for unreachable target (too far/steep)', () => {
+  test("return empty array for unreachable target (too far/steep)", () => {
     const source = { x: 0, y: 0, z: 0 };
     const target = { x: 100, y: 50, z: 0 };
     const pitches = utilsManager.getProjectilePitch(source, target, 1.5, 0.03);
     expect(pitches).toEqual([]);
   });
 
-  test('returns two pitches for reachable target with ender pearl params', () => {
+  test("returns two pitches for reachable target with ender pearl params", () => {
     const source = { x: 0, y: 0, z: 0 };
     const target = { x: 10, y: 0, z: 0 };
     const pitches = utilsManager.getProjectilePitch(
@@ -296,7 +296,7 @@ describe('Projectile Trajectory Prediction', () => {
     expect(pitches[0]).toBeLessThan(pitches[1]);
   });
 
-  test('returns two distinct arcs for reachable target', () => {
+  test("returns two distinct arcs for reachable target", () => {
     const source = { x: 0, y: 0, z: 0 };
     const target = { x: 10, y: 0, z: 0 };
     const pitches = utilsManager.getProjectilePitch(
@@ -310,14 +310,14 @@ describe('Projectile Trajectory Prediction', () => {
     expect(pitches[0]).not.toBe(pitches[1]);
   });
 
-  test('handles vertical target (dx = 0) correctly', () => {
+  test("handles vertical target (dx = 0) correctly", () => {
     const source = { x: 0, y: 0, z: 0 };
     const target = { x: 0, y: 5, z: 0 };
     const pitches = utilsManager.getProjectilePitch(source, target, 5, 0.03);
     expect(Array.isArray(pitches)).toBe(true);
   });
 
-  test('drag parameter affects refined pitch values', () => {
+  test("drag parameter affects refined pitch values", () => {
     const source = { x: 0, y: 0, z: 0 };
     const target = { x: 10, y: 0, z: 0 };
 
@@ -342,12 +342,13 @@ describe('Projectile Trajectory Prediction', () => {
   });
 });
 
-describe('getBestPearlTrajectory', () => {
+describe("getBestPearlTrajectory", () => {
   let utilsManager: any;
+  let mockBot: any;
 
   beforeAll(() => {
-    const mockBot: any = {
-      version: '1.12.2',
+    mockBot = {
+      version: "1.12.2",
       registry: { blocksByName: {} },
       entity: { effects: {} },
       blockAt: () => null,
@@ -356,7 +357,7 @@ describe('getBestPearlTrajectory', () => {
     utilsManager = new UtilsManager(mockBot);
   });
 
-  test('returns a result for a reachable target with clear path', () => {
+  test("returns a result for a reachable target with clear path", () => {
     const source = new Vec3(0, 0, 0);
     const target = new Vec3(10, 0, 0);
     const result = utilsManager.getBestPearlTrajectory(
@@ -369,17 +370,17 @@ describe('getBestPearlTrajectory', () => {
       1.0, // step
     );
     expect(result).not.toBeNull();
-    expect(result).toHaveProperty('pitch');
-    expect(result).toHaveProperty('arc');
-    expect(result).toHaveProperty('flightTime');
-    expect(result).toHaveProperty('landingPoint');
-    expect(result).toHaveProperty('landingDist');
+    expect(result).toHaveProperty("pitch");
+    expect(result).toHaveProperty("arc");
+    expect(result).toHaveProperty("flightTime");
+    expect(result).toHaveProperty("landingPoint");
+    expect(result).toHaveProperty("landingDist");
     // The landing point should be within 2.5 blocks of the target
     // (tolerance radius 1.5 + end-trigger radius 1.0)
     expect(result!.landingDist).toBeLessThanOrEqual(2.6);
   });
 
-  test('returns null for unreachable target (too far/too steep)', () => {
+  test("returns null for unreachable target (too far/too steep)", () => {
     const source = new Vec3(0, 0, 0);
     const target = new Vec3(100, 50, 0);
     const result = utilsManager.getBestPearlTrajectory(
@@ -394,30 +395,27 @@ describe('getBestPearlTrajectory', () => {
     expect(result).toBeNull();
   });
 
-  test('tolerance sphere allows hitting near the target when direct pitch is blocked', () => {
-    // Create a mock where isProjectilePathClear returns false for the direct
-    // target but true for offset targets within tolerance
+  test("tolerance sphere allows hitting near the target when direct path is blocked", () => {
+    // Create a mock where blockAt returns blocks near the direct target
+    // but clear for offset targets within tolerance
     const source = new Vec3(0, 0, 0);
     const target = new Vec3(10, 0, 0);
 
-    const originalClear = utilsManager.isProjectilePathClear.bind(utilsManager);
+    const originalBlockAt = mockBot.blockAt;
+    const blockPos = new Vec3(10, 0, 0);
+    const solidBlock = {
+      boundingBox: "block",
+      shapes: [[0, 0, 0, 1, 1, 1]],
+      position: blockPos,
+    };
 
-    utilsManager.isProjectilePathClear = (
-      src: any,
-      tgt: any,
-      v: number,
-      g: number,
-      p: number,
-      d: number,
-    ) => {
-      // Block the exact target point, allow others
-      const distToTarget = Math.sqrt(
-        (tgt.x - 10) ** 2 + (tgt.y - 0) ** 2 + (tgt.z - 0) ** 2,
+    mockBot.blockAt = (pos: any) => {
+      // Block positions near the direct target
+      const dist = Math.sqrt(
+        (pos.x - 10) ** 2 + (pos.y - 0) ** 2 + (pos.z - 0) ** 2,
       );
-      if (distToTarget < 0.5) {
-        return false;
-      }
-      return true;
+      if (dist < 2.0) return solidBlock;
+      return null;
     };
 
     const result = utilsManager.getBestPearlTrajectory(
@@ -430,25 +428,28 @@ describe('getBestPearlTrajectory', () => {
       1.0,
     );
 
-    // Restore
-    utilsManager.isProjectilePathClear = originalClear;
+    mockBot.blockAt = originalBlockAt;
 
     // Should find an alternative path via tolerance sampling
     expect(result).not.toBeNull();
     if (result) {
-      // The landing point should be within tolerance + end-trigger radius of the target
       expect(result.landingDist).toBeLessThanOrEqual(2.6);
     }
   });
 
-  test('returns null when all paths (including tolerance samples) are blocked', () => {
+  test("returns null when all paths (including tolerance samples) are blocked", () => {
     const source = new Vec3(0, 0, 0);
     const target = new Vec3(10, 0, 0);
 
-    const originalClear = utilsManager.isProjectilePathClear.bind(utilsManager);
-
-    // Block everything
-    utilsManager.isProjectilePathClear = () => false;
+    // Mock bot.blockAt to return a solid block everywhere.
+    // The block has a huge shape so isPointInBlock always returns true.
+    const mockBlock = {
+      boundingBox: "block",
+      shapes: [[-1000, -1000, -1000, 1000, 1000, 1000]],
+      position: new Vec3(0, 0, 0),
+    };
+    const originalBlockAt = mockBot.blockAt;
+    mockBot.blockAt = () => mockBlock;
 
     const result = utilsManager.getBestPearlTrajectory(
       source,
@@ -460,12 +461,12 @@ describe('getBestPearlTrajectory', () => {
       1.0,
     );
 
-    utilsManager.isProjectilePathClear = originalClear;
+    mockBot.blockAt = originalBlockAt;
 
     expect(result).toBeNull();
   });
 
-  test('selects low arc over high arc when both are clear (low arc is faster)', () => {
+  test("selects low arc over high arc when both are clear (low arc is faster)", () => {
     const source = new Vec3(0, 0, 0);
     const target = new Vec3(15, 0, 0);
 
@@ -481,14 +482,18 @@ describe('getBestPearlTrajectory', () => {
 
     expect(result).not.toBeNull();
     // Low arc is the default fastest choice when unobstructed
-    expect(result!.arc).toBe('low');
+    expect(result!.arc).toBe("low");
   });
 });
 
-describe('Trajectory Calculation - Sanity Check', () => {
+describe("Trajectory Calculation - Sanity Check", () => {
   // Sanity values for v=2.97 m/tick, g=0.03 m/tick², drag=0.99
   // Source and target are at the same Y level (flat ground)
-  const sanityData: Array<{ distance: number; lowOffset: number; highOffset: number }> = [
+  const sanityData: Array<{
+    distance: number;
+    lowOffset: number;
+    highOffset: number;
+  }> = [
     { distance: 5, lowOffset: 0.017, highOffset: 236.584 },
     { distance: 10, lowOffset: 0.123, highOffset: 236.371 },
     { distance: 15, lowOffset: 0.318, highOffset: 236.016 },
@@ -505,7 +510,7 @@ describe('Trajectory Calculation - Sanity Check', () => {
     entity: {
       position: new Vec3(0, 0, 0),
     },
-    version: '1.12.2',
+    version: "1.12.2",
     registry: {
       blocksByName: {},
     },
@@ -517,45 +522,77 @@ describe('Trajectory Calculation - Sanity Check', () => {
   const g = 0.03;
   const drag = 0.99;
 
-  for (const { distance, lowOffset: expectedLow, highOffset: expectedHigh } of sanityData) {
+  for (const {
+    distance,
+    lowOffset: expectedLow,
+    highOffset: expectedHigh,
+  } of sanityData) {
     const target = new Vec3(distance, 0, 0);
 
     test(`low arc offset for ${distance}m flat target`, () => {
-      const offset = utils.getProjectileOffset(source, target, v, g, drag, 'low');
+      const offset = utils.getProjectileOffset(
+        source,
+        target,
+        v,
+        g,
+        drag,
+        "low",
+      );
       expect(offset).toBeCloseTo(expectedLow, 2);
     });
 
     test(`high arc offset for ${distance}m flat target`, () => {
-      const offset = utils.getProjectileOffset(source, target, v, g, drag, 'high');
+      const offset = utils.getProjectileOffset(
+        source,
+        target,
+        v,
+        g,
+        drag,
+        "high",
+      );
       expect(offset).toBeCloseTo(Math.round(expectedHigh * 1000) / 1000, 2);
     });
   }
 
-  test('low arc offset is always smaller than high arc offset', () => {
+  test("low arc offset is always smaller than high arc offset", () => {
     for (const { distance } of sanityData) {
       const target = new Vec3(distance, 0, 0);
-      const low = utils.getProjectileOffset(source, target, v, g, drag, 'low');
-      const high = utils.getProjectileOffset(source, target, v, g, drag, 'high');
+      const low = utils.getProjectileOffset(source, target, v, g, drag, "low");
+      const high = utils.getProjectileOffset(
+        source,
+        target,
+        v,
+        g,
+        drag,
+        "high",
+      );
       expect(low).toBeLessThan(high);
     }
   });
 
-  test('all offsets are positive (aiming above target)', () => {
+  test("all offsets are positive (aiming above target)", () => {
     for (const { distance } of sanityData) {
       const target = new Vec3(distance, 0, 0);
-      const low = utils.getProjectileOffset(source, target, v, g, drag, 'low');
-      const high = utils.getProjectileOffset(source, target, v, g, drag, 'high');
+      const low = utils.getProjectileOffset(source, target, v, g, drag, "low");
+      const high = utils.getProjectileOffset(
+        source,
+        target,
+        v,
+        g,
+        drag,
+        "high",
+      );
       expect(low).toBeGreaterThan(0);
       expect(high).toBeGreaterThan(0);
     }
   });
 
-  test('getProjectileOffset properly handles unreachable targets and various distances', () => {
+  test("getProjectileOffset properly handles unreachable targets and various distances", () => {
     const mockBot: any = {
       entity: {
         position: new Vec3(0, 0, 0),
       },
-      version: '1.12.2',
+      version: "1.12.2",
       registry: {
         blocksByName: {},
       },
@@ -571,8 +608,8 @@ describe('Trajectory Calculation - Sanity Check', () => {
     // Test that unreachable targets throw error
     const unreachableTarget = new Vec3(1000, 0, 0); // Too far
     expect(() => {
-      utils.getProjectileOffset(source, unreachableTarget, v, g, 1, 'low');
-    }).toThrow('Target is unreachable');
+      utils.getProjectileOffset(source, unreachableTarget, v, g, 1, "low");
+    }).toThrow("Target is unreachable");
 
     // Test different distances
     const distances = [5, 10, 15, 20];
@@ -580,12 +617,26 @@ describe('Trajectory Calculation - Sanity Check', () => {
       const testTarget = new Vec3(distance, 0, 0);
 
       // Should not throw for reasonable distances
-      const lowOffset = utils.getProjectileOffset(testTarget, source, v, g, 1, 'low');
-      expect(typeof lowOffset).toBe('number');
+      const lowOffset = utils.getProjectileOffset(
+        testTarget,
+        source,
+        v,
+        g,
+        1,
+        "low",
+      );
+      expect(typeof lowOffset).toBe("number");
       expect(isFinite(lowOffset)).toBe(true);
 
-      const highOffset = utils.getProjectileOffset(testTarget, source, v, g, 1, 'high');
-      expect(typeof highOffset).toBe('number');
+      const highOffset = utils.getProjectileOffset(
+        testTarget,
+        source,
+        v,
+        g,
+        1,
+        "high",
+      );
+      expect(typeof highOffset).toBe("number");
       expect(isFinite(highOffset)).toBe(true);
     }
   });

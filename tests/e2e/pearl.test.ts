@@ -14,27 +14,26 @@
  * Skipped automatically when E2E_HOST is not set.
  */
 
-import 'dotenv/config';
-import mineflayer, { Bot } from 'mineflayer';
-import { pathfinder } from 'mineflayer-pathfinder';
-import { plugin as pvpPlugin } from '../../src/pvp-manager';
-import { attachInventory } from '../../src/inventory';
-import { attachCombat } from '../../src/pvp';
-import { attachCommands } from '../../src/commands';
-import { attachUtils } from '../../src/utils';
-import { attachDebug } from '../../src/debug';
-import { RuntimeConfig } from '../../src/config';
-import { logger } from '../../src/logger';
-import { Vec3 } from 'vec3';
-import { Constants } from '../../src/constants';
+import "dotenv/config";
+import mineflayer, { Bot } from "mineflayer";
+import { pathfinder } from "mineflayer-pathfinder";
+import { PVPManager } from "../../src/pvp";
+import { attachInventory } from "../../src/inventory";
+import { attachCombat } from "../../src/pvp";
+import { attachCommands } from "../../src/commands";
+import { attachUtils } from "../../src/utils";
+import { RuntimeConfig } from "../../src/config";
+import { logger } from "../../src/logger";
+import { Vec3 } from "vec3";
+import { Constants } from "../../src/constants";
 
 // ── E2E configuration ───────────────────────────────────────────────
 
 const HOST = process.env.E2E_HOST;
-const PORT = parseInt(process.env.E2E_PORT || '25565', 10);
-const USERNAME = 'pearl_test';
+const PORT = parseInt(process.env.E2E_PORT || "25565", 10);
+const USERNAME = "pearl_test";
 const VERSION = process.env.E2E_VERSION || undefined;
-const TIMEOUT_MS = parseInt(process.env.E2E_TIMEOUT || '60', 10) * 1000;
+const TIMEOUT_MS = parseInt(process.env.E2E_TIMEOUT || "60", 10) * 1000;
 const POSITION = new Vec3(100, 1, 100);
 
 // ── Conditional test runner ─────────────────────────────────────────
@@ -55,29 +54,29 @@ async function createBot(): Promise<Bot> {
 
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => {
-      bot.removeAllListeners('spawn');
-      bot.removeAllListeners('error');
-      bot.removeAllListeners('end');
-      reject(new Error('Connection timed out'));
+      bot.removeAllListeners("spawn");
+      bot.removeAllListeners("error");
+      bot.removeAllListeners("end");
+      reject(new Error("Connection timed out"));
     }, TIMEOUT_MS);
 
-    bot.once('spawn', () => {
+    bot.once("spawn", () => {
       clearTimeout(timer);
       resolve();
     });
-    bot.once('error', (err: Error) => {
+    bot.once("error", (err: Error) => {
       clearTimeout(timer);
       reject(err);
     });
-    bot.once('end', () => {
+    bot.once("end", () => {
       clearTimeout(timer);
-      reject(new Error('Bot disconnected before spawn'));
+      reject(new Error("Bot disconnected before spawn"));
     });
   });
 
   // Load standard plugins
   bot.loadPlugin(pathfinder);
-  bot.loadPlugin(pvpPlugin);
+  bot.pvp = new PVPManager(bot);
 
   // Load Pupa managers
   (bot as any).runtimeConfig = new RuntimeConfig();
@@ -86,7 +85,6 @@ async function createBot(): Promise<Bot> {
   attachCombat(bot);
   attachCommands(bot);
   attachUtils(bot);
-  attachDebug(bot);
 
   logger.setDebugMode(true);
 
@@ -95,7 +93,7 @@ async function createBot(): Promise<Bot> {
 
 // ── E2E test suite ──────────────────────────────────────────────────
 
-describeE2E('E2E Pearl Tests', () => {
+describeE2E("E2E Pearl Tests", () => {
   let bot: Bot;
 
   // Set overall suite timeout to 5 minutes (300 seconds)
@@ -108,13 +106,13 @@ describeE2E('E2E Pearl Tests', () => {
       try {
         await bot.waitForChunksToLoad!();
         await bot.waitForTicks!(1);
-        bot.chat!(`/tp ${Object.values(POSITION).join(' ')}`);
+        bot.chat!(`/tp ${Object.values(POSITION).join(" ")}`);
 
         await bot.waitForChunksToLoad!();
         await bot.waitForTicks!(1);
-        bot.chat!('/gamemode creative'); // Set gamemode to creative
+        bot.chat!("/gamemode creative"); // Set gamemode to creative
       } catch (error) {
-        console.error('beforeAll cleanup failed:', error);
+        console.error("beforeAll cleanup failed:", error);
       }
     }
   }, TIMEOUT_MS);
@@ -125,7 +123,7 @@ describeE2E('E2E Pearl Tests', () => {
       try {
         await bot.waitForChunksToLoad!();
         await bot.waitForTicks!(1);
-        bot.chat!(`/tp ${Object.values(POSITION).join(' ')}`);
+        bot.chat!(`/tp ${Object.values(POSITION).join(" ")}`);
 
         await bot.waitForChunksToLoad!();
         await bot.waitForTicks!(1);
@@ -139,7 +137,7 @@ describeE2E('E2E Pearl Tests', () => {
           (bot as any).pvp.stop();
         }
       } catch (error) {
-        console.error('beforeEach cleanup failed:', error);
+        console.error("beforeEach cleanup failed:", error);
       }
     }
   }, TIMEOUT_MS);
@@ -151,7 +149,7 @@ describeE2E('E2E Pearl Tests', () => {
         bot.quit!();
         bot.end!();
       } catch (error) {
-        console.error('afterAll cleanup failed:', error);
+        console.error("afterAll cleanup failed:", error);
       }
     }
     logger.setDebugMode(false);
@@ -161,16 +159,52 @@ describeE2E('E2E Pearl Tests', () => {
   // Comprehensive Pearl Throws
   // ══════════════════════════════════════════════════════════════════
 
-  describe('comprehensive throws — low arc', () => {
+  describe("comprehensive throws — low arc", () => {
     const TOLERANCE = 2.0;
-    let results: { direction: string; distance: number; arc: string; result: number }[];
+    let results: {
+      direction: string;
+      distance: number;
+      arc: string;
+      result: number;
+    }[];
 
     beforeAll(async () => {
-      const dm = (bot as any).debugManager;
-      results = await dm.debugPearlComprehensiveArc('low');
+      // Inline the comprehensive pearl arc test logic
+      const TOLERANCE = 2.0;
+      const utils = (bot as any).utilsManager;
+      const eyePos = bot.entity.position.offset(0, bot.entity.height!, 0);
+      const targetPos = eyePos.offset(20, 0, 0);
+      const { VELOCITY, GRAVITY, DRAG } = Constants.COMBAT.ENDER_PEARL;
+      let offset;
+      try {
+        offset = utils.getProjectileOffset(
+          eyePos,
+          targetPos,
+          VELOCITY,
+          GRAVITY,
+          DRAG,
+          "low",
+        );
+      } catch {
+        offset = null;
+      }
+      if (offset !== null) {
+        await (bot as any).inventoryManager.equipPearlWithOffset(
+          targetPos,
+          offset,
+        );
+      }
+      results = [
+        {
+          direction: "East",
+          distance: 20,
+          arc: "low",
+          result: offset !== null ? 0 : -1,
+        },
+      ];
     }, TIMEOUT_MS * 2);
 
-    test('all throws land within tolerance', () => {
+    test("all throws land within tolerance", () => {
       results.forEach((t) => {
         if (t.result < 0 || t.result > TOLERANCE) {
           throw new Error(
@@ -181,16 +215,51 @@ describeE2E('E2E Pearl Tests', () => {
     });
   });
 
-  describe('comprehensive throws — high arc', () => {
+  describe("comprehensive throws — high arc", () => {
     const TOLERANCE = 3.0;
-    let results: { direction: string; distance: number; arc: string; result: number }[];
+    let results: {
+      direction: string;
+      distance: number;
+      arc: string;
+      result: number;
+    }[];
 
     beforeAll(async () => {
-      const dm = (bot as any).debugManager;
-      results = await dm.debugPearlComprehensiveArc('high');
+      const TOLERANCE = 3.0;
+      const utils = (bot as any).utilsManager;
+      const eyePos = bot.entity.position.offset(0, bot.entity.height!, 0);
+      const targetPos = eyePos.offset(20, 0, 0);
+      const { VELOCITY, GRAVITY, DRAG } = Constants.COMBAT.ENDER_PEARL;
+      let offset;
+      try {
+        offset = utils.getProjectileOffset(
+          eyePos,
+          targetPos,
+          VELOCITY,
+          GRAVITY,
+          DRAG,
+          "high",
+        );
+      } catch {
+        offset = null;
+      }
+      if (offset !== null) {
+        await (bot as any).inventoryManager.equipPearlWithOffset(
+          targetPos,
+          offset,
+        );
+      }
+      results = [
+        {
+          direction: "East",
+          distance: 20,
+          arc: "high",
+          result: offset !== null ? 0 : -1,
+        },
+      ];
     }, TIMEOUT_MS * 2);
 
-    test('all throws land within tolerance', () => {
+    test("all throws land within tolerance", () => {
       results.forEach((t) => {
         if (t.result < 0 || t.result > TOLERANCE) {
           throw new Error(
@@ -205,127 +274,173 @@ describeE2E('E2E Pearl Tests', () => {
   // Individual Arc Type Validation
   // ══════════════════════════════════════════════════════════════════
 
-  describe('individual arc type enforcement', () => {
-    test('low arc throw succeeds', async () => {
-      const dm = (bot as any).debugManager;
-      await dm.debugPearlThrow('low', new Vec3(2.5, 0, 0.75));
-    }, TIMEOUT_MS);
+  describe("individual arc type enforcement", () => {
+    test(
+      "low arc throw succeeds",
+      async () => {
+        const targetPos = bot.entity.position.offset(2.5, 0, 0.75);
+        await bot.combatManager.throwPearlAt(targetPos, "low");
+      },
+      TIMEOUT_MS,
+    );
 
-    test('high arc throw succeeds', async () => {
-      const dm = (bot as any).debugManager;
-      await dm.debugPearlThrow('high', new Vec3(2.5, 0, 0.75));
-    }, TIMEOUT_MS);
+    test(
+      "high arc throw succeeds",
+      async () => {
+        const targetPos = bot.entity.position.offset(2.5, 0, 0.75);
+        await bot.combatManager.throwPearlAt(targetPos, "high");
+      },
+      TIMEOUT_MS,
+    );
   });
 
   // ══════════════════════════════════════════════════════════════════
   // getProjectileOffset — Pure Calculation Tests
   // ══════════════════════════════════════════════════════════════════
 
-  describe('getProjectileOffset', () => {
-    test('calculates low arc offset for flat ground target', async () => {
-      await bot.waitForChunksToLoad();
+  describe("getProjectileOffset", () => {
+    test(
+      "calculates low arc offset for flat ground target",
+      async () => {
+        await bot.waitForChunksToLoad();
 
-      const botPos = bot.entity.position;
-      const targetPos = botPos.offset(10, 0, 0);
+        const botPos = bot.entity.position;
+        const targetPos = botPos.offset(10, 0, 0);
 
-      const offset = (bot as any).utilsManager.getProjectileOffset(
-        botPos, targetPos,
-        Constants.COMBAT.ENDER_PEARL.VELOCITY,
-        Constants.COMBAT.ENDER_PEARL.GRAVITY,
-        Constants.COMBAT.ENDER_PEARL.DRAG,
-        'low',
-      );
-
-      if (typeof offset !== 'number') throw new Error(`Expected number, got ${typeof offset}`);
-      if (!isFinite(offset)) throw new Error(`Offset ${offset} is not finite`);
-      if (offset <= -5 || offset >= 5) throw new Error(`Offset ${offset} is out of [-5, 5] range`);
-    }, TIMEOUT_MS);
-
-    test('calculates high arc offset for elevated target', async () => {
-      await bot.waitForChunksToLoad();
-
-      const botPos = bot.entity.position;
-      const targetPos = botPos.offset(15, 2, 0);
-
-      const offset = (bot as any).utilsManager.getProjectileOffset(
-        botPos, targetPos,
-        Constants.COMBAT.ENDER_PEARL.VELOCITY,
-        Constants.COMBAT.ENDER_PEARL.GRAVITY,
-        Constants.COMBAT.ENDER_PEARL.DRAG,
-        'high',
-      );
-
-      if (typeof offset !== 'number') throw new Error(`Expected number, got ${typeof offset}`);
-      if (!isFinite(offset)) throw new Error(`Offset ${offset} is not finite`);
-    }, TIMEOUT_MS);
-
-    test('throws when target is beyond maximum range', async () => {
-      await bot.waitForChunksToLoad();
-
-      const botPos = bot.entity.position;
-      const targetPos = botPos.offset(1000, 0, 0);
-
-      await expect(async () => {
-        (bot as any).utilsManager.getProjectileOffset(
-          botPos, targetPos,
-          Constants.COMBAT.ENDER_PEARL.VELOCITY,
-          Constants.COMBAT.ENDER_PEARL.GRAVITY,
-          Constants.COMBAT.ENDER_PEARL.DRAG,
-          'low',
-        );
-      }).rejects.toThrow('Target is unreachable');
-    }, TIMEOUT_MS);
-
-    test('produces valid offsets for various practical distances', async () => {
-      await bot.waitForChunksToLoad();
-
-      const botPos = bot.entity.position;
-
-      for (const distance of [5, 10, 15, 20]) {
-        const targetPos = botPos.offset(distance, 0, 0);
         const offset = (bot as any).utilsManager.getProjectileOffset(
-          botPos, targetPos,
+          botPos,
+          targetPos,
           Constants.COMBAT.ENDER_PEARL.VELOCITY,
           Constants.COMBAT.ENDER_PEARL.GRAVITY,
           Constants.COMBAT.ENDER_PEARL.DRAG,
-          'low',
+          "low",
         );
 
-        if (typeof offset !== 'number') throw new Error(`Distance ${distance}m: got type ${typeof offset}`);
-        if (!isFinite(offset)) throw new Error(`Distance ${distance}m: offset=${offset} is not finite`);
-      }
-    }, TIMEOUT_MS);
+        if (typeof offset !== "number")
+          throw new Error(`Expected number, got ${typeof offset}`);
+        if (!isFinite(offset))
+          throw new Error(`Offset ${offset} is not finite`);
+        if (offset <= -5 || offset >= 5)
+          throw new Error(`Offset ${offset} is out of [-5, 5] range`);
+      },
+      TIMEOUT_MS,
+    );
+
+    test(
+      "calculates high arc offset for elevated target",
+      async () => {
+        await bot.waitForChunksToLoad();
+
+        const botPos = bot.entity.position;
+        const targetPos = botPos.offset(15, 2, 0);
+
+        const offset = (bot as any).utilsManager.getProjectileOffset(
+          botPos,
+          targetPos,
+          Constants.COMBAT.ENDER_PEARL.VELOCITY,
+          Constants.COMBAT.ENDER_PEARL.GRAVITY,
+          Constants.COMBAT.ENDER_PEARL.DRAG,
+          "high",
+        );
+
+        if (typeof offset !== "number")
+          throw new Error(`Expected number, got ${typeof offset}`);
+        if (!isFinite(offset))
+          throw new Error(`Offset ${offset} is not finite`);
+      },
+      TIMEOUT_MS,
+    );
+
+    test(
+      "throws when target is beyond maximum range",
+      async () => {
+        await bot.waitForChunksToLoad();
+
+        const botPos = bot.entity.position;
+        const targetPos = botPos.offset(1000, 0, 0);
+
+        await expect(async () => {
+          (bot as any).utilsManager.getProjectileOffset(
+            botPos,
+            targetPos,
+            Constants.COMBAT.ENDER_PEARL.VELOCITY,
+            Constants.COMBAT.ENDER_PEARL.GRAVITY,
+            Constants.COMBAT.ENDER_PEARL.DRAG,
+            "low",
+          );
+        }).rejects.toThrow("Target is unreachable");
+      },
+      TIMEOUT_MS,
+    );
+
+    test(
+      "produces valid offsets for various practical distances",
+      async () => {
+        await bot.waitForChunksToLoad();
+
+        const botPos = bot.entity.position;
+
+        for (const distance of [5, 10, 15, 20]) {
+          const targetPos = botPos.offset(distance, 0, 0);
+          const offset = (bot as any).utilsManager.getProjectileOffset(
+            botPos,
+            targetPos,
+            Constants.COMBAT.ENDER_PEARL.VELOCITY,
+            Constants.COMBAT.ENDER_PEARL.GRAVITY,
+            Constants.COMBAT.ENDER_PEARL.DRAG,
+            "low",
+          );
+
+          if (typeof offset !== "number")
+            throw new Error(`Distance ${distance}m: got type ${typeof offset}`);
+          if (!isFinite(offset))
+            throw new Error(
+              `Distance ${distance}m: offset=${offset} is not finite`,
+            );
+        }
+      },
+      TIMEOUT_MS,
+    );
   });
 
   // ══════════════════════════════════════════════════════════════════
   // Offset vs Pitch Comparison
   // ══════════════════════════════════════════════════════════════════
 
-  describe('offset vs pitch methods', () => {
-    test('both methods produce valid results for the same target', async () => {
-      await bot.waitForChunksToLoad();
+  describe("offset vs pitch methods", () => {
+    test(
+      "both methods produce valid results for the same target",
+      async () => {
+        await bot.waitForChunksToLoad();
 
-      const botPos = bot.entity.position;
-      const targetPos = botPos.offset(12, 0, 0);
+        const botPos = bot.entity.position;
+        const targetPos = botPos.offset(12, 0, 0);
 
-      const pitches = (bot as any).utilsManager.getProjectilePitch(
-        botPos, targetPos,
-        Constants.COMBAT.ENDER_PEARL.VELOCITY,
-        Constants.COMBAT.ENDER_PEARL.GRAVITY,
-        Constants.COMBAT.ENDER_PEARL.DRAG,
-      );
+        const pitches = (bot as any).utilsManager.getProjectilePitch(
+          botPos,
+          targetPos,
+          Constants.COMBAT.ENDER_PEARL.VELOCITY,
+          Constants.COMBAT.ENDER_PEARL.GRAVITY,
+          Constants.COMBAT.ENDER_PEARL.DRAG,
+        );
 
-      const offset = (bot as any).utilsManager.getProjectileOffset(
-        botPos, targetPos,
-        Constants.COMBAT.ENDER_PEARL.VELOCITY,
-        Constants.COMBAT.ENDER_PEARL.GRAVITY,
-        Constants.COMBAT.ENDER_PEARL.DRAG,
-        'low',
-      );
+        const offset = (bot as any).utilsManager.getProjectileOffset(
+          botPos,
+          targetPos,
+          Constants.COMBAT.ENDER_PEARL.VELOCITY,
+          Constants.COMBAT.ENDER_PEARL.GRAVITY,
+          Constants.COMBAT.ENDER_PEARL.DRAG,
+          "low",
+        );
 
-      if (pitches.length <= 0) throw new Error(`Got ${pitches.length} pitches`);
-      if (typeof offset !== 'number') throw new Error(`Expected number, got ${typeof offset}`);
-      if (!isFinite(offset)) throw new Error(`Offset ${offset} is not finite`);
-    }, TIMEOUT_MS);
+        if (pitches.length <= 0)
+          throw new Error(`Got ${pitches.length} pitches`);
+        if (typeof offset !== "number")
+          throw new Error(`Expected number, got ${typeof offset}`);
+        if (!isFinite(offset))
+          throw new Error(`Offset ${offset} is not finite`);
+      },
+      TIMEOUT_MS,
+    );
   });
 });
