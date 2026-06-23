@@ -1,7 +1,28 @@
-import { Vec3 } from 'vec3';
-import { Constants } from './constants';
-import type { Bot } from 'mineflayer';
-import type { Entity } from 'prismarine-entity';
+import { Vec3 } from "vec3";
+import { Constants } from "./constants";
+import type { Bot } from "mineflayer";
+import type { Entity } from "prismarine-entity";
+import {
+  getProjectilePitch,
+  getProjectileOffset,
+  isProjectilePathClear,
+  getBestPearlTrajectory,
+  type PearlTrajectoryResult,
+} from "./projectile";
+import {
+  isJumpPathClear,
+  getJumpVelocity,
+  getStrafePoint,
+  getStrafeYaw,
+  getHorizontalSpeed,
+  getGroundJumpSpeed,
+  getFlatVelocity,
+  getCollisions,
+  getSolidBlocks,
+  clearSolidCache,
+  getGroundBelow,
+  getFallDamage,
+} from "./movement";
 
 /**
  * @fileoverview Utility functions for Pupa bot.
@@ -73,6 +94,101 @@ export class AABB {
   }
 
   /**
+   * Check whether a ray (origin, direction) intersects this AABB.
+   * Uses the slab method. Direction need not be normalized.
+   * Returns true if the ray hits the box at t > 0 (forward intersection).
+   */
+  /**
+   * Ray-AABB intersection (slab method).
+   * Returns the parametric distance t_near to the first forward hit,
+   * or Infinity if the ray does not intersect the box.
+   * A point is blocked only if t_near < distance(origin, point).
+   */
+  rayHitT(origin: Vec3, dir: Vec3): number {
+    let tmin = -Infinity;
+    let tmax = Infinity;
+
+    if (Math.abs(dir.x) < EPS) {
+      if (origin.x < this.minX || origin.x > this.maxX) return Infinity;
+    } else {
+      const t1 = (this.minX - origin.x) / dir.x;
+      const t2 = (this.maxX - origin.x) / dir.x;
+      tmin = Math.max(tmin, Math.min(t1, t2));
+      tmax = Math.min(tmax, Math.max(t1, t2));
+    }
+
+    if (Math.abs(dir.y) < EPS) {
+      if (origin.y < this.minY || origin.y > this.maxY) return Infinity;
+    } else {
+      const t1 = (this.minY - origin.y) / dir.y;
+      const t2 = (this.maxY - origin.y) / dir.y;
+      tmin = Math.max(tmin, Math.min(t1, t2));
+      tmax = Math.min(tmax, Math.max(t1, t2));
+    }
+
+    if (Math.abs(dir.z) < EPS) {
+      if (origin.z < this.minZ || origin.z > this.maxZ) return Infinity;
+    } else {
+      const t1 = (this.minZ - origin.z) / dir.z;
+      const t2 = (this.maxZ - origin.z) / dir.z;
+      tmin = Math.max(tmin, Math.min(t1, t2));
+      tmax = Math.min(tmax, Math.max(t1, t2));
+    }
+
+    const tNear = Math.max(tmin, 0);
+    if (tmax >= tNear + EPS) return tNear;
+    return Infinity;
+  }
+
+  /**
+   * Check whether a ray (origin, direction) intersects this AABB
+   * at any forward distance. Convenience wrapper for rayHitT.
+   */
+  intersectsRay(origin: Vec3, dir: Vec3): boolean {
+    return this.rayHitT(origin, dir) < Infinity;
+  }
+
+  /**
+   * Ray-AABB intersection returning both t_near and t_far.
+   * Returns [Infinity, Infinity] if no intersection.
+   */
+  rayHitTFar(origin: Vec3, dir: Vec3): [number, number] {
+    let tmin = -Infinity;
+    let tmax = Infinity;
+    if (Math.abs(dir.x) < EPS) {
+      if (origin.x < this.minX || origin.x > this.maxX)
+        return [Infinity, Infinity];
+    } else {
+      const t1 = (this.minX - origin.x) / dir.x;
+      const t2 = (this.maxX - origin.x) / dir.x;
+      tmin = Math.max(tmin, Math.min(t1, t2));
+      tmax = Math.min(tmax, Math.max(t1, t2));
+    }
+    if (Math.abs(dir.y) < EPS) {
+      if (origin.y < this.minY || origin.y > this.maxY)
+        return [Infinity, Infinity];
+    } else {
+      const t1 = (this.minY - origin.y) / dir.y;
+      const t2 = (this.maxY - origin.y) / dir.y;
+      tmin = Math.max(tmin, Math.min(t1, t2));
+      tmax = Math.min(tmax, Math.max(t1, t2));
+    }
+    if (Math.abs(dir.z) < EPS) {
+      if (origin.z < this.minZ || origin.z > this.maxZ)
+        return [Infinity, Infinity];
+    } else {
+      const t1 = (this.minZ - origin.z) / dir.z;
+      const t2 = (this.maxZ - origin.z) / dir.z;
+      tmin = Math.max(tmin, Math.min(t1, t2));
+      tmax = Math.min(tmax, Math.max(t1, t2));
+    }
+    const tNear = Math.max(tmin, 0);
+    if (tmax >= tNear + EPS) return [tNear, tmax];
+    return [Infinity, Infinity];
+  }
+
+  /**
+   * Check whether a ray (origin, direction) intersects this AABB
    * Check whether this AABB intersects another with EPS tolerance.
    */
   intersects(other: AABB): boolean {
@@ -89,10 +205,6 @@ export class AABB {
   /**
    * Compute the maximum X displacement before colliding with `other`.
    * Returns dx unchanged if no collision.
-   * @param other - The other AABB
-   * @param dx - Desired X displacement
-   * @param margin - Tolerance for overlap checks
-   * @returns Adjusted displacement
    */
   calculateXOffset(other: AABB, dx: number, margin = 0): number {
     if (other.maxY <= this.minY - margin || other.minY >= this.maxY + margin)
@@ -112,10 +224,6 @@ export class AABB {
   /**
    * Compute the maximum Y displacement before colliding with `other`.
    * Returns dy unchanged if no collision.
-   * @param other - The other AABB
-   * @param dy - Desired Y displacement
-   * @param margin - Tolerance for overlap checks
-   * @returns Adjusted displacement
    */
   calculateYOffset(other: AABB, dy: number, margin = 0): number {
     if (other.maxX <= this.minX - margin || other.minX >= this.maxX + margin)
@@ -135,10 +243,6 @@ export class AABB {
   /**
    * Compute the maximum Z displacement before colliding with `other`.
    * Returns dz unchanged if no collision.
-   * @param other - The other AABB
-   * @param dz - Desired Z displacement
-   * @param margin - Tolerance for overlap checks
-   * @returns Adjusted displacement
    */
   calculateZOffset(other: AABB, dz: number, margin = 0): number {
     if (other.maxX <= this.minX - margin || other.minX >= this.maxX + margin)
@@ -176,25 +280,6 @@ interface WithStrafeOptions {
   strength?: number;
 }
 
-interface SolidCacheEntry {
-  solids: Vec3[];
-  expiry: number;
-}
-
-/** Result of the best pearl trajectory calculation */
-export interface PearlTrajectoryResult {
-  /** The pitch angle (degrees) to use */
-  pitch: number;
-  /** Which arc this pitch corresponds to */
-  arc: 'low' | 'high';
-  /** Total flight time in ticks */
-  flightTime: number;
-  /** The actual landing point of the projectile */
-  landingPoint: Vec3;
-  /** Distance from the landing point to the desired target */
-  landingDist: number;
-}
-
 export class UtilsManager {
   bot: Bot;
   isNewSlipperiness: boolean;
@@ -203,23 +288,24 @@ export class UtilsManager {
   momentumThreshold: number;
   applyEffects: boolean;
   _solidCacheMaxSize: number;
-  _solidCache: Map<string, SolidCacheEntry>;
+  _solidCache: Map<string, { solids: Vec3[]; expiry: number }>;
   recentPoints: Vec3[];
   recentPointsMax: number;
   liquidBlockIds: Set<number>;
   lastImpulseTick?: number;
   logger: any;
+  _obstacles: AABB[];
 
   constructor(bot: Bot) {
     this.bot = bot;
     this.logger = bot.__logger || console;
 
-    if (typeof this.bot.chat === 'function') {
+    if (typeof this.bot.chat === "function") {
       this.bot._originalChat = this.bot.chat.bind(this.bot);
     }
-    this.isNewSlipperiness = this._compareVersion(bot.version, '1.15') >= 0;
-    this.isNewCollision = this._compareVersion(bot.version, '1.14') >= 0;
-    this.isNewThreshold = this._compareVersion(bot.version, '1.9') >= 0;
+    this.isNewSlipperiness = this._compareVersion(bot.version, "1.15") >= 0;
+    this.isNewCollision = this._compareVersion(bot.version, "1.14") >= 0;
+    this.isNewThreshold = this._compareVersion(bot.version, "1.9") >= 0;
     this.momentumThreshold = this.isNewThreshold
       ? Constants.PHYSICS.MOMENTUM_THRESHOLD_1_9
       : Constants.PHYSICS.MOMENTUM_THRESHOLD_1_8;
@@ -229,17 +315,13 @@ export class UtilsManager {
     this.recentPoints = [];
     this.recentPointsMax = Constants.MOVEMENT.STRAFE_POINTS_MAX_HISTORY;
     this.liquidBlockIds = new Set();
+    this._obstacles = [];
     this._initializeLiquidCache();
   }
 
-  /**
-   * Compare two semantic version strings.
-   * @returns 1 if v1 > v2, -1 if v1 < v2, 0 if equal
-   * @private
-   */
   private _compareVersion(v1: string, v2: string): number {
-    const a = v1.split('.').map(Number);
-    const b = v2.split('.').map(Number);
+    const a = v1.split(".").map(Number);
+    const b = v2.split(".").map(Number);
     for (let i = 0; i < Math.max(a.length, b.length); i++) {
       if ((a[i] || 0) > (b[i] || 0)) return 1;
       if ((a[i] || 0) < (b[i] || 0)) return -1;
@@ -247,10 +329,6 @@ export class UtilsManager {
     return 0;
   }
 
-  /**
-   * Pre-compute the set of liquid block IDs for fast lookup.
-   * @private
-   */
   private _initializeLiquidCache(): void {
     const names = Constants.BLOCK_DETECTION.LIQUID_BLOCK_NAMES;
     const registry = this.bot.registry;
@@ -260,12 +338,6 @@ export class UtilsManager {
     }
   }
 
-  /**
-   * Get the slipperiness factor of the block below the bot.
-   * Returns AIRBORNE (1.0) when not on ground.
-   * @param pos - Position to check below
-   * @returns Slipperiness factor
-   */
   getSlipperiness(pos: Vec3): number {
     const entity = this.bot.entity as any;
     if (!entity.onGround) return Constants.PHYSICS.SLIPPERINESS.AIRBORNE;
@@ -274,50 +346,31 @@ export class UtilsManager {
     const block = this.bot.blockAt(blockPos);
     if (!block) return Constants.PHYSICS.SLIPPERINESS.DEFAULT;
     switch (block.name) {
-      case 'slime_block':
+      case "slime_block":
         return Constants.PHYSICS.SLIPPERINESS.SLIME;
-      case 'ice':
-      case 'packed_ice':
+      case "ice":
+      case "packed_ice":
         return Constants.PHYSICS.SLIPPERINESS.ICE;
-      case 'blue_ice':
+      case "blue_ice":
         return Constants.PHYSICS.SLIPPERINESS.BLUE_ICE;
       default:
         return Constants.PHYSICS.SLIPPERINESS.DEFAULT;
     }
   }
 
-  /**
-   * Compute the Effects Multiplier (E₂) per the parkour movement formula.
-   *
-   *   E₂ = (1 + 0.2 × Speed_Level) × (1 - 0.15 × Slowness_Level) ≥ 0
-   *
-   * Effect IDs: Speed = 1, Slowness = 2.
-   * Amplifier is 0-indexed in the Minecraft protocol, so we add 1 to get the effective level.
-   *
-   * NOTE: This method is gated behind `this.applyEffects`, which defaults to false.
-   * Speed/Slowness effects will NOT affect movement until `this.applyEffects` is set to true.
-   * @returns Effects multiplier value
-   */
   getEffectsMultiplier(): number {
     const effects = (this.bot.entity as any).effects as Record<
       string,
       { amplifier: number } | undefined
     >;
-    const speedAmp = effects['1'];
-    const slowAmp = effects['2'];
+    const speedAmp = effects["1"];
+    const slowAmp = effects["2"];
     const speedLevel = speedAmp ? speedAmp.amplifier + 1 : 0;
     const slowLevel = slowAmp ? slowAmp.amplifier + 1 : 0;
     const multiplier = (1 + 0.2 * speedLevel) * (1 - 0.15 * slowLevel);
     return Math.max(0, multiplier);
   }
 
-  /**
-   * Simulate a full Minecraft physics tick (ground or air).
-   * Applies acceleration, movement, gravity, drag, and the sprint-jump boost.
-   * @param state - Current bot state
-   * @param inputs - Player inputs
-   * @returns New state after the tick
-   */
   simulateTick(
     state: SimulateTickState,
     inputs: SimulateInputs,
@@ -371,23 +424,15 @@ export class UtilsManager {
     return { pos: nextPos, vel, onGround: entity.onGround };
   }
 
-  /**
-   * Apply a velocity impulse to the bot entity.
-   * Debounces to once per tick unless `force` is true.
-   * @param impulse - Velocity vector to apply
-   * @param mode - Whether to add to or replace current velocity
-   * @param force - Skip the once-per-tick debounce
-   */
   applyImpulse(
     impulse: Vec3,
-    mode: 'add' | 'set' = 'add',
+    mode: "add" | "set" = "add",
     force = false,
   ): void {
-    // mineflayer plugin property access
     const currentTick = (this.bot.time as any).age;
     if (!force && this.lastImpulseTick === currentTick) return;
     const entity = this.bot.entity as any;
-    if (mode === 'add') {
+    if (mode === "add") {
       entity.velocity.add(impulse);
     } else {
       entity.velocity.set(impulse.x, impulse.y, impulse.z);
@@ -395,18 +440,10 @@ export class UtilsManager {
     this.lastImpulseTick = currentTick;
   }
 
-  /**
-   * Get projectile pitch angles for reaching a target.
-   * @param source - Launch position
-   * @param target - Target position
-   * @param v - Initial projectile speed
-   * @param g - Gravity acceleration
-   * @param drag - Per-tick velocity multiplier
-   * @returns Pitches in degrees (low arc first, then high arc), empty if unreachable
-   *
-   * The returned array has pitches sorted: [lowArc, highArc] where lowArc > highArc numerically
-   * (low arc = steeper angle downward = larger pitch value).
-   */
+  // ---------------------------------------------------------------------------
+  // Projectile physics — delegated to projectile.ts
+  // ---------------------------------------------------------------------------
+
   getProjectilePitch(
     source: Vec3,
     target: Vec3,
@@ -414,280 +451,20 @@ export class UtilsManager {
     g: number,
     drag = 1,
   ): number[] {
-    const dx = target.x - source.x;
-    const dz = target.z - source.z;
-    const x = Math.sqrt(dx * dx + dz * dz);
-    const y = target.y - source.y;
-    const v2 = v * v;
-    const v4 = v2 * v2;
-    const root = v4 - g * (g * x * x + 2 * y * v2);
-    if (root < 0) {
-      this.logger?.debug?.('getProjectilePitch: target unreachable (negative discriminant)');
-      return [];
-    }
-    const rootSq = Math.sqrt(root);
-    const lowArc = Math.atan((v2 - rootSq) / (g * x));
-    const highArc = Math.atan((v2 + rootSq) / (g * x));
-    // lowArc < highArc mathematically
-    // pitches[0] = low arc (shallower angle, lower pitch value)
-    // pitches[1] = high arc (steeper angle, higher pitch value)
-    const pitches = [(lowArc * 180) / Math.PI, (highArc * 180) / Math.PI];
-    const getDistanceAtY = (p: number): number => {
-      let currX = 0;
-      let currY = 0;
-      let velX = v * Math.cos((p * Math.PI) / 180);
-      let velY = v * Math.sin((p * Math.PI) / 180);
-      for (let i = 0; i < 200; i++) {
-        currX += velX;
-        currY += velY;
-        velX *= drag;
-        velY = velY * drag - g;
-        if (currY <= y && velY < 0) return currX;
-      }
-      return currX;
-    };
-    const refine = (p: number): number => {
-      let refinedP = p;
-      for (let i = 0; i < 5; i++) {
-        const d1 = getDistanceAtY(refinedP);
-        const err = x - d1;
-        if (Math.abs(err) < 0.1) break;
-        const delta = 0.1;
-        const d2 = getDistanceAtY(refinedP + delta);
-        const deriv = (d2 - d1) / delta;
-        refinedP += err / (deriv || 1);
-      }
-      return refinedP;
-    };
-    return pitches.map(refine);
+    return getProjectilePitch(source, target, v, g, drag);
   }
 
-  /**
-   * Calculate vertical offset for aiming at a target using projectile physics.
-   * This offset-based approach is more intuitive than angle-based aiming.
-   * 
-   * @param source - Eye position (projectile origin)
-   * @param target - Target position (where you want the projectile to land)
-   * @param v - Initial projectile speed (blocks per tick)
-   * @param g - Gravity acceleration (blocks per tick squared)
-   * @param drag - Per-tick velocity multiplier
-   * @param arcType - 'low' or 'high' arc trajectory
-   * @returns Vertical offset in blocks to aim at (add to target Y position)
-   *
-   * The offset represents how much to aim above/below the target.
-   * Positive offset = aim above target (for high arcs)
-   * Negative offset = aim below target (for low arcs)
-   */
   getProjectileOffset(
     source: Vec3,
     target: Vec3,
     v: number,
     g: number,
     drag = 1,
-    arcType: 'low' | 'high' = 'low'
+    arcType: "low" | "high" = "low",
   ): number {
-    const dx = target.x - source.x;
-    const dz = target.z - source.z;
-    const d = Math.sqrt(dx * dx + dz * dz);
-    const dy = target.y - source.y;
-
-    // When drag=1 the old parabolic formula applies; keep it for backwards compat
-    if (drag === 1) {
-      const v2 = v * v;
-      const v4 = v2 * v2;
-      const root = v4 - g * (g * d * d + 2 * dy * v2);
-      if (root < 0) {
-        throw new Error('Target is unreachable with given projectile parameters');
-      }
-      const rootSq = Math.sqrt(root);
-      const lowArcAngle = Math.atan((v2 - rootSq) / (g * d));
-      const highArcAngle = Math.atan((v2 + rootSq) / (g * d));
-      const angle = arcType === 'low' ? lowArcAngle : highArcAngle;
-      return d * Math.tan(angle);
-    }
-
-    // Equations of motion (per tick n):
-    //   x_n = v_x0 * (1 - c^n) / (1 - c)
-    //   y_n = v_y0 * (1 - c^n) / (1 - c) - g/(1-c) * (n - (1 - c^n)/(1 - c))
-    // where c = drag coefficient, g = gravity per tick.
-    //
-    // We binary-search on the aim offset H (vertical aim above target).
-    //   tan(θ) = H / d  →  v_x0 = v·cos(θ), v_y0 = v·sin(θ)
-    // From x_n = d we solve for n:
-    //   c^n = 1 - d(1-c)/v_x0
-    //   n = ln(1 - d(1-c)/v_x0) / ln(c)
-    // Then we evaluate y_n at that n and adjust H until y_n ≈ 0.
-    //
-    // The function is non-monotonic: low arcs have small H and high arcs have
-    // large H. For high arcs, find the second root by scanning from the low arc
-    // root until the trajectory crosses back down.
-
-    const c = drag;
-    const oneMinusC = 1 - c;
-    const lnC = Math.log(c);
-
-    if (c <= 0 || c >= 1) {
-      throw new Error('Target is unreachable with given projectile parameters');
-    }
-
-    // Helper: given H, compute the vertical position y at the tick where x = d
-    const verticalAtH = (H: number): number => {
-      const angle = Math.atan2(H, d);
-      const vx0 = v * Math.cos(angle);
-      const vy0 = v * Math.sin(angle);
-
-      // Time of flight from horizontal distance
-      const cToN = 1 - (d * oneMinusC) / vx0;
-      if (cToN <= 0 || cToN >= 1) return Infinity; // unreachable
-      const n = Math.log(cToN) / lnC;
-
-      // Geometric series: S = (1 - c^n) / (1 - c)
-      const cPowN = Math.pow(c, n);
-      const S = (1 - cPowN) / oneMinusC;
-
-      // y_n = vy0 * S - g/(1-c) * (n - S)
-      // Subtract dy so the root finder finds H where the projectile
-      // reaches the target's actual Y level (not just y=0).
-      return vy0 * S - (g / oneMinusC) * (n - S) - dy;
-    };
-
-    const findRoot = (startLo: number, startHi: number): number => {
-      let lo = startLo;
-      let hi = startHi;
-      let yLo = verticalAtH(lo);
-      let yHi = verticalAtH(hi);
-
-      if (!isFinite(yLo) || !isFinite(yHi)) {
-        throw new Error('Target is unreachable with given projectile parameters');
-      }
-
-      for (let i = 0; i < 40 && yLo * yHi > 0; i++) {
-        hi *= 2;
-        yHi = verticalAtH(hi);
-        if (!isFinite(yHi)) {
-          throw new Error('Target is unreachable with given projectile parameters');
-        }
-      }
-
-      if (yLo * yHi > 0) {
-        throw new Error('Target is unreachable with given projectile parameters');
-      }
-
-      for (let i = 0; i < 100; i++) {
-        const mid = (lo + hi) / 2;
-        const yMid = verticalAtH(mid);
-        if (Math.abs(yMid) < 1e-6) return mid;
-        if (yMid * yLo < 0) {
-          hi = mid;
-          yHi = yMid;
-        } else {
-          lo = mid;
-          yLo = yMid;
-        }
-      }
-
-      return (lo + hi) / 2;
-    };
-
-    if (arcType === 'low') {
-      return findRoot(0, 1);
-    }
-
-    // For the high arc, we need the second root of verticalAtH — where the
-    // trajectory peaks and comes back down through y=0.  Scanning from just
-    // above the low root finds the wrong sign change (the initial upward
-    // crossing).  Instead, find the peak first, then scan downward from there.
-    const lowRoot = findRoot(0, 1);
-
-    // Find the peak: walk upward until verticalAtH starts decreasing.
-    let peakH = lowRoot;
-    let peakY = verticalAtH(peakH);
-    for (let h = Math.ceil(lowRoot) + 1; h < 10_000; h += 1) {
-      const y = verticalAtH(h);
-      if (!isFinite(y)) break;
-      if (y > peakY) {
-        peakH = h;
-        peakY = y;
-      } else {
-        break;
-      }
-    }
-
-    if (peakY <= 0) {
-      throw new Error('Target is unreachable with given projectile parameters');
-    }
-
-    // Scan from the peak to find where verticalAtH crosses zero on the way down.
-    let previousH = peakH;
-    let previousY = peakY;
-    for (let highH = peakH + 1; highH < 10_000; highH += 1) {
-      const highY = verticalAtH(highH);
-      if (!isFinite(highY)) break;
-      if (previousY * highY < 0) {
-        return findRoot(previousH, highH);
-      }
-      previousH = highH;
-      previousY = highY;
-    }
-
-    throw new Error('Target is unreachable with given projectile parameters');
+    return getProjectileOffset(source, target, v, g, drag, arcType);
   }
 
-  /**
-   * Simulate a projectile trajectory from source with given pitch and return
-   * the total flight time (ticks) and landing position (first tick where
-   * the projectile is within 1.0 block of the target).
-   *
-   * This does NOT check for obstacles; it purely computes the parabolic path.
-   * @param source - Launch position
-   * @param target - Target position (end-of-flight marker)
-   * @param v - Initial speed
-   * @param g - Gravity per tick
-   * @param p - Pitch in degrees
-   * @param drag - Per-tick velocity multiplier
-   * @returns { flightTime, landingPoint } or null if flight never reaches target vicinity
-   * @private
-   */
-  private _computeLandingInfo(
-    source: Vec3,
-    target: Vec3,
-    v: number,
-    g: number,
-    p: number,
-    drag: number,
-  ): { flightTime: number; landingPoint: Vec3 } | null {
-    const yaw = Math.atan2(target.x - source.x, target.z - source.z);
-    let currPos = source.clone();
-    let currVel = new Vec3(
-      v * Math.cos((p * Math.PI) / 180) * Math.sin(yaw),
-      v * Math.sin((p * Math.PI) / 180),
-      v * Math.cos((p * Math.PI) / 180) * Math.cos(yaw),
-    );
-    const maxTicks = 200;
-    for (let i = 0; i < maxTicks; i++) {
-      const nextPos = currPos.plus(currVel);
-      currPos = nextPos;
-      currVel.y = currVel.y * drag - g;
-      currVel.x *= drag;
-      currVel.z *= drag;
-      if (currPos.distanceTo(target) < 1.0)
-        return { flightTime: i + 1, landingPoint: currPos.clone() };
-      if (currPos.y < -64) break;
-    }
-    return null;
-  }
-
-  /**
-   * Check whether a projectile trajectory is clear of blocks and entities.
-   * Simulates the full flight path.
-   * @param source - Launch position
-   * @param target - Target position
-   * @param v - Initial projectile speed
-   * @param g - Gravity acceleration
-   * @param p - Pitch in degrees
-   * @param drag - Per-tick velocity multiplier
-   * @returns Whether the path is clear
-   */
   isProjectilePathClear(
     source: Vec3,
     target: Vec3,
@@ -696,59 +473,18 @@ export class UtilsManager {
     p: number,
     drag = 1,
   ): boolean {
-    const yaw = Math.atan2(target.x - source.x, target.z - source.z);
-    let currPos = source.clone();
-    let currVel = new Vec3(
-      v * Math.cos((p * Math.PI) / 180) * Math.sin(yaw),
-      v * Math.sin((p * Math.PI) / 180),
-      v * Math.cos((p * Math.PI) / 180) * Math.cos(yaw),
+    return isProjectilePathClear(
+      source,
+      target,
+      v,
+      g,
+      p,
+      drag,
+      (pos: Vec3) => this.bot.blockAt(pos),
+      Object.values(this.bot.entities),
     );
-    const maxTicks = 200;
-    for (let i = 0; i < maxTicks; i++) {
-      const nextPos = currPos.plus(currVel);
-      const block = this.bot.blockAt(nextPos);
-      if (
-        block &&
-        block.boundingBox !== 'empty' &&
-        this.isPointInBlock(nextPos, block)
-      )
-        return false;
-      const entities = Object.values(this.bot.entities).filter(
-        (e: Entity) =>
-          e.id !== this.bot.entity.id &&
-          e.position.distanceTo(nextPos) < ((e as any).width || 0.6),
-      );
-      if (entities.length > 0) return false;
-      currPos = nextPos;
-      currVel.y = currVel.y * drag - g;
-      currVel.x *= drag;
-      currVel.z *= drag;
-      if (currPos.distanceTo(target) < 1.0) return true;
-      if (currPos.y < -64) break;
-    }
-    return false;
   }
 
-  /**
-   * Best pearl trajectory calculation.
-   *
-   * Samples candidate landing points within a 1.5-block tolerance sphere centered
-   * on the target point, computes pitches for each candidate, checks whether each
-   * trajectory is unobstructed, then ranks by:
-   *  1) Unobstructed (clear paths before blocked ones)
-   *  2) Flight time  (ascending  – faster is better)
-   *  3) Landing distance to original target (ascending – more precise is better)
-   *
-   * @param source - Launch position (eye position of the thrower)
-   * @param target - Desired target position
-   * @param velocity - Initial projectile speed (default: ender pearl 1.5)
-   * @param gravity  - Gravity acceleration per tick (default: 0.03)
-   * @param drag     - Per-tick velocity multiplier (default: 0.99)
-   * @param toleranceRadius - Sampling radius around the target (default: 1.5)
-   * @param sampleStep       - Grid step size for candidate generation (default: 1.0)
-   * @returns The best trajectory result, or null if no candidate trajectory
-   *          (not even the direct target) is reachable.
-   */
   getBestPearlTrajectory(
     source: Vec3,
     target: Vec3,
@@ -758,145 +494,202 @@ export class UtilsManager {
     toleranceRadius: number = 1.5,
     sampleStep: number = 1.0,
   ): PearlTrajectoryResult | null {
-    const candidates: Array<{
-      point: Vec3;
-      pitch: number;
-      arc: 'low' | 'high';
-      blocked: boolean;
-      flightTime: number;
-      landingPoint: Vec3;
-      landingDist: number;
-    }> = [];
+    return getBestPearlTrajectory(
+      source,
+      target,
+      velocity,
+      gravity,
+      drag,
+      toleranceRadius,
+      sampleStep,
+      (pos: Vec3) => this.bot.blockAt(pos),
+      Object.values(this.bot.entities),
+    );
+  }
 
-    // Determine the number of integer-valued offset steps that fit inside the radius
-    const maxOffset = Math.floor(toleranceRadius / sampleStep);
-    const offsets: number[] = [];
-    for (let d = -maxOffset; d <= maxOffset; d++) {
-      const o = d * sampleStep;
-      // Always include the exact target (o = 0) and keep the list small
-      offsets.push(o);
-    }
-    // Ensure 0 is always present (maxOffset >= 1 for radius >= step, which is typical)
-    if (!offsets.includes(0)) offsets.push(0);
+  // ---------------------------------------------------------------------------
+  // Movement physics — delegated to movement.ts
+  // ---------------------------------------------------------------------------
 
-    const candidateTargets: Vec3[] = [];
-    for (const dx of offsets) {
-      for (const dy of offsets) {
-        for (const dz of offsets) {
-          const distSq = dx * dx + dy * dy + dz * dz;
-          if (distSq > toleranceRadius * toleranceRadius + 1e-9) continue;
-          candidateTargets.push(
-            new Vec3(target.x + dx, target.y + dy, target.z + dz),
-          );
-        }
-      }
-    }
+  isJumpPathClear(source: Vec3, target: Vec3): boolean {
+    return isJumpPathClear(
+      source,
+      target,
+      (pos: Vec3) => this.getSlipperiness(pos),
+      (aabb: AABB, minY: number) => this.getCollisions(aabb, minY),
+      this.bot.entity as any,
+      this.momentumThreshold,
+    );
+  }
 
-    for (const candidateTarget of candidateTargets) {
-      const pitches = this.getProjectilePitch(
-        source,
-        candidateTarget,
-        velocity,
-        gravity,
-        drag,
-      );
+  getJumpVelocity(
+    source: Vec3,
+    target: Vec3,
+    angleDeg = 0,
+    isStrafe = false,
+  ): Vec3 {
+    return getJumpVelocity(
+      source,
+      target,
+      angleDeg,
+      isStrafe,
+      (pos: Vec3) => this.getSlipperiness(pos),
+      () => this.getHorizontalSpeed(),
+    );
+  }
 
-      for (let i = 0; i < pitches.length; i++) {
-        const pitch = pitches[i];
-        const arc: 'low' | 'high' = i === 0 ? 'low' : 'high';
+  getStrafePoint(source: Vec3, candidate: Vec3, pvpTarget?: Vec3): Vec3 | null {
+    return getStrafePoint(
+      source,
+      candidate,
+      pvpTarget || (this.bot.entity as any).position,
+      (pos: Vec3) => this.getSolidBlocks(pos),
+      (a: Vec3, b: Vec3) => this.isJumpPathClear(a, b),
+      this.recentPoints,
+      this.recentPointsMax,
+      pvpTarget,
+      this._obstacles,
+    );
+  }
 
-        const blocked = !this.isProjectilePathClear(
-          source,
-          candidateTarget,
-          velocity,
-          gravity,
-          pitch,
-          drag,
-        );
+  getStrafeYaw(playerPos: Vec3, targetPos: Vec3, direction: number): number {
+    return getStrafeYaw(playerPos, targetPos, direction);
+  }
 
-        if (blocked) {
-          // Still record the blocked entry so it ranks below all clear paths
-          candidates.push({
-            point: candidateTarget,
-            pitch,
-            arc,
-            blocked: true,
-            flightTime: Infinity,
-            landingPoint: candidateTarget.clone(),
-            landingDist: Infinity,
-          });
-          continue;
-        }
+  getHorizontalSpeed(): number {
+    return getHorizontalSpeed(this.bot.entity as any);
+  }
 
-        // Compute flight time and actual landing position
-        const info = this._computeLandingInfo(
-          source,
-          candidateTarget,
-          velocity,
-          gravity,
-          pitch,
-          drag,
-        );
+  getGroundJumpSpeed(source: Vec3): number {
+    return getGroundJumpSpeed(
+      source,
+      (pos: Vec3) => this.getSlipperiness(pos),
+      () => this.getHorizontalSpeed(),
+    );
+  }
 
-        if (!info) {
-          // Shouldn't happen for a pitch that came from getProjectilePitch, but be safe
-          candidates.push({
-            point: candidateTarget,
-            pitch,
-            arc,
-            blocked: true,
-            flightTime: Infinity,
-            landingPoint: candidateTarget.clone(),
-            landingDist: Infinity,
-          });
-          continue;
-        }
+  getFlatVelocity(
+    source: Vec3,
+    target: Vec3,
+    angleDeg = 0,
+    speed: number = Constants.MOVEMENT.FLAT_VELOCITY_XZ,
+    vy = 0,
+  ): Vec3 {
+    return getFlatVelocity(source, target, angleDeg, speed, vy);
+  }
 
-        candidates.push({
-          point: candidateTarget,
-          pitch,
-          arc,
-          blocked: false,
-          flightTime: info.flightTime,
-          landingPoint: info.landingPoint,
-          landingDist: info.landingPoint.distanceTo(target),
-        });
-      }
-    }
+  getCollisions(aabb: AABB, minYThreshold = -Infinity): AABB[] {
+    return getCollisions(aabb, minYThreshold, (pos: Vec3) =>
+      this.bot.blockAt(pos),
+    );
+  }
 
-    // ---- 3. Rank: unobstructed (false < true) > low arc preferred > flightTime ASC > landingDist ASC ----
-    if (candidates.length === 0) return null;
+  getSolidBlocks(source: Vec3): Vec3[] {
+    return getSolidBlocks(
+      source,
+      Constants.MOVEMENT.SOLID_BLOCK_SEARCH_RADIUS,
+      (pos: Vec3) => this.bot.blockAt(pos),
+      (this.bot.entity as any).width,
+      this._solidCache,
+      this._solidCacheMaxSize,
+    );
+  }
 
-    candidates.sort((a, b) => {
-      // Clear paths first
-      if (a.blocked !== b.blocked) return a.blocked ? 1 : -1;
-      // Prefer low arc over high arc when both are available
-      if (a.arc !== b.arc) return a.arc === 'low' ? -1 : 1;
-      // Then fastest (shortest flight time)
-      if (a.flightTime !== b.flightTime) return a.flightTime - b.flightTime;
-      // Then most precise (closest to actual target)
-      return a.landingDist - b.landingDist;
-    });
-
-    const best = candidates[0];
-
-    if (best.blocked) return null;
-
-    return {
-      pitch: best.pitch,
-      arc: best.arc,
-      flightTime: best.flightTime,
-      landingPoint: best.landingPoint.clone(),
-      landingDist: best.landingDist,
-    };
+  clearSolidCache(): void {
+    clearSolidCache(this._solidCache);
   }
 
   /**
-   * Check whether a point is inside any shape of a block.
-   * @param point - World coordinates
-   * @param block - Block object with .shapes array
-   * @returns Whether the point is inside any shape
+   * Build obstacle AABBs from blocks surrounding the bot.
+   * Called each tick by CombatManager.doStrafe so that strafe points
+   * behind walls / inside blocks are rejected via raycast.
    */
+  updateObstacles(): void {
+    const entity = this.bot.entity as any;
+    const pos = entity.position;
+    const radius = Constants.MOVEMENT.SOLID_BLOCK_SEARCH_RADIUS;
+    const obstacles: AABB[] = [];
+    const minX = Math.floor(pos.x - radius);
+    const maxX = Math.floor(pos.x + radius);
+    const minZ = Math.floor(pos.z - radius);
+    const maxZ = Math.floor(pos.z + radius);
+    const minY = Math.floor(pos.y);
+    const maxY = Math.floor(pos.y + Constants.PHYSICS.PLAYER_HEIGHT);
+    for (let x = minX; x <= maxX; x++) {
+      for (let y = minY; y <= maxY; y++) {
+        for (let z = minZ; z <= maxZ; z++) {
+          const block = this.bot.blockAt(new Vec3(x, y, z));
+          if (block && block.boundingBox !== "empty" && block.shapes) {
+            for (const shape of block.shapes) {
+              obstacles.push(
+                new AABB(
+                  x + shape[0],
+                  y + shape[1],
+                  z + shape[2],
+                  x + shape[3],
+                  y + shape[4],
+                  z + shape[5],
+                ),
+              );
+            }
+          }
+        }
+      }
+    }
+    this._obstacles = obstacles;
+  }
+
+  getGroundBelow(): number {
+    return getGroundBelow(this.bot.entity.position, (pos: Vec3) =>
+      this.bot.blockAt(pos),
+    );
+  }
+
+  getFallDamage(distance: number): number {
+    return getFallDamage(distance);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Production testable action: jumpViaOffset
+  // ---------------------------------------------------------------------------
+
+  async jumpViaOffset(offset?: Vec3): Promise<number> {
+    const targetPos = offset
+      ? this.bot.entity.position.plus(offset)
+      : this.bot.entity.position.offset(0, 0, 0);
+    const jumpSource = this.bot.entity.position.clone();
+    const impulse = this.getJumpVelocity(jumpSource, targetPos);
+    if (!impulse) return -1;
+    const original = this.applyImpulse.bind(this);
+    const startTick = (this.bot.time as any).age;
+    this.applyImpulse = (imp: Vec3, mode = "add", force = false) => {
+      const r = original(imp, mode, force);
+      if ((this.bot.time as any).age - startTick >= 40) {
+        this.applyImpulse = original;
+      }
+      return r;
+    };
+    this.applyImpulse(impulse, "set", true);
+    await this.bot.waitForTicks!(1);
+    await this._waitUntilSettled();
+    const finalPos = this.bot.entity.position;
+    return Math.hypot(targetPos.x - finalPos.x, targetPos.z - finalPos.z);
+  }
+
+  private async _waitUntilSettled(): Promise<void> {
+    while (
+      !this.bot.entity.onGround ||
+      this.bot.entity.velocity.x !== 0 ||
+      this.bot.entity.velocity.z !== 0
+    ) {
+      await this.bot.waitForTicks!(1);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Block / entity utilities (retained)
+  // ---------------------------------------------------------------------------
+
   isPointInBlock(
     point: Vec3,
     block: { position: Vec3; shapes: number[][] },
@@ -918,9 +711,6 @@ export class UtilsManager {
     return false;
   }
 
-  /**
-   * Get the bounding box of an entity, defaulting to player dimensions for players.
-   */
   getEntityHitbox(entity: Entity): {
     minX: number;
     maxX: number;
@@ -932,7 +722,7 @@ export class UtilsManager {
     const entityAny = entity as any;
     let width = entityAny.width;
     let height = entityAny.height;
-    if (entity.type === 'player') {
+    if (entity.type === "player") {
       width = Constants.PHYSICS.PLAYER_WIDTH;
       height = Constants.PHYSICS.PLAYER_HEIGHT;
     }
@@ -947,16 +737,6 @@ export class UtilsManager {
     };
   }
 
-
-
-  /**
-   * Check whether a point is within a vertical cylinder.
-   * @param source - Center of cylinder base
-   * @param point - Point to test
-   * @param radius - Cylinder radius
-   * @param height - Cylinder height
-   * @returns Whether the point is inside the cylinder
-   */
   isInCylinder(
     source: Vec3,
     point: Vec3,
@@ -970,14 +750,6 @@ export class UtilsManager {
     return dx * dx + dz * dz <= radius * radius;
   }
 
-  /**
-   * Check whether the bot is inside a hazardous block (web, cactus, liquid).
-   * Samples multiple points across the bot's bounding box.
-   * @param source - Bot position
-   * @param height - Height to sample
-   * @param offset - Horizontal offset for corner points
-   * @returns The position of the hazard block, or false if clear
-   */
   isInUnwanted(
     source: Vec3,
     height: number = Constants.GEOMETRY.UNWANTED_CHECK_HEIGHT,
@@ -1012,13 +784,6 @@ export class UtilsManager {
     return false;
   }
 
-  /**
-   * Check whether the bot is inside a liquid block.
-   * @param source - Bot position
-   * @param height - Height to sample
-   * @param width - Entity width
-   * @returns Whether the bot is in liquid
-   */
   isInLiquid(
     source: Vec3,
     height: number = Constants.GEOMETRY.LIQUID_CHECK_HEIGHT,
@@ -1041,214 +806,6 @@ export class UtilsManager {
     return false;
   }
 
-  /**
-   * Get all block collision AABBs that intersect a given AABB.
-   * @param aabb - The query AABB
-   * @param minYThreshold - Minimum Y floor for block scanning
-   * @returns Array of collision AABBs
-   */
-  getCollisions(aabb: AABB, minYThreshold = -Infinity): AABB[] {
-    const collisions: AABB[] = [];
-    const minX = Math.floor(aabb.minX);
-    const maxX = Math.floor(aabb.maxX);
-    const minYActual = Math.floor(Math.max(aabb.minY, minYThreshold));
-    const maxY = Math.floor(aabb.maxY);
-    const minZ = Math.floor(aabb.minZ);
-    const maxZ = Math.floor(aabb.maxZ);
-    for (let x = minX; x <= maxX; x++) {
-      for (let y = minYActual; y <= maxY; y++) {
-        for (let z = minZ; z <= maxZ; z++) {
-          const block = this.bot.blockAt(new Vec3(x, y, z));
-          if (block && block.shapes && block.shapes.length > 0) {
-            if (
-              aabb.maxX <= x ||
-              aabb.minX >= x + 1 ||
-              aabb.maxY <= y ||
-              aabb.minY >= y + 1 ||
-              aabb.maxZ <= z ||
-              aabb.minZ >= z + 1
-            )
-              continue;
-            for (const shape of block.shapes) {
-              collisions.push(
-                new AABB(
-                  x + shape[0],
-                  y + shape[1],
-                  z + shape[2],
-                  x + shape[3],
-                  y + shape[4],
-                  z + shape[5],
-                ),
-              );
-            }
-          }
-        }
-      }
-    }
-    return collisions;
-  }
-
-  /**
-   * Simulate a sprint-jump trajectory and check whether it reaches the target without colliding.
-   * Uses the complete ground-to-air physics formulas with vertical/horizontal collision checks.
-   * @param source - Jump origin
-   * @param target - Target position
-   * @returns Whether the path is clear
-   */
-  isJumpPathClear(source: Vec3, target: Vec3): boolean {
-    const GRAVITY = Constants.PHYSICS.TICK_GRAVITY;
-    const DRAG = Constants.PHYSICS.TICK_DRAG;
-    const AIRBORNE_MOMENTUM = Constants.PHYSICS.MOMENTUM_CONSERVATION;
-    const St = this.getSlipperiness(source);
-    const Et = this.applyEffects ? this.getEffectsMultiplier() : 1.0;
-    const GROUND_MOMENTUM = St * AIRBORNE_MOMENTUM;
-    const Mt =
-      Constants.PHYSICS.ACCELERATION.SPRINT_MULTIPLIER *
-      Constants.PHYSICS.ACCELERATION.STRAFE_MULTIPLIER;
-    const GROUND_ACCEL = 0.1 * Mt * Et * Math.pow(0.6 / St, 3);
-    const AIR_ACCEL =
-      Constants.PHYSICS.ACCELERATION.AIR *
-      Constants.PHYSICS.ACCELERATION.SPRINT_MULTIPLIER;
-    const dx_tot = target.x - source.x;
-    const dz_tot = target.z - source.z;
-    const len = Math.hypot(dx_tot, dz_tot) || 1e-6;
-    const dirX = dx_tot / len;
-    const dirZ = dz_tot / len;
-    const entity = this.bot.entity as any;
-    const vH0 = Math.hypot(entity.velocity.x, entity.velocity.z);
-    const vH1 =
-      vH0 * GROUND_MOMENTUM +
-      GROUND_ACCEL +
-      Constants.PHYSICS.SPRINT_JUMP_BOOST;
-    let currPos = source.clone();
-    let currVel = new Vec3(
-      dirX * vH1,
-      Constants.PHYSICS.JUMP_VELOCITY,
-      dirZ * vH1,
-    );
-    const maxTicks = 40;
-    const distToTargetXZ = len;
-    const OVERLAP_MARGIN = 0.1;
-    for (let tick = 0; tick < maxTicks; tick++) {
-      if (Math.abs(currVel.x) < this.momentumThreshold) currVel.x = 0;
-      if (Math.abs(currVel.y) < this.momentumThreshold) currVel.y = 0;
-      if (Math.abs(currVel.z) < this.momentumThreshold) currVel.z = 0;
-      let playerAABB = new AABB(
-        currPos.x - 0.3,
-        currPos.y,
-        currPos.z - 0.3,
-        currPos.x + 0.3,
-        currPos.y + 1.8,
-        currPos.z + 0.3,
-      );
-      let moveAABB = playerAABB
-        .extend(currVel.x, currVel.y, currVel.z)
-        .expand(0.1);
-      let collisions = this.getCollisions(moveAABB, entity.position.y + 0.3);
-      for (const bb of collisions) {
-        if (moveAABB.intersects(bb)) {
-          return false;
-        }
-      }
-      let dy = currVel.y;
-      for (const bb of collisions)
-        dy = playerAABB.calculateYOffset(bb, dy, EPS);
-      if (currVel.y > 0 && Math.abs(dy - currVel.y) > EPS) currVel.y = 0;
-      else if (currVel.y < 0 && dy > currVel.y + EPS) {
-        const dist = Math.hypot(currPos.x - source.x, currPos.z - source.z);
-        if (dist >= distToTargetXZ - 0.6) return true;
-        return false;
-      }
-      currPos.y += dy;
-      playerAABB = playerAABB.offset(0, dy, 0);
-      let dx = currVel.x;
-      for (const bb of collisions)
-        dx = playerAABB.calculateXOffset(bb, dx, OVERLAP_MARGIN);
-      if (Math.abs(dx - currVel.x) > EPS) return false;
-      currPos.x += dx;
-      playerAABB = playerAABB.offset(dx, 0, 0);
-      let dz = currVel.z;
-      for (const bb of collisions)
-        dz = playerAABB.calculateZOffset(bb, dz, OVERLAP_MARGIN);
-      if (Math.abs(dz - currVel.z) > EPS) return false;
-      currPos.z += dz;
-      if (
-        Math.hypot(currPos.x - source.x, currPos.z - source.z) >= distToTargetXZ
-      )
-        return true;
-      currVel.y -= GRAVITY;
-      currVel.y *= DRAG;
-      if (currVel.y < Constants.PHYSICS.TERMINAL_VELOCITY_Y)
-        currVel.y = Constants.PHYSICS.TERMINAL_VELOCITY_Y;
-      currVel.x = currVel.x * AIRBORNE_MOMENTUM + dirX * AIR_ACCEL;
-      currVel.z = currVel.z * AIRBORNE_MOMENTUM + dirZ * AIR_ACCEL;
-      if (currPos.y < target.y - 2 && currVel.y < 0) break;
-    }
-    return false;
-  }
-
-  /**
-   * Find a valid strafe point (solid block surface) near the target.
-   * Filters by distance, path clearness, and spacing from recent points.
-   * @param source - Bot position
-   * @param target - Search center position
-   * @param pvpTarget - PVP target position (for attack range filtering)
-   * @returns The strafe point, or null if none found
-   */
-  getStrafePoint(source: Vec3, target: Vec3, pvpTarget?: Vec3): Vec3 | null {
-    const solids = this.getSolidBlocks(target);
-    const maxDist = Constants.MOVEMENT.STRAFE_POINT_MAX_DISTANCE;
-    const minSpacing = Constants.MOVEMENT.STRAFE_POINT_MIN_SPACING;
-    const sourceMinDist = Constants.MOVEMENT.STRAFE_POINT_SOURCE_MIN_DISTANCE;
-    const attackRange = Constants.COMBAT.ATTACK_RANGE + 0.5;
-    const prefMin = Constants.MOVEMENT.STRAFE_PREFERRED_MIN;
-    const prefMax = Constants.MOVEMENT.STRAFE_PREFERRED_MAX;
-    const dist2D = (a: Vec3, b: Vec3): number =>
-      Math.hypot(a.x - b.x, a.z - b.z);
-    if (solids.length === 0) return null;
-
-    let bestPoint: Vec3 | null = null;
-    let bestScore = -1; // -1=none, 0=acceptable, 1=preferred
-
-    for (const point of solids) {
-      if (dist2D(point, target) >= maxDist || dist2D(point, source) >= maxDist)
-        continue;
-      if (dist2D(point, source) < sourceMinDist) continue;
-      if (!this.isJumpPathClear(source, point)) continue;
-      if (this.recentPoints.some((rp) => dist2D(point, rp) <= minSpacing))
-        continue;
-
-      // Score the point by its distance to the PvP target.
-      // Preferred: 1-2 blocks away. Acceptable: within attack range.
-      let score = 0;
-      if (pvpTarget) {
-        const d = dist2D(point, pvpTarget);
-        if (d > attackRange) continue;
-        if (d >= prefMin && d <= prefMax) score = 1;
-      }
-
-      if (score > bestScore) {
-        bestScore = score;
-        bestPoint = point;
-      }
-    }
-
-    if (bestPoint) {
-      this.recentPoints.push(bestPoint);
-      if (this.recentPoints.length > this.recentPointsMax)
-        this.recentPoints.shift();
-      return bestPoint;
-    }
-    return null;
-  }
-
-  /**
-   * Check whether a rectangular column of space between source and target contains any solid blocks.
-   * Used as a coarse line-of-sight check.
-   * @param source - Start position
-   * @param target - End position
-   * @returns True if a block is in the way
-   */
   drawRectColLine(source: Vec3, target: Vec3): boolean {
     const dir = target.minus(source);
     const len = dir.norm();
@@ -1267,92 +824,6 @@ export class UtilsManager {
     return false;
   }
 
-  /**
-   * Find all walkable solid block surfaces within a radius of the source.
-   * Results are cached for SOLID_BLOCKS_CACHE_DURATION ms.
-   * @param source - Center position to search around
-   * @returns Array of surface-center positions
-   */
-  getSolidBlocks(source: Vec3): Vec3[] {
-    const now = Date.now();
-    const cacheKey = `${Math.floor(source.x)},${Math.floor(source.z)}`;
-
-    const cached = this._solidCache.get(cacheKey);
-    if (cached && now < cached.expiry) {
-      this._solidCache.delete(cacheKey);
-      this._solidCache.set(cacheKey, cached);
-      return cached.solids;
-    }
-
-    const solids: Vec3[] = [];
-    const radius = Constants.MOVEMENT.SOLID_BLOCK_SEARCH_RADIUS;
-    const startY = Math.floor(source.y);
-
-    for (let x = -radius; x <= radius; x++) {
-      for (let z = -radius; z <= radius; z++) {
-        for (
-          let y = startY;
-          y >= startY + Constants.BLOCK_DETECTION.MIN_WALKABLE_Y_OFFSET;
-          y--
-        ) {
-          const pos = new Vec3(source.x + x, y, source.z + z);
-          const block = this.bot.blockAt(pos);
-          const above = this.bot.blockAt(pos.offset(0, 1, 0));
-          if (
-            block &&
-            block.boundingBox !== 'empty' &&
-            (!above || above.boundingBox === 'empty')
-          ) {
-            const shape = block.shapes[0];
-            if (shape) {
-              const dx = Math.abs(
-                shape[Constants.SHAPE.MIN_X] - shape[Constants.SHAPE.MAX_X],
-              );
-              const dz = Math.abs(
-                shape[Constants.SHAPE.MIN_Z] - shape[Constants.SHAPE.MAX_Z],
-              );
-              if (
-                dx > (this.bot.entity as any).width &&
-                dz > (this.bot.entity as any).width
-              ) {
-                const yOff = Math.abs(
-                  shape[Constants.SHAPE.MIN_Y] - shape[Constants.SHAPE.MAX_Y],
-                );
-                solids.push(pos.offset(0.5, yOff, 0.5));
-                break;
-              }
-            }
-          }
-        }
-      }
-    }
-
-    if (this._solidCache.size >= this._solidCacheMaxSize) {
-      const oldestKey = this._solidCache.keys().next().value;
-      if (oldestKey !== undefined) this._solidCache.delete(oldestKey);
-    }
-    this._solidCache.set(cacheKey, {
-      solids,
-      expiry: now + Constants.BLOCK_DETECTION.SOLID_BLOCKS_CACHE_DURATION,
-    });
-
-    return solids;
-  }
-
-  /**
-   * Clear the solid blocks LRU cache.
-   */
-  clearSolidCache(): void {
-    this._solidCache.clear();
-  }
-
-  /**
-   * Blends the current velocity toward a target yaw+speed using a strength factor,
-   * mirroring LiquidBounce's `Vec3.withStrafe()`.
-   * @param velocity - Current velocity vector
-   * @param options - Options with yaw, speed, strength
-   * @returns New velocity vector (vertical component preserved)
-   */
   withStrafe(
     velocity: Vec3,
     { yaw, speed, strength = 1.0 }: WithStrafeOptions,
@@ -1369,175 +840,10 @@ export class UtilsManager {
       prevZ + Math.cos(yaw) * used,
     );
   }
-
-  /**
-   * Computes the Minecraft yaw for strafing perpendicular to a target.
-   * @param playerPos - Bot position
-   * @param targetPos - Target position
-   * @param direction - Strafe direction (+1 = right, -1 = left)
-   * @returns Minecraft yaw (radians) for the strafe direction
-   */
-  getStrafeYaw(playerPos: Vec3, targetPos: Vec3, direction: number): number {
-    const dx = targetPos.x - playerPos.x;
-    const dz = targetPos.z - playerPos.z;
-    const minecraftYawToTarget = Math.atan2(-dx, dz);
-    return minecraftYawToTarget + direction * (Math.PI / 2);
-  }
-
-  /**
-   * Get the horizontal speed of the bot entity.
-   * @returns Horizontal speed
-   */
-  getHorizontalSpeed(): number {
-    const entity = this.bot.entity as any;
-    return Math.hypot(entity.velocity.x, entity.velocity.z);
-  }
-
-  /**
-   * Get the ground-inertia-adjusted jump speed (pre-drag) for the current ground surface.
-   * @param source - Position to check slipperiness at
-   * @returns Horizontal jump speed
-   */
-  getGroundJumpSpeed(source: Vec3): number {
-    const St = this.getSlipperiness(source);
-    const Et = this.applyEffects ? this.getEffectsMultiplier() : 1.0;
-    const Mt =
-      Constants.PHYSICS.ACCELERATION.SPRINT_MULTIPLIER *
-      Constants.PHYSICS.ACCELERATION.STRAFE_MULTIPLIER;
-    const GROUND_ACCEL = 0.1 * Mt * Et * Math.pow(0.6 / St, 3);
-    const GROUND_MOMENTUM = St * Constants.PHYSICS.MOMENTUM_CONSERVATION;
-    const vH0 = this.getHorizontalSpeed();
-    return (
-      vH0 * GROUND_MOMENTUM + GROUND_ACCEL + Constants.PHYSICS.SPRINT_JUMP_BOOST
-    );
-  }
-
-  /**
-   * Compute a velocity vector for a jump toward a target.
-   * @param source - Current position
-   * @param target - Target position
-   * @param angleDeg - Angular offset
-   * @returns Velocity vector
-   */
-  getJumpVelocity(
-    source: Vec3,
-    target: Vec3,
-    angleDeg = 0,
-    isStrafe = false,
-  ): Vec3 {
-    const dx = target.x - source.x;
-    const dz = target.z - source.z;
-    const len = Math.hypot(dx, dz);
-    const vy = Constants.PHYSICS.JUMP_VELOCITY;
-    if (len === 0) return new Vec3(0, vy, 0);
-
-    const St = this.getSlipperiness(source);
-    const GROUND_MOMENTUM = St * Constants.PHYSICS.MOMENTUM_CONSERVATION; // 0.546 for default
-    const AIR_MOMENTUM = Constants.PHYSICS.MOMENTUM_CONSERVATION; // 0.91
-
-    // Estimate the number of airborne ticks from the vertical trajectory.
-    // The jump tick moves the bot upward by JUMP_VELOCITY; subsequent ticks
-    // have gravity and drag applied: vy' = (vy - TICK_GRAVITY) * TICK_DRAG.
-    let vY = Constants.PHYSICS.JUMP_VELOCITY;
-    let airborneTicks = 0;
-    let yPos = vY;
-    while (yPos > 0) {
-      vY = (vY - Constants.PHYSICS.TICK_GRAVITY) * Constants.PHYSICS.TICK_DRAG;
-      yPos += vY;
-      if (yPos > 0) airborneTicks++;
-    }
-    if (airborneTicks < 1) airborneTicks = 1;
-
-    // Total horizontal distance covered with initial speed v (no air acceleration):
-    //   jump tick:  v
-    //   air tick k: v * GROUND_MOMENTUM * AIR_MOMENTUM^k
-    //   D(v) = v * (1 + GROUND_MOMENTUM * (1 - AIR_MOMENTUM^T) / (1 - AIR_MOMENTUM))
-    const geomSum =
-      (1 - Math.pow(AIR_MOMENTUM, airborneTicks)) / (1 - AIR_MOMENTUM);
-    const distMultiplier = 1 + GROUND_MOMENTUM * geomSum;
-
-    // Required initial horizontal speed to cover the target distance.
-    const calibrationFactor = isStrafe
-      ? Constants.PHYSICS.STRAFE_VELOCITY_CALIBRATION
-      : Constants.PHYSICS.JUMP_VELOCITY_CALIBRATION;
-    const vH1 = (len / distMultiplier) * calibrationFactor;
-
-    const rad = (angleDeg * Math.PI) / 180;
-    const cosA = Math.cos(rad);
-    const sinA = Math.sin(rad);
-    const vx = ((dx / len) * cosA - (dz / len) * sinA) * vH1;
-    const vz = ((dx / len) * sinA + (dz / len) * cosA) * vH1;
-    return new Vec3(vx, vy, vz);
-  }
-
-  /**
-   * Compute a flat (horizontal-only) velocity vector toward a target.
-   * Clamps each axis to PER_AXIS_MAX_SPEED.
-   * @param source - Current position
-   * @param target - Target position
-   * @param angleDeg - Angular offset
-   * @param speed - Desired horizontal speed
-   * @param vy - Vertical component
-   * @returns Velocity vector
-   */
-  getFlatVelocity(
-    source: Vec3,
-    target: Vec3,
-    angleDeg = 0,
-    speed: number = Constants.MOVEMENT.FLAT_VELOCITY_XZ,
-    vy = 0,
-  ): Vec3 {
-    const angleRad =
-      Math.atan2(target.z - source.z, target.x - source.x) +
-      (angleDeg * Math.PI) / 180;
-    const limit = Constants.MOVEMENT.PER_AXIS_MAX_SPEED;
-    return new Vec3(
-      Math.max(-limit, Math.min(limit, Math.cos(angleRad) * speed)),
-      vy,
-      Math.max(-limit, Math.min(limit, Math.sin(angleRad) * speed)),
-    );
-  }
-
-  /**
-   * Find the Y coordinate of the ground surface below the bot.
-   * Searches up to 5 blocks downward.
-   * @returns Y coordinate of the surface, or -64 if not found
-   */
-  getGroundBelow(): number {
-    const pos = this.bot.entity.position;
-    const startY = Math.floor(pos.y);
-    for (let y = startY; y >= startY - 5; y--) {
-      const block = this.bot.blockAt(new Vec3(pos.x, y, pos.z));
-      if (block && block.boundingBox !== 'empty') {
-        const shape = block.shapes[0];
-        if (shape) return y + shape[Constants.SHAPE.MAX_Y];
-        return y + 1;
-      }
-    }
-    return -64;
-  }
-
-  /**
-   * Calculate fall damage for a given fall distance.
-   * First 3 blocks are safe; each additional block deals 1 damage.
-   * @param distance - Fall distance in blocks
-   * @returns Raw damage amount
-   */
-  getFallDamage(distance: number): number {
-    const safeFallDistance = 3;
-    const fallDamageMultiplier = 1;
-    if (distance <= 3) return 0;
-    return Math.max(
-      0,
-      Math.floor((distance - safeFallDistance) * fallDamageMultiplier),
-    );
-  }
 }
 
 /**
  * Attach the UtilsManager to a bot instance.
- * @param bot - Mineflayer bot instance
- * @returns The same bot instance with utilsManager attached
  */
 export function attachUtils(bot: Bot): Bot {
   bot.utilsManager = new UtilsManager(bot);
