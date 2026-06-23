@@ -50,7 +50,7 @@ Key architectural elements:
 - **Tree nodes** have `{ name, description, handler?, subcommands?, positional? }` shape.
 - **Positional params** use `<argName>` syntax and are matched by position, not by name.
 - **`resolve(tree, tokens)`** walks the tree following tokens, returns deepest match.
-- **`registerCommand(name, node)`** is the plugin API used by `debug.ts` to inject debug commands.
+- **`registerCommand(name, node)`** is the plugin API used by debug modules to inject debug commands.
 - **Variable substitution**: `${variable}` tokens in commands are resolved by `evaluatePlaceholders()` against built-in variables (such as `${x}`, `${y}`, `${z}`) before execution.
 - **Tab completion** and **`?` context-sensitive help** are handled by `tui.ts` using the CLI engine, not by the command tree itself.
 - **Function calling**: The `func <functionName> [args...]` command provides direct access to internal functions for scripting and debugging.
@@ -71,7 +71,7 @@ Key architectural elements:
 | `eq <item> <slot>`           | Equip an item to a slot (hand, off-hand, head, torso, legs, feet)              |
 | `uneq <slot>`                | Unequip an item from a slot                                                    |
 | `uneqall`                    | Unequip all items                                                              |
-| `rec [slot]`                 | Record inventory to a JSON file (default slot 0)                                |
+| `rec [slot]`                 | Record inventory to a JSON file (default slot 0)                               |
 | `res [slot]`                 | Restore inventory from a recorded JSON file                                    |
 | `clear`                      | Clear inventory via creative mode                                              |
 | `pause <ticks>`              | Pause the bot for N ticks                                                      |
@@ -83,7 +83,7 @@ Key architectural elements:
 | `query_player_db <username>` | Query player database for a specific user                                      |
 | `query_slot_db <slot>`       | Query slot database for a specific slot                                        |
 | `func`                       | List all available functions that can be called directly                       |
-| `func <functionName> [args]` | Call a function directly by name with optional arguments                      |
+| `func <functionName> [args]` | Call a function directly by name with optional arguments                       |
 
 ### Variable Substitution
 
@@ -123,27 +123,13 @@ The following constants are available for runtime override:
 - `COMBAT.VIEW_DISTANCE` — Entity tracking range (default: 128)
 - `COMBAT.STRAFE_RANGE` — Strafing activation radius (default: 3.5)
 
-## Debug Commands
-
-| Command                              | Description                                                                                                                  |
-| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
-| `debug_strafe_once [x] [y] [z]`      | Single strafe test at Vec3 offset (default +3, 0, 0)                                                                         |
-| `debug_strafe_loop [x] [y] [z]`      | Loop the strafe test (call again to stop) at Vec3 offset (default +3, 0, 0)                                                  |
-| `debug_pearl_throw <mode> [offsets]` | Throw pearl at nearest player with arc mode (`low`/`high`/`auto`) and optional per-axis offsets (e.g., `x+2.5 y-1.0 z+0.75`) |
-| `debug_jump_path [x] [y] [z]`        | Test isJumpPathClear against Vec3 offset (default +3, 0, 0)                                                                  |
-| `debug_collision_stress`             | Run 9 jump-path obstacle scenarios                                                                                           |
-| `debug_jump_test [x] [y] [z]`        | Jump test to Vec3 offset with pre/post state logging (default +3, 0, 0)                                                      |
-| `debug_pvp_attack`                   | PVPManager: Basic attack flow                                                                                                |
-| `debug_pvp_goal`                     | PVPManager: Goal-directed movement while in combat                                                                           |
-| `debug_pvp_strafe_goal`              | PVPManager: Strafing while moving toward a goal                                                                              |
-
 ## Log Levels & Logging Conventions
 
 All output flows through the unified Logger facade in `logger.ts`. **Do not call `ui.log()` or `console.log/error` directly** from any module other than `tui.ts` or `logger.ts`.
 
 Four levels are supported, automatically color-coded in the TUI:
 
-- `DEBUG` — Detailed diagnostic information (suppressed by default; enabled when the DebugManager loads)
+- `DEBUG` — Detailed diagnostic information (suppressed by default)
 - `INFO` — General operational messages (default)
 - `WARN` — Warning conditions
 - `ERROR` — Error conditions with automatic stack trace inclusion
@@ -182,26 +168,26 @@ logger.packet(msg, level?, caller?);
 ### Canonical Tags
 
 | Tag           | Domain                                                                                 | Default Level |
-| ------------ | -------------------------------------------------------------------------------------- | ------------- |
-| `Client`     | Bot lifecycle (login, kick, end, reconnect)                                            | INFO          |
-| `Combat`     | Decisions, modes, pearls, strafing                                                     | INFO/DEBUG    |
-| `Inventory`  | Equip, toss, record, restore, consume                                                  | INFO          |
-| `Command`    | User commands, run loops, pause                                                        | INFO          |
-| `Status`     | Health, food, position, version                                                        | INFO          |
-| `Config`     | Runtime config get/set/list                                                            | INFO          |
-| `Chat`       | Incoming chat messages                                                                 | INFO          |
-| `Error`      | Recoverable failures                                                                   | ERROR         |
-| `Exception`  | Uncaught exceptions, unhandled rejections                                              | ERROR         |
-| `Warning`    | Node warnings                                                                          | WARN          |
-| `Debug`      | Verbose debug commands (debug_strafe_once, debug_strafe_loop, debug_pearl_throw, etc.) | DEBUG         |
-| `Movement`   | Movement logic, path execution, navigation                                             | INFO/DEBUG    |
-| `Pathfinding`| Path computation, goal setting, A* search                                               | INFO/DEBUG    |
-| `Entity`     | Entity tracking, targeting, interaction                                                | INFO/DEBUG    |
-| `Packet`     | Packet handling, protocol events                                                       | DEBUG         |
+| ------------- | -------------------------------------------------------------------------------------- | ------------- |
+| `Client`      | Bot lifecycle (login, kick, end, reconnect)                                            | INFO          |
+| `Combat`      | Decisions, modes, pearls, strafing                                                     | INFO/DEBUG    |
+| `Inventory`   | Equip, toss, record, restore, consume                                                  | INFO          |
+| `Command`     | User commands, run loops, pause                                                        | INFO          |
+| `Status`      | Health, food, position, version                                                        | INFO          |
+| `Config`      | Runtime config get/set/list                                                            | INFO          |
+| `Chat`        | Incoming chat messages                                                                 | INFO          |
+| `Error`       | Recoverable failures                                                                   | ERROR         |
+| `Exception`   | Uncaught exceptions, unhandled rejections                                              | ERROR         |
+| `Warning`     | Node warnings                                                                          | WARN          |
+| `Debug`       | Verbose debug output                                                     | DEBUG         |
+| `Movement`    | Movement logic, path execution, navigation                                             | INFO/DEBUG    |
+| `Pathfinding` | Path computation, goal setting, A\* search                                             | INFO/DEBUG    |
+| `Entity`      | Entity tracking, targeting, interaction                                                | INFO/DEBUG    |
+| `Packet`      | Packet handling, protocol events                                                       | DEBUG         |
 
 ### Debug Mode
 
-DEBUG-level logs are suppressed by default. The `DebugManager` (`debug.ts`) enables debug mode in its constructor. To enable/disable manually:
+DEBUG-level logs are suppressed by default. To enable/disable manually:
 
 ```js
 logger.setDebugMode(true); // enable DEBUG output
@@ -235,7 +221,7 @@ All source code is written in TypeScript under `src/`. Key configuration:
 - **`jest.config.js`**: uses `ts-jest` transformer with `.js` extension mapping for imports.
 - **Build command**: `npm run build` runs `tsc`; output lands in `dist/`.
 - **Run command**: `node dist/src/index.js` (after build).
-- **Type definitions**: `@types/blessed`, `@types/node`, `@types/jest` installed. Mineflayer ships its own types; `vec3` types come from `@minecraft/` packages. Plugin-added properties (e.g., `bot.inventoryManager`, `bot.combatManager`) are accessed via `(bot as any)` casts where mineflayer's type declarations don't cover them.
+- **Type definitions**: `@types/blessed`, `@types/node`, `@types/jest` installed. Mineflayer ships its own types; `vec3` types come from `@minecraft/` packages. Plugin-added properties (e.g., `bot.inventoryManager`, `bot.combatManager`) are declared via module augmentation in `src/types/mineflayer.d.ts`, extending the `Bot` interface so they can be accessed directly without `(bot as any)` casts.
 
 ### Development Guidelines
 
@@ -249,7 +235,7 @@ All source code is written in TypeScript under `src/`. Key configuration:
 - **Style**: Follow existing code patterns (async/await, event-driven, class-based modules). The `tsconfig.json` targets ES2022 with CommonJS module output (`"type": "commonjs"` in package.json).
 - **Environment**: Configuration goes into `.env`.
 - **Dependencies**: Use `npm install` / `npm ci`; do not add heavy native modules without discussion.
-- **File naming**: Use lowercase with hyphens for multi-word module names (e.g., `cli-engine.ts`, `pvp-manager.ts`). Single-word names are acceptable (e.g., `utils.ts`, `config.ts`). Avoid camelCase file names.
+- **File naming**: Use lowercase with hyphens for multi-word module names (e.g., `cli-engine.ts`, `bot-registry.ts`). Single-word names are acceptable (e.g., `utils.ts`, `config.ts`). Avoid camelCase file names.
 
 ### Rules for development/agents
 
@@ -296,7 +282,7 @@ Common abbreviations used throughout the codebase:
 | `dx`, `dy`, `dz`           | Delta/difference in X, Y, Z coordinates |
 | `dist`, `dist2D`, `distSq` | Distance, 2D distance, squared distance |
 | `GAPPLE`                   | Golden Apple                            |
-| `EGAPPLE`                   | Enchanted Golden Apple                  |
+| `EGAPPLE`                  | Enchanted Golden Apple                  |
 | `HP`                       | Health Points                           |
 | `AP`                       | Absorption Points                       |
 
@@ -311,11 +297,25 @@ Common abbreviations used throughout the codebase:
 
 ### Unit Tests (Jest)
 
-Test files live in `tests/` and follow the `*.test.ts` naming convention. Suites:
+Unit tests live in `tests/unit/` and follow the `*.test.ts` naming convention. They do not
+require a running Minecraft server and use mocked bot instances. Suites:
 
-- `tests/utils.test.ts` — AABB collision detection, fall damage, projectile prediction
-- `tests/pvp.test.ts` — CombatDecision, health status, targeting, fall protection
-- `tests/e2e.test.ts` — End-to-end debug method tests (requires `E2E_HOST` env var)
+- `tests/unit/utils.test.ts` — AABB collision detection, fall damage, projectile prediction
+- `tests/unit/pvp.test.ts` — CombatDecision, health status, targeting, fall protection
+- `tests/unit/config.test.ts` — RuntimeConfig get/set/reset/overrides
+- `tests/unit/pvp-manager.test.ts` — Attack speed, cooldown, damage multiplier
+
+### E2E Tests (Jest)
+
+End-to-end tests live in `tests/e2e/` and follow the `*.test.ts` naming convention. They
+connect to a real Minecraft server using configuration from `.env` and are
+automatically skipped when `E2E_HOST` is not set. Suites:
+
+- `tests/e2e/jump.test.ts` — Jump and collision debug methods
+- `tests/e2e/pearl.test.ts` — Ender pearl throw trajectory and accuracy
+- `tests/e2e/strafe.test.ts` — Strafe movement and pathfinding
+- `tests/e2e/inventory.test.ts` — Inventory management E2E tests
+- `tests/e2e/pvp.test.ts` — PvP combat E2E tests
 
 Run all tests:
 
@@ -341,16 +341,16 @@ npm start -- --headless --bot1 "dud"
 npm start -- --headless --bot1 "cmd1; cmd2; cmd3;"
 
 # Repeat a command N times with M tick gap
-npm start -- --headless --bot1 "run debug_strafe_once 10 1"
+npm start -- --headless --bot1 "run dud 10 1"
 
 # Custom timeout and multiple commands
-npm start -- --headless --bot1 "run debug_strafe_once 10 5"
+npm start -- --headless --bot1 "run dud 10 5"
 
 # Flags can appear in any order
 npm start -- --timeout 60 --headless --bot1 "eq 1 boots; v"
 ```
 
-The headless mode defaults to a-10-second timeout. Use `--timeout <seconds>` to customize. When debugging, use the DebugManager's test commands (`debug_strafe_once`, `debug_strafe_loop`, `debug_pearl_throw`, etc.) via headless mode.
+The headless mode defaults to a 10-second timeout. Use `--timeout <seconds>` to customize.
 
 ## License
 
