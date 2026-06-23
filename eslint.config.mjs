@@ -50,18 +50,24 @@ export default [
     },
     rules: {
       ...typescriptEslint.configs.recommended.rules,
-      "@typescript-eslint/no-unused-vars": ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
+      "@typescript-eslint/no-unused-vars": [
+        "warn",
+        { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
+      ],
       "@typescript-eslint/no-explicit-any": "off",
       "@typescript-eslint/ban-ts-comment": ["error", { "ts-ignore": false }],
       "@typescript-eslint/no-non-null-assertion": "off",
-      "@typescript-eslint/consistent-type-assertions": ["error", {
-        assertionStyle: "as",
-      }],
+      "@typescript-eslint/consistent-type-assertions": [
+        "error",
+        {
+          assertionStyle: "as",
+        },
+      ],
       "@typescript-eslint/explicit-function-return-type": "off",
-      "eqeqeq": ["error", "always", { null: "ignore" }],
+      eqeqeq: ["error", "always", { null: "ignore" }],
       "no-var": "error",
       "no-console": ["warn", { allow: ["error", "warn"] }],
-      "quotes": ["error", "single", { avoidEscape: true }],
+      quotes: ["error", "single", { avoidEscape: true }],
       "no-useless-assignment": "warn",
     },
   },
