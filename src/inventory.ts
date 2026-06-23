@@ -1,14 +1,14 @@
-import { Logger } from './logger';
+import { Logger } from "./logger";
 // @ts-ignore - prismarine-nbt may not have complete types
-import nbt from 'prismarine-nbt';
+import nbt from "prismarine-nbt";
 // @ts-ignore - prismarine-item exports a versioned factory function
-import prismarineItem from 'prismarine-item';
-import { Constants } from './constants';
-import { Bot } from 'mineflayer';
-import { Vec3 } from 'vec3';
+import prismarineItem from "prismarine-item";
+import { Constants } from "./constants";
+import { Bot } from "mineflayer";
+import { Vec3 } from "vec3";
 
 // Construct the Item class with a game version
-const Item: any = prismarineItem('1.19.3');
+const Item: any = prismarineItem("1.19.3");
 
 /**
  * @fileoverview Manages bot inventory, equipment, and item-related operations.
@@ -30,8 +30,8 @@ class InventoryManager {
     this._lastCacheTick = 0;
 
     const clearCache = () => this._itemCache.clear();
-    this.bot.inventory.on('windowUpdate', clearCache);
-    this.bot.inventory.on('changedSlot', clearCache);
+    this.bot.inventory.on("windowUpdate", clearCache);
+    this.bot.inventory.on("changedSlot", clearCache);
   }
 
   /**
@@ -127,7 +127,7 @@ class InventoryManager {
   hasFood(): boolean {
     // mineflayer plugin property access
     const currentTick = (this.bot as any).time.age;
-    const cacheKey = 'has:food';
+    const cacheKey = "has:food";
 
     if (this._lastCacheTick === currentTick && this._itemCache.has(cacheKey)) {
       return this._itemCache.get(cacheKey) as boolean;
@@ -175,7 +175,7 @@ class InventoryManager {
    */
   async _equipItem(
     itemName: string,
-    targetSlot: string = 'hand',
+    targetSlot: string = "hand",
   ): Promise<boolean> {
     try {
       const destSlot = this.bot.getEquipmentDestSlot(targetSlot);
@@ -199,7 +199,7 @@ class InventoryManager {
       return true;
     } catch (error: unknown) {
       const err = error as Error;
-      if (!err.message.includes('not found')) {
+      if (!err.message.includes("not found")) {
         err.message = `Failed to equip ${itemName}: ${err.message}`;
       }
       this.logger.error(err);
@@ -208,7 +208,12 @@ class InventoryManager {
   }
 
   /** Map gamemode numbers to their string names as stored in bot.game.gameMode */
-  private static readonly GAMEMODE_NAMES = ['survival', 'creative', 'adventure', 'spectator'];
+  private static readonly GAMEMODE_NAMES = [
+    "survival",
+    "creative",
+    "adventure",
+    "spectator",
+  ];
 
   /**
    * Clear the entire inventory via creative mode.
@@ -217,11 +222,14 @@ class InventoryManager {
   async clearInventory(): Promise<void> {
     const creativeName = InventoryManager.GAMEMODE_NAMES[1];
     if ((this.bot.game as any).gameMode !== creativeName) {
-      throw new Error(`clearInventory requires creative mode, current gamemode is ${(this.bot.game as any).gameMode}`);
+      throw new Error(
+        `clearInventory requires creative mode, current gamemode is ${(this.bot.game as any).gameMode}`,
+      );
     }
     try {
+      await this.bot.waitForTicks(3);
       await this.bot.creative.clearInventory();
-      this.logger.inventory('Inventory cleared');
+      this.logger.inventory("Inventory cleared");
     } catch (error: unknown) {
       const err = error as Error;
       err.message = `Failed to clear inventory: ${err.message}`;
@@ -239,7 +247,7 @@ class InventoryManager {
   async getItemViaCommand(
     itemName: string,
     count: number = 1,
-    targetSlot: string = 'hand',
+    targetSlot: string = "hand",
   ): Promise<void> {
     await this.clearInventory();
     await this.bot.chat!(`/give @p ${itemName} ${count}`);
@@ -256,7 +264,9 @@ class InventoryManager {
 
     const equipped = await this._equipItem(itemName, targetSlot);
     if (!equipped) {
-      throw new Error(`Failed to obtain ${itemName}: not found in inventory after /give`);
+      throw new Error(
+        `Failed to obtain ${itemName}: not found in inventory after /give`,
+      );
     }
   }
 
@@ -273,12 +283,17 @@ class InventoryManager {
   ): Promise<void> {
     const creativeName = InventoryManager.GAMEMODE_NAMES[1];
     if ((this.bot.game as any).gameMode !== creativeName) {
-      throw new Error(`getItemViaCreative requires creative mode (gamemode 1), current gamemode is ${(this.bot.game as any).gameMode}`);
+      throw new Error(
+        `getItemViaCreative requires creative mode (gamemode 1), current gamemode is ${(this.bot.game as any).gameMode}`,
+      );
     }
 
     try {
       await this.bot.creative.setInventorySlot(slot, item);
-      this.logger.debug(`Set item ${item.name} in slot ${slot} using creative API`, 'Inventory');
+      this.logger.debug(
+        `Set item ${item.name} in slot ${slot} using creative API`,
+        "Inventory",
+      );
     } catch (error: unknown) {
       const err = error as Error;
       err.message = `Failed to set item ${item.name} in creative mode: ${err.message}`;
@@ -296,8 +311,12 @@ class InventoryManager {
   createItemInstance(itemName: string, count: number = 1): any {
     try {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const Item = require('prismarine-item')('1.16'); // Use appropriate version
-      return new Item(itemName, count);
+      const Item = require("prismarine-item")(this.bot.version);
+      const itemInfo = this.bot.registry.itemsByName[itemName];
+      if (!itemInfo) {
+        throw new Error(`Unknown item: ${itemName}`);
+      }
+      return new Item(itemInfo.id, count);
     } catch (error: unknown) {
       const err = error as Error;
       err.message = `Failed to create item instance for ${itemName}: ${err.message}`;
@@ -312,10 +331,8 @@ class InventoryManager {
    */
   async recordInventory(slot: number | string = 0): Promise<void> {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const fs = require('node:fs');
-    const array = this.bot.inventory.slots.filter(
-      (item: any) => item?.type,
-    );
+    const fs = require("node:fs");
+    const array = this.bot.inventory.slots.filter((item: any) => item?.type);
     const data = array.map(
       ({ type, count, metadata, nbt, name, displayName, slot }: any) => ({
         type,
@@ -351,8 +368,8 @@ class InventoryManager {
    */
   async restoreInventory(slot: number | string = 0): Promise<void> {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const fs = require('node:fs');
-    const raw = fs.readFileSync(`./recording-${slot}.json`, 'utf8');
+    const fs = require("node:fs");
+    const raw = fs.readFileSync(`./recording-${slot}.json`, "utf8");
     const data = JSON.parse(raw);
     await this.setGamemode(1);
 
@@ -410,7 +427,7 @@ class InventoryManager {
    * Unequip all armor slots.
    */
   async unequipAllItems(): Promise<void> {
-    const destinations = ['head', 'torso', 'legs', 'feet', 'off-hand'];
+    const destinations = ["head", "torso", "legs", "feet", "off-hand"];
     for (const destination of destinations) {
       const slot = this.bot.getEquipmentDestSlot(destination);
       if (this.bot.inventory.slots[slot] !== null) {
@@ -442,10 +459,10 @@ class InventoryManager {
       .items()
       .filter(
         (item: any) =>
-          item.name.endsWith('_helmet') ||
-          item.name.endsWith('_chestplate') ||
-          item.name.endsWith('_leggings') ||
-          item.name.endsWith('_boots'),
+          item.name.endsWith("_helmet") ||
+          item.name.endsWith("_chestplate") ||
+          item.name.endsWith("_leggings") ||
+          item.name.endsWith("_boots"),
       );
 
     const armorBySlot: Record<string, any[]> = {
@@ -516,7 +533,7 @@ class InventoryManager {
     if (!item?.name) return -1;
     const material = item.name.replace(
       /_(helmet|chestplate|leggings|boots)$/,
-      '',
+      "",
     );
     const stats = materialStats[material]?.[slotName];
     if (!stats) return 0;
@@ -526,18 +543,18 @@ class InventoryManager {
 
     if (item.enchants && Array.isArray(item.enchants)) {
       const protection = item.enchants.find(
-        (e: any) => e.name === 'protection',
+        (e: any) => e.name === "protection",
       );
       protectionLVL = protection ? protection.lvl || 0 : 0;
 
       const nonProtection = item.enchants.filter(
-        (e: any) => e.name !== 'protection',
+        (e: any) => e.name !== "protection",
       );
       const bindingCurse = nonProtection.some(
-        (e: any) => e.name === 'binding_curse',
+        (e: any) => e.name === "binding_curse",
       );
       otherEnchantWeight =
-        nonProtection.filter((e: any) => e.name !== 'binding_curse').length *
+        nonProtection.filter((e: any) => e.name !== "binding_curse").length *
         0.1;
       if (bindingCurse) otherEnchantWeight -= 1;
     }
@@ -557,16 +574,16 @@ class InventoryManager {
     // mineflayer plugin property access
     const items = (this.bot as any).inventory
       .items()
-      .filter((i: any) => i.name === 'golden_apple');
+      .filter((i: any) => i.name === "golden_apple");
     if (items.length === 0) return;
 
-    if (this.bot.entity.effects['10']) return;
+    if (this.bot.entity.effects["10"]) return;
 
     const bestGapple = items.sort(
       (a: any, b: any) => (b.metadata || 0) - (a.metadata || 0),
     )[0];
 
-    const destSlot = this.bot.getEquipmentDestSlot('off-hand');
+    const destSlot = this.bot.getEquipmentDestSlot("off-hand");
     const currentItem = this.bot.inventory.slots[destSlot];
 
     if (
@@ -577,17 +594,25 @@ class InventoryManager {
       this.logger.inventory(
         `Equipping ${bestGapple.displayName} to off-hand...`,
       );
-      await this.bot.equip!(bestGapple, 'off-hand' as any);
+      await this.bot.equip!(bestGapple, "off-hand" as any);
       await this.bot.waitForTicks!(Constants.TIMING.EQUIP_WAIT_TICKS);
+    }
+
+    // In creative mode, eating doesn't grant effects — skip activation
+    if ((this.bot.game as any).gameMode === "creative") {
+      this.logger.inventory(
+        `Skipping ${bestGapple.displayName} use in creative mode (no effect)`,
+      );
+      return;
     }
 
     this.logger.inventory(`Using ${bestGapple.displayName}...`);
     try {
       this.bot.activateItem(true);
       const t0 = Date.now();
-      while (!this.bot.entity.effects['10']) {
+      while (!this.bot.entity.effects["10"]) {
         if (Date.now() - t0 > Constants.TIMING.DEFAULT_TIMEOUT) {
-          throw new Error('Timeout reached while using item');
+          throw new Error("Timeout reached while using item");
         }
         await this.bot.waitForTicks!(2);
       }
@@ -606,13 +631,11 @@ class InventoryManager {
    * Skips if food or health is full, or if regeneration is active.
    */
   async equipFood(): Promise<void> {
-    if (this.bot.food! >= 20 || this.bot.entity.effects['10']) return;
+    if (this.bot.entity.effects["10"]) return;
 
     const inventory: any[] = [
       ...this.bot.inventory.items(),
-      ...Object.values(this.bot.entity.equipment).filter(
-        (i: any) => i != null,
-      ),
+      ...Object.values(this.bot.entity.equipment).filter((i: any) => i != null),
     ];
 
     const foodStats = Constants.MATERIALS.FOOD;
@@ -638,29 +661,41 @@ class InventoryManager {
       return best;
     });
 
-    if (await this._equipItem(food.name, 'off-hand')) {
-      const stats = (
-        foodStats as Record<string, { saturation: number; hunger: number }>
-      )[food.name];
-      const expectedHunger = this.bot.food! + stats.hunger;
-      this.logger.inventory(`Using ${food.displayName}...`);
-      try {
-        this.bot.activateItem(true);
-        const t0 = Date.now();
-        while (this.bot.food! < expectedHunger && this.bot.food! < 20) {
-          if (Date.now() - t0 > Constants.TIMING.DEFAULT_TIMEOUT) {
-            throw new Error('Timeout reached while eating');
-          }
-          await this.bot.waitForTicks!(2);
+    // Always equip the best food to off-hand, even if food is full
+    if (!(await this._equipItem(food.name, "off-hand"))) return;
+
+    // Skip eating if food is already full or in creative mode
+    if (
+      this.bot.food! >= 20 ||
+      (this.bot.game as any).gameMode === "creative"
+    ) {
+      this.logger.inventory(
+        `Skipping ${food.displayName} use — food full or creative mode`,
+      );
+      return;
+    }
+
+    const stats = (
+      foodStats as Record<string, { saturation: number; hunger: number }>
+    )[food.name];
+    const expectedHunger = this.bot.food! + stats.hunger;
+    this.logger.inventory(`Using ${food.displayName}...`);
+    try {
+      this.bot.activateItem(true);
+      const t0 = Date.now();
+      while (this.bot.food! < expectedHunger && this.bot.food! < 20) {
+        if (Date.now() - t0 > Constants.TIMING.DEFAULT_TIMEOUT) {
+          throw new Error("Timeout reached while eating");
         }
-        this.logger.inventory(`Used ${food.displayName} successfully`);
-      } catch (error: unknown) {
-        const err = error as Error;
-        err.message = `Failed to eat ${food.displayName}: ${err.message}`;
-        this.logger.error(err);
-      } finally {
-        this.bot.deactivateItem();
+        await this.bot.waitForTicks!(2);
       }
+      this.logger.inventory(`Used ${food.displayName} successfully`);
+    } catch (error: unknown) {
+      const err = error as Error;
+      err.message = `Failed to eat ${food.displayName}: ${err.message}`;
+      this.logger.error(err);
+    } finally {
+      this.bot.deactivateItem();
     }
   }
 
@@ -669,33 +704,31 @@ class InventoryManager {
    * Prefers strong_strength over regular strength.
    */
   async equipBuff(): Promise<void> {
-    if (this.bot.entity.effects['5']) return;
+    if (this.bot.entity.effects["5"]) return;
 
     const inventory: any[] = [
       ...this.bot.inventory.items(),
-      ...Object.values(this.bot.entity.equipment).filter(
-        (i: any) => i != null,
-      ),
+      ...Object.values(this.bot.entity.equipment).filter((i: any) => i != null),
     ];
-    const potions = inventory.filter((item: any) => item.name === 'potion');
+    const potions = inventory.filter((item: any) => item.name === "potion");
     const potion =
       potions.find(
         (i: any) =>
-          (nbt as any).simplify(i.nbt).Potion === 'minecraft:strong_strength',
+          (nbt as any).simplify(i.nbt).Potion === "minecraft:strong_strength",
       ) ||
       potions.find(
         (i: any) =>
-          (nbt as any).simplify(i.nbt).Potion === 'minecraft:strength',
+          (nbt as any).simplify(i.nbt).Potion === "minecraft:strength",
       );
 
-    if (potion && (await this._equipItem(potion.name, 'off-hand'))) {
+    if (potion && (await this._equipItem(potion.name, "off-hand"))) {
       this.logger.inventory(`Using ${potion.displayName}...`);
       try {
         this.bot.activateItem(true);
         const t0 = Date.now();
-        while (!this.bot.entity.effects['5']) {
+        while (!this.bot.entity.effects["5"]) {
           if (Date.now() - t0 > Constants.TIMING.DEFAULT_TIMEOUT) {
-            throw new Error('Timeout reached while using potion');
+            throw new Error("Timeout reached while using potion");
           }
           await this.bot.waitForTicks!(2);
         }
@@ -715,7 +748,7 @@ class InventoryManager {
    * @returns Whether equipping succeeded
    */
   async equipTotem(): Promise<boolean> {
-    return this._equipItem('totem_of_undying', 'off-hand');
+    return this._equipItem("totem_of_undying", "off-hand");
   }
 
   /**
@@ -728,9 +761,9 @@ class InventoryManager {
   async equipPearl(
     yaw: number | null = null,
     pitch: number | null = null,
-    itemType: string = 'ender_pearl',
+    itemType: string = "ender_pearl",
   ): Promise<void> {
-    const equipped = await this._equipItem(itemType, 'hand');
+    const equipped = await this._equipItem(itemType, "hand");
     if (!equipped) {
       throw new Error(`Cannot throw ${itemType}: not found in inventory`);
     }
@@ -764,7 +797,7 @@ class InventoryManager {
   /**
    * Equip and throw an ender pearl (or other projectile) using offset-based aiming.
    * This method uses a vertical offset instead of pitch angles for more intuitive aiming.
-   * 
+   *
    * @param targetPos - Target position to throw at
    * @param offset - Vertical offset in blocks (positive = aim above target, negative = aim below)
    * @param itemType - Item name for the projectile
@@ -772,10 +805,10 @@ class InventoryManager {
   async equipPearlWithOffset(
     targetPos: Vec3,
     offset: number,
-    itemType: string = 'ender_pearl',
+    itemType: string = "ender_pearl",
     sourcePos?: Vec3,
   ): Promise<void> {
-    const equipped = await this._equipItem(itemType, 'hand');
+    const equipped = await this._equipItem(itemType, "hand");
     if (!equipped) {
       throw new Error(`Cannot throw ${itemType}: not found in inventory`);
     }
@@ -792,15 +825,17 @@ class InventoryManager {
       : this.bot.entity!.position.y + this.bot.entity!.height!;
     const aimPoint = targetPos.clone();
     aimPoint.y = srcY + offset;
-    
+
     // Use lookAt which handles the pitch/yaw calculation internally
     // This is more reliable than manually calculating and inverting pitch
     await this.bot.lookAt!(aimPoint, true);
     await this.bot.waitForTicks!(1);
-    
+
     this.bot.activateItem(false); // Right click once
     await this.bot.waitForTicks!(1);
-    this.logger.inventory(`Tossed ${itemType} with offset ${offset.toFixed(2)} successfully`);
+    this.logger.inventory(
+      `Tossed ${itemType} with offset ${offset.toFixed(2)} successfully`,
+    );
   }
 
   /**
@@ -812,11 +847,11 @@ class InventoryManager {
       .items()
       .filter(
         (item: any) =>
-          item.name.endsWith('_sword') ||
-          item.name.endsWith('_axe') ||
-          item.name.endsWith('_pickaxe') ||
-          item.name.endsWith('_shovel') ||
-          item.name.endsWith('_hoe'),
+          item.name.endsWith("_sword") ||
+          item.name.endsWith("_axe") ||
+          item.name.endsWith("_pickaxe") ||
+          item.name.endsWith("_shovel") ||
+          item.name.endsWith("_hoe"),
       );
     if (weapons.length === 0) return;
 
@@ -837,7 +872,7 @@ class InventoryManager {
       this.logger.inventory(
         `Equipping ${weapon.displayName} (#${weapon.type}) (DPS: ${bestScore.toFixed(2)}) to hand...`,
       );
-      await this.bot.equip!(weapon, 'hand' as any);
+      await this.bot.equip!(weapon, "hand" as any);
       await this.bot.waitForTicks!(Constants.TIMING.EQUIP_WAIT_TICKS);
     }
   }
@@ -856,7 +891,7 @@ class InventoryManager {
     const baseDPS = (stats as any).damage * (stats as any).speed;
     let sharpnessBonus = 0;
     if (item.enchants && Array.isArray(item.enchants)) {
-      const sharpness = item.enchants.find((e: any) => e.name === 'sharpness');
+      const sharpness = item.enchants.find((e: any) => e.name === "sharpness");
       if (sharpness)
         sharpnessBonus = (sharpness.lvl || 0) * 1.25 * (stats as any).speed;
     }
@@ -870,14 +905,14 @@ class InventoryManager {
   async equipUtility(): Promise<void> {
     const items = this.bot.inventory
       .items()
-      .filter((i: any) => i.name === 'golden_apple');
+      .filter((i: any) => i.name === "golden_apple");
     if (items.length === 0) return;
 
     const bestGapple = items.sort(
       (a: any, b: any) => (b.metadata || 0) - (a.metadata || 0),
     )[0];
 
-    await this.bot.equip!(bestGapple, 'off-hand' as any);
+    await this.bot.equip!(bestGapple, "off-hand" as any);
     await this.bot.waitForTicks!(Constants.TIMING.EQUIP_WAIT_TICKS);
   }
 }

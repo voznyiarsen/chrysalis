@@ -72,7 +72,6 @@ export const Constants = {
     UNWANTED_CHECK_OFFSET: 0.3,
     /** Number of vertical layers for unwanted block detection */
     UNWANTED_CHECK_LAYERS: 3,
-
   },
 
   // ============================================================================
@@ -101,12 +100,14 @@ export const Constants = {
     FLAT_VELOCITY_XZ: 0.05,
     /** Radius (in blocks) to search for solid floor blocks for strafing targets */
     SOLID_BLOCK_SEARCH_RADIUS: 3,
-    /** Maximum distance from target or source to consider a strafe point valid */
-    STRAFE_POINT_MAX_DISTANCE: 3.25,
+    /** Maximum distance from the bot (source) to consider a strafe point valid */
+    STRAFE_POINT_MAX_DISTANCE_BOT: 4.0,
+    /** Maximum distance from the target to consider a strafe point valid */
+    STRAFE_POINT_MAX_DISTANCE_TARGET: 3.0,
     /** Minimum distance between consecutive strafe points to avoid repetitive paths */
     STRAFE_POINT_MIN_SPACING: 2.5,
     /** Minimum distance from the bot's current position to consider a strafe point valid */
-    STRAFE_POINT_SOURCE_MIN_DISTANCE: 1.5,
+    STRAFE_POINT_SOURCE_MIN_DISTANCE: 0.3,
     /** Preferred distance range from the PvP target when selecting strafe points */
     STRAFE_PREFERRED_MIN: 1.0,
     STRAFE_PREFERRED_MAX: 2.0,
@@ -240,9 +241,9 @@ export const Constants = {
     /** Maximum depth to search downwards for a solid block surface */
     WALKABLE_SEARCH_DEPTH: 2,
     /** Block names identified as liquid for physics/navigation */
-    LIQUID_BLOCK_NAMES: ['water', 'lava'],
+    LIQUID_BLOCK_NAMES: ["water", "lava"],
     /** Blocks to avoid entirely due to hazard or movement impairment */
-    UNWANTED_BLOCK_NAMES: ['water', 'lava', 'web', 'cactus'],
+    UNWANTED_BLOCK_NAMES: ["water", "lava", "web", "cactus"],
   },
 
   // ============================================================================
@@ -317,10 +318,10 @@ export const Constants = {
     },
     /** Mapping of generic equipment slots to internal armor names */
     SLOT_MAP: {
-      head: 'helmet',
-      torso: 'chestplate',
-      legs: 'leggings',
-      feet: 'boots',
+      head: "helmet",
+      torso: "chestplate",
+      legs: "leggings",
+      feet: "boots",
     },
     /** Hunger restoration and saturation values for food items */
     FOOD: {
@@ -365,6 +366,4 @@ export const Constants = {
       tropical_fish: { hunger: 1, saturation: 0.2 },
     },
   },
-
-
 } as const;

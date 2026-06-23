@@ -3,7 +3,7 @@
  * Provides mutable wrappers around combat and movement constants
  * that can be adjusted at runtime without restarting the bot.
  */
-import { Constants } from './constants';
+import { Constants } from "./constants";
 
 export class RuntimeConfig {
   private readonly _overrides: Map<string, unknown> = new Map();

@@ -4,7 +4,8 @@
  */
 
 export class ListenerManager {
-  private readonly listeners: Map<string, Set<(...args: any[]) => void>> = new Map();
+  private readonly listeners: Map<string, Set<(...args: any[]) => void>> =
+    new Map();
 
   on(emitter: any, event: string, handler: (...args: any[]) => void): void {
     if (!this.listeners.has(event)) {
