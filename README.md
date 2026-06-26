@@ -77,7 +77,7 @@ Key architectural elements:
 | `pause <ticks>`              | Pause the bot for N ticks                                                      |
 | `run <cmd> <N> <M>`          | Run a command N times with M ticks between each execution                      |
 | `cfg`                        | List all active runtime configuration overrides                                |
-| `cfg <CATEGORY.KEY>`         | View a specific config value (e.g., `cfg COMBAT.STRAFE_RANGE`)                 |
+| `cfg <CATEGORY.KEY>`         | View a specific config value (e.g., `cfg MOVEMENT.STRAFE_RADIUS`)              |
 | `cfg <CATEGORY.KEY> <value>` | Set a runtime override (e.g., `cfg COMBAT.ATTACK_RANGE 4.0`)                   |
 | `dud`                        | Test command                                                                   |
 | `query_player_db <username>` | Query player database for a specific user                                      |
@@ -108,7 +108,7 @@ Combat and movement constants can be adjusted at runtime via the `cfg` command, 
 
 ```
 cfg COMBAT.ATTACK_RANGE 4.0
-cfg COMBAT.STRAFE_RANGE 4.0
+cfg MOVEMENT.STRAFE_RADIUS 4.0
 cfg                    # list all active overrides
 ```
 
@@ -121,7 +121,7 @@ The following constants are available for runtime override:
 - `COMBAT.ATTACK_RANGE` — Melee attack reach (default: 3.5)
 - `COMBAT.FOLLOW_RANGE` — Follow distance for PVP (default: 3.45)
 - `COMBAT.VIEW_DISTANCE` — Entity tracking range (default: 128)
-- `COMBAT.STRAFE_RANGE` — Strafing activation radius (default: 3.5)
+- `MOVEMENT.STRAFE_RADIUS` — Strafe area radius (default: 3.0)
 
 ## Log Levels & Logging Conventions
 
@@ -167,23 +167,23 @@ logger.packet(msg, level?, caller?);
 
 ### Canonical Tags
 
-| Tag           | Domain                                                                                 | Default Level |
-| ------------- | -------------------------------------------------------------------------------------- | ------------- |
-| `Client`      | Bot lifecycle (login, kick, end, reconnect)                                            | INFO          |
-| `Combat`      | Decisions, modes, pearls, strafing                                                     | INFO/DEBUG    |
-| `Inventory`   | Equip, toss, record, restore, consume                                                  | INFO          |
-| `Command`     | User commands, run loops, pause                                                        | INFO          |
-| `Status`      | Health, food, position, version                                                        | INFO          |
-| `Config`      | Runtime config get/set/list                                                            | INFO          |
-| `Chat`        | Incoming chat messages                                                                 | INFO          |
-| `Error`       | Recoverable failures                                                                   | ERROR         |
-| `Exception`   | Uncaught exceptions, unhandled rejections                                              | ERROR         |
-| `Warning`     | Node warnings                                                                          | WARN          |
-| `Debug`       | Verbose debug output                                                     | DEBUG         |
-| `Movement`    | Movement logic, path execution, navigation                                             | INFO/DEBUG    |
-| `Pathfinding` | Path computation, goal setting, A\* search                                             | INFO/DEBUG    |
-| `Entity`      | Entity tracking, targeting, interaction                                                | INFO/DEBUG    |
-| `Packet`      | Packet handling, protocol events                                                       | DEBUG         |
+| Tag           | Domain                                      | Default Level |
+| ------------- | ------------------------------------------- | ------------- |
+| `Client`      | Bot lifecycle (login, kick, end, reconnect) | INFO          |
+| `Combat`      | Decisions, modes, pearls, strafing          | INFO/DEBUG    |
+| `Inventory`   | Equip, toss, record, restore, consume       | INFO          |
+| `Command`     | User commands, run loops, pause             | INFO          |
+| `Status`      | Health, food, position, version             | INFO          |
+| `Config`      | Runtime config get/set/list                 | INFO          |
+| `Chat`        | Incoming chat messages                      | INFO          |
+| `Error`       | Recoverable failures                        | ERROR         |
+| `Exception`   | Uncaught exceptions, unhandled rejections   | ERROR         |
+| `Warning`     | Node warnings                               | WARN          |
+| `Debug`       | Verbose debug output                        | DEBUG         |
+| `Movement`    | Movement logic, path execution, navigation  | INFO/DEBUG    |
+| `Pathfinding` | Path computation, goal setting, A\* search  | INFO/DEBUG    |
+| `Entity`      | Entity tracking, targeting, interaction     | INFO/DEBUG    |
+| `Packet`      | Packet handling, protocol events            | DEBUG         |
 
 ### Debug Mode
 
@@ -225,7 +225,7 @@ All source code is written in TypeScript under `src/`. Key configuration:
 
 ### Development Guidelines
 
-- **Runtime**: Node.js (see `package.json` engines).
+- **Runtime**: Node.js.
 - **Language**: TypeScript. Source files live under `src/` with a `.ts` extension. Compiled JavaScript output goes to `dist/`. Run `npm run build` to compile.
 - **Linting & Formatting**: ESLint (`eslint.config.mjs`) with Prettier (`.prettierrc`). Follow existing formatting guidelines:
   ```bash
@@ -301,6 +301,7 @@ Unit tests live in `tests/unit/` and follow the `*.test.ts` naming convention. T
 require a running Minecraft server and use mocked bot instances. Suites:
 
 - `tests/unit/utils.test.ts` — AABB collision detection, fall damage, projectile prediction
+- `tests/unit/aabb-strafe.test.ts` — AABB strafing movement and collision
 - `tests/unit/pvp.test.ts` — CombatDecision, health status, targeting, fall protection
 - `tests/unit/config.test.ts` — RuntimeConfig get/set/reset/overrides
 - `tests/unit/pvp-manager.test.ts` — Attack speed, cooldown, damage multiplier
