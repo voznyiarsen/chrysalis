@@ -180,7 +180,8 @@ export class CommandManager {
       },
       blockat: {
         description: "Get the block at the bot's current position",
-        handler: () => this.logger.info(`${this.bot.world.getBlock(this.bot.entity.position).displayName}\n${this.bot.entity.position}`),
+        handler: () =>
+          this.logger.info(this.bot.world.getBlock(this.bot.entity.position)),
       },
       cfg: {
         description: "View or edit runtime configuration",
@@ -231,6 +232,16 @@ export class CommandManager {
           this.logger.command("Dud command ran successfully");
         },
       },
+      debug: {
+        description: "Toggle DEBUG level logging on/off",
+        handler: () => {
+          const newState = !this.logger.isDebugMode;
+          this.logger.setDebugMode(newState);
+          this.logger.command(
+            `Debug logging ${newState ? "enabled" : "disabled"}`,
+          );
+        },
+      },
       vel: {
         description: "Show bot's current velocity",
         handler: () => {
@@ -247,6 +258,54 @@ export class CommandManager {
             positional: true,
             handler: async (args: string[]) => {
               await this.pause(args);
+            },
+          },
+        },
+      },
+      jump: {
+        description: "Jump toward an offset position and return distance remaining",
+        subcommands: {
+          "<xoffset>": {
+            description: "X offset from current position",
+            positional: true,
+            subcommands: {
+              "<yoffset>": {
+                description: "Y offset from current position",
+                positional: true,
+                subcommands: {
+                  "<zoffset>": {
+                    description: "Z offset from current position",
+                    positional: true,
+                    handler: async (args: string[]) => {
+                      await this.jump(args);
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      strafe: {
+        description: "Strafe toward an offset position and return distance remaining",
+        subcommands: {
+          "<xoffset>": {
+            description: "X offset from current position",
+            positional: true,
+            subcommands: {
+              "<yoffset>": {
+                description: "Y offset from current position",
+                positional: true,
+                subcommands: {
+                  "<zoffset>": {
+                    description: "Z offset from current position",
+                    positional: true,
+                    handler: async (args: string[]) => {
+                      await this.strafe(args);
+                    },
+                  },
+                },
+              },
             },
           },
         },
@@ -345,7 +404,7 @@ export class CommandManager {
         await result.node.handler(tokens, resolved);
       } catch (error: unknown) {
         const msg = error instanceof Error ? error.message : String(error);
-        this.logger.error(`Error executing command: ${msg}`);
+        this.logger.error(`Error executing command '${resolved}': ${msg}`, "Command");
       }
       return;
     }
@@ -627,7 +686,7 @@ export class CommandManager {
       } else {
         this.logger.config("Runtime overrides:");
         for (const key of keys) {
-          this.logger.config(`  ${key} = ${overrides[key]}`);
+          this.logger.config(`  ${key}: ${overrides[key]}`);
         }
       }
       return;
@@ -639,7 +698,7 @@ export class CommandManager {
 
     if (args.length === 2) {
       const value = rc.get(category, key);
-      this.logger.config(`${category}.${key} = ${value}`);
+      this.logger.config(`Current value of ${category}.${key}: ${value}`);
       return;
     }
 
@@ -648,7 +707,7 @@ export class CommandManager {
     const value = isNaN(numValue) ? rawValue : numValue;
 
     rc.set(category, key, value);
-    this.logger.config(`Set ${category}.${key} = ${value}`);
+    this.logger.config(`Set ${category}.${key} to ${value}`);
 
     if (category === "COMBAT") {
       // mineflayer plugin property access
@@ -672,6 +731,78 @@ export class CommandManager {
     const ticks = parseInt(args[1], 10);
     this.logger.command(`Pausing the bot for ${ticks} ticks`);
     await this.bot.waitForTicks(ticks);
+  }
+
+  /**
+   * Jump toward an offset position and return distance remaining.
+   * args[1]=xoffset, args[2]=yoffset, args[3]=zoffset
+   */
+  async jump(args: string[]): Promise<void> {
+    const xOffset = parseFloat(args[1]);
+    const yOffset = parseFloat(args[2]);
+    const zOffset = parseFloat(args[3]);
+
+    if (isNaN(xOffset) || isNaN(yOffset) || isNaN(zOffset)) {
+      this.logger.error(
+        new Error("Invalid arguments: jump <xoffset> <yoffset> <zoffset>"),
+      );
+      return;
+    }
+
+    const source = this.bot.entity.position.clone();
+    const target = source.offset(xOffset, yOffset, zOffset);
+
+    // Wait until settled on ground
+    await (this.bot as any).combatManager._waitUntilSettled();
+
+    // Calculate and apply jump impulse
+    const utils = (this.bot as any).utilsManager;
+    const impulse = utils.getJumpVelocity(source, target);
+    if (impulse) {
+      utils.applyImpulse(impulse, "set", true);
+    }
+
+    // Wait until landed
+    await (this.bot as any).combatManager._waitUntilSettled();
+
+    // Calculate distance remaining to target
+    const finalPos = this.bot.entity.position;
+    const dist = finalPos.distanceTo(target);
+
+    this.logger.command(
+      `Jump: target position (${target.x.toFixed(2)}, ${target.y.toFixed(2)}, ${target.z.toFixed(2)}). Final position: (${finalPos.x.toFixed(2)}, ${finalPos.y.toFixed(2)}, ${finalPos.z.toFixed(2)}). Distance remaining: ${dist.toFixed(3)}b`,
+    );
+  }
+
+  /**
+   * Strafe toward an offset position and return distance remaining.
+   * args[1]=xoffset, args[2]=yoffset, args[3]=zoffset
+   */
+  async strafe(args: string[]): Promise<void> {
+    const xOffset = parseFloat(args[1]);
+    const yOffset = parseFloat(args[2]);
+    const zOffset = parseFloat(args[3]);
+
+    if (isNaN(xOffset) || isNaN(yOffset) || isNaN(zOffset)) {
+      this.logger.error(
+        new Error("Invalid arguments: strafe <xoffset> <yoffset> <zoffset>"),
+      );
+      return;
+    }
+
+    const source = this.bot.entity.position.clone();
+    const target = source.offset(xOffset, yOffset, zOffset);
+
+    // Wait until settled on ground
+    await (this.bot as any).combatManager._waitUntilSettled();
+
+    // Execute strafe using the combat manager's executeStrafe
+    const cm = (this.bot as any).combatManager;
+    const dist = await cm.executeStrafe(target);
+
+    this.logger.command(
+      `Strafe: target position (${target.x.toFixed(2)}, ${target.y.toFixed(2)}, ${target.z.toFixed(2)}). Distance remaining: ${dist.toFixed(3)}b`,
+    );
   }
 
   /**
