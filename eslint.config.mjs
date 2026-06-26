@@ -67,7 +67,7 @@ export default [
       eqeqeq: ["error", "always", { null: "ignore" }],
       "no-var": "error",
       "no-console": ["warn", { allow: ["error", "warn"] }],
-      quotes: ["error", "single", { avoidEscape: true }],
+
       "no-useless-assignment": "warn",
     },
   },
