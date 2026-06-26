@@ -641,3 +641,96 @@ describe("Trajectory Calculation - Sanity Check", () => {
     }
   });
 });
+
+describe("AABB.sweptTOI", () => {
+  test("returns null when boxes are separated and stationary on an axis", () => {
+    const box = new AABB(0, 0, 0, 1, 1, 1);
+    const block = new AABB(5, 0, 0, 6, 1, 1);
+    expect(box.sweptTOI(new Vec3(0, 0, 0), block)).toBeNull();
+  });
+
+  test("returns null when motion is away from block", () => {
+    const box = new AABB(0, 0, 0, 1, 1, 1);
+    const block = new AABB(3, 0, 0, 4, 1, 1);
+    expect(box.sweptTOI(new Vec3(-1, 0, 0), block)).toBeNull();
+  });
+
+  test("returns 0 when already overlapping at start", () => {
+    const box = new AABB(0, 0, 0, 1, 1, 1);
+    const block = new AABB(0.5, 0, 0, 1.5, 1, 1);
+    expect(box.sweptTOI(new Vec3(0, 0, 0), block)).toBe(0);
+  });
+
+  test("returns correct TOI for head-on X collision", () => {
+    // box center at 0.5, block center at 3.5
+    // combined half-widths on X: 0.5 + 0.5 = 1.0
+    // dx = 0.5 - 3.5 = -3.0
+    // entry: t1 = (-1.0 - (-3.0)) / 2.5 = 0.8
+    // exit:  t2 = (1.0 - (-3.0)) / 2.5 = 1.6
+    // TOI = 0.8
+    const box = new AABB(0, 0, 0, 1, 1, 1);
+    const block = new AABB(3, 0, 0, 4, 1, 1);
+    const toi = box.sweptTOI(new Vec3(2.5, 0, 0), block);
+    expect(toi).not.toBeNull();
+    expect(toi!).toBeCloseTo(0.8, 5);
+  });
+
+  test("returns TOI < 1 for collision mid-tick", () => {
+    // box center at 0.5, block center at 2.0
+    // combined half-widths on X: 0.5 + 0.5 = 1.0
+    // entry distance: 2.0 - 0.5 - 1.0 = 0.5
+    // at speed 2.0, TOI = 0.5 / 2.0 = 0.25
+    const box = new AABB(0, 0, 0, 1, 1, 1);
+    const block = new AABB(1.5, 0, 0, 2.5, 1, 1);
+    const toi = box.sweptTOI(new Vec3(2, 0, 0), block);
+    expect(toi).not.toBeNull();
+    expect(toi!).toBeCloseTo(0.25, 5);
+  });
+
+  test("returns null for diagonal miss near corner", () => {
+    // box at origin moving diagonally, block is far on both X and Z
+    // combined half-extents: 0.5 + 0.5 = 1.0 on each axis
+    // box center (0.5, 0.5), block center (3.5, 3.5)
+    // dx = 0.5 - 3.5 = -3.0, hx = 1.0
+    // On X: t1 = (-1.0 - (-3.0)) / 1 = 2.0, t2 = (1.0 - (-3.0)) / 1 = 4.0
+    // On Z: same as X
+    // tEntry = max(2.0, 2.0) = 2.0 > 1 → null
+    const box = new AABB(0, 0, 0, 1, 1, 1);
+    const block = new AABB(3, 0, 3, 4, 1, 4);
+    expect(box.sweptTOI(new Vec3(1, 0, 1), block)).toBeNull();
+  });
+
+  test("handles zero velocity on all axes (already separated)", () => {
+    const box = new AABB(0, 0, 0, 1, 1, 1);
+    const block = new AABB(0, 5, 0, 1, 6, 1);
+    expect(box.sweptTOI(new Vec3(0, 0, 0), block)).toBeNull();
+  });
+
+  test("handles zero velocity on all axes (overlapping)", () => {
+    const box = new AABB(0, 0, 0, 1, 1, 1);
+    const block = new AABB(0, 0, 0, 1, 1, 1);
+    expect(box.sweptTOI(new Vec3(0, 0, 0), block)).toBe(0);
+  });
+
+  test("collision on Y axis only (falling onto block)", () => {
+    // box center at (0.5, 2.0), block center at (0.5, 0.5)
+    // combined half-heights: 0.5 + 0.5 = 1.0
+    // dy = 2.0 - 0.5 = 1.5, hy = 1.0
+    // falling at speed -2.0:
+    //   t1 = (-1.0 - 1.5) / -2 = 1.25
+    //   t2 = (1.0 - 1.5) / -2 = 0.25
+    //   tEntry = max(0.25, ...) on Y, but X and Z are overlapping (0 vel)
+    const box = new AABB(0, 1.5, 0, 1, 2.5, 1);
+    const block = new AABB(0, 0, 0, 1, 1, 1);
+    const toi = box.sweptTOI(new Vec3(0, -2, 0), block);
+    expect(toi).not.toBeNull();
+    expect(toi!).toBeCloseTo(0.25, 5);
+  });
+
+  test("returns null when collision happens after this tick", () => {
+    const box = new AABB(0, 0, 0, 1, 1, 1);
+    const block = new AABB(10, 0, 0, 11, 1, 1);
+    // speed 1.0, need to travel 8.5 units → TOI = 8.5 > 1
+    expect(box.sweptTOI(new Vec3(1, 0, 0), block)).toBeNull();
+  });
+});

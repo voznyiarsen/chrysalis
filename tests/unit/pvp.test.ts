@@ -139,7 +139,7 @@ describe("CombatManager - Health Status", () => {
         getJumpVelocity: () => ({ x: 0, y: 0.42, z: 0 }),
       },
       runtimeConfig: {
-        get: () => Constants.COMBAT.STRAFE_RANGE,
+        get: () => Constants.MOVEMENT.STRAFE_RADIUS,
       },
       pathfinder: { stop: async () => {} },
       __logger: {

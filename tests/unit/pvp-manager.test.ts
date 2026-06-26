@@ -11,10 +11,8 @@ import { Constants } from "../../src/constants";
 
 describe("getAttackSpeed", () => {
   test("returns OTHER speed for null/undefined", () => {
-    expect(getAttackSpeed(null)).toBe(Constants.WEAPON_ATTACK_SPEEDS.OTHER);
-    expect(getAttackSpeed(undefined)).toBe(
-      Constants.WEAPON_ATTACK_SPEEDS.OTHER,
-    );
+    expect(getAttackSpeed(null)).toBe(Constants.WEAPON_SPEEDS.OTHER);
+    expect(getAttackSpeed(undefined)).toBe(Constants.WEAPON_SPEEDS.OTHER);
   });
 
   test("returns correct speed for swords", () => {
@@ -33,15 +31,15 @@ describe("getAttackSpeed", () => {
 
   test("returns OTHER speed for non-weapon items", () => {
     expect(getAttackSpeed("minecraft:apple")).toBe(
-      Constants.WEAPON_ATTACK_SPEEDS.OTHER,
+      Constants.WEAPON_SPEEDS.OTHER,
     );
     expect(getAttackSpeed("minecraft:stick")).toBe(
-      Constants.WEAPON_ATTACK_SPEEDS.OTHER,
+      Constants.WEAPON_SPEEDS.OTHER,
     );
   });
 
   test("returns OTHER speed for empty string", () => {
-    expect(getAttackSpeed("")).toBe(Constants.WEAPON_ATTACK_SPEEDS.OTHER);
+    expect(getAttackSpeed("")).toBe(Constants.WEAPON_SPEEDS.OTHER);
   });
 });
 
