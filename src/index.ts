@@ -215,7 +215,7 @@ process.on(
   "unhandledRejection",
   (reason: unknown, promise: Promise<unknown>) => {
     const err = reason instanceof Error ? reason : new Error(String(reason));
-    err.message = `Unhandled Rejection at: ${promise}, reason: ${err.message}`;
+    err.message = `Unhandled Rejection: ${err.message}`;
     logger.exception(err);
   },
 );
