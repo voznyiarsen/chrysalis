@@ -22,6 +22,10 @@ export class Logger {
     this._backend = createTerminalUI() as unknown as UIBackend;
   }
 
+  get isDebugMode(): boolean {
+    return this._debugMode;
+  }
+
   setDebugMode(enabled: boolean): void {
     this._debugMode = enabled;
     this._backend.setDebugMode(enabled);
