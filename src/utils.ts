@@ -22,6 +22,7 @@ import {
   clearSolidCache,
   getGroundBelow,
   getFallDamage,
+  isPositionClear,
 } from "./movement";
 
 /**
@@ -188,17 +189,17 @@ export class AABB {
   }
 
   /**
-   * Check whether a ray (origin, direction) intersects this AABB
-   * Check whether this AABB intersects another with EPS tolerance.
+   * Check whether this AABB intersects another.
+   * Uses strict inequality: touching a face is not a collision.
    */
   intersects(other: AABB): boolean {
     return (
-      this.maxX > other.minX + EPS &&
-      this.minX < other.maxX - EPS &&
-      this.maxY > other.minY + EPS &&
-      this.minY < other.maxY - EPS &&
-      this.maxZ > other.minZ + EPS &&
-      this.minZ < other.maxZ - EPS
+      this.maxX > other.minX &&
+      this.minX < other.maxX &&
+      this.maxY > other.minY &&
+      this.minY < other.maxY &&
+      this.maxZ > other.minZ &&
+      this.minZ < other.maxZ
     );
   }
 
@@ -258,6 +259,83 @@ export class AABB {
     }
     return dz;
   }
+
+  /**
+   * Compute time of impact between this moving AABB and a static AABB.
+   *
+   * Uses the slab method: on each axis, compute the entry/exit times
+   * of this box's center relative to the expanded static box.
+   *
+   * @param velocity - Motion vector for this tick
+   * @param block    - Static AABB to test against
+   * @returns Time of impact in [0, 1], or null if no collision this tick.
+   *          Returns 0 if already overlapping at start.
+   */
+  sweptTOI(velocity: Vec3, block: AABB): number | null {
+    const thisCx = (this.minX + this.maxX) / 2;
+    const thisCy = (this.minY + this.maxY) / 2;
+    const thisCz = (this.minZ + this.maxZ) / 2;
+    const thisHx = (this.maxX - this.minX) / 2;
+    const thisHy = (this.maxY - this.minY) / 2;
+    const thisHz = (this.maxZ - this.minZ) / 2;
+
+    const blkCx = (block.minX + block.maxX) / 2;
+    const blkCy = (block.minY + block.maxY) / 2;
+    const blkCz = (block.minZ + block.maxZ) / 2;
+    const blkHx = (block.maxX - block.minX) / 2;
+    const blkHy = (block.maxY - block.minY) / 2;
+    const blkHz = (block.maxZ - block.minZ) / 2;
+
+    const dx = thisCx - blkCx;
+    const dy = thisCy - blkCy;
+    const dz = thisCz - blkCz;
+    const hx = thisHx + blkHx;
+    const hy = thisHy + blkHy;
+    const hz = thisHz + blkHz;
+
+    let tEntry = 0;
+    let tExit = 1;
+
+    // X axis
+    if (Math.abs(velocity.x) < 1e-9) {
+      if (Math.abs(dx) >= hx) return null;
+    } else {
+      let t1 = (-hx - dx) / velocity.x;
+      let t2 = (hx - dx) / velocity.x;
+      if (t1 > t2) [t1, t2] = [t2, t1];
+      tEntry = Math.max(tEntry, t1);
+      tExit = Math.min(tExit, t2);
+      if (tEntry > tExit) return null;
+    }
+
+    // Y axis
+    if (Math.abs(velocity.y) < 1e-9) {
+      if (Math.abs(dy) >= hy) return null;
+    } else {
+      let t1 = (-hy - dy) / velocity.y;
+      let t2 = (hy - dy) / velocity.y;
+      if (t1 > t2) [t1, t2] = [t2, t1];
+      tEntry = Math.max(tEntry, t1);
+      tExit = Math.min(tExit, t2);
+      if (tEntry > tExit) return null;
+    }
+
+    // Z axis
+    if (Math.abs(velocity.z) < 1e-9) {
+      if (Math.abs(dz) >= hz) return null;
+    } else {
+      let t1 = (-hz - dz) / velocity.z;
+      let t2 = (hz - dz) / velocity.z;
+      if (t1 > t2) [t1, t2] = [t2, t1];
+      tEntry = Math.max(tEntry, t1);
+      tExit = Math.min(tExit, t2);
+      if (tEntry > tExit) return null;
+    }
+
+    if (tEntry < 0) return 0;
+    if (tEntry > 1) return null;
+    return tEntry;
+  }
 }
 
 interface SimulateTickState {
@@ -295,6 +373,7 @@ export class UtilsManager {
   lastImpulseTick?: number;
   logger: any;
   _obstacles: AABB[];
+  _holes: [number, number][];
 
   constructor(bot: Bot) {
     this.bot = bot;
@@ -313,7 +392,7 @@ export class UtilsManager {
     this._solidCacheMaxSize = 16;
     this._solidCache = new Map();
     this.recentPoints = [];
-    this.recentPointsMax = Constants.MOVEMENT.STRAFE_POINTS_MAX_HISTORY;
+    this.recentPointsMax = Constants.MOVEMENT.STRAFE_HISTORY_SIZE;
     this.liquidBlockIds = new Set();
     this._obstacles = [];
     this._initializeLiquidCache();
@@ -382,11 +461,7 @@ export class UtilsManager {
     if (Math.abs(vel.z) < this.momentumThreshold) vel.z = 0;
     const St = this.getSlipperiness(pos);
     const Mt_base = sprinting ? 1.3 : sneaking ? 0.3 : 1.0;
-    const Mt_strafe =
-      Math.abs(forward) > 0 && Math.abs(strafe) > 0
-        ? Constants.PHYSICS.ACCELERATION.STRAFE_45_MULTIPLIER
-        : Constants.PHYSICS.ACCELERATION.STRAFE_MULTIPLIER;
-    const Mt = Mt_base * Mt_strafe;
+    const Mt = Mt_base * Constants.PHYSICS.ACCELERATION.STRAFE_MULTIPLIER;
     const Et = this.applyEffects ? this.getEffectsMultiplier() : 1.0;
     let moveFactor = onGround
       ? 0.1 * Mt * Et * Math.pow(0.6 / St, 3)
@@ -407,18 +482,18 @@ export class UtilsManager {
     if (onGround && jumping) {
       vel.y = Constants.PHYSICS.JUMP_VELOCITY;
       if (sprinting) {
-        vel.x += -sinYaw * Constants.PHYSICS.SPRINT_JUMP_BOOST;
-        vel.z += cosYaw * Constants.PHYSICS.SPRINT_JUMP_BOOST;
+        vel.x += -sinYaw * Constants.PHYSICS.JUMP_BOOST;
+        vel.z += cosYaw * Constants.PHYSICS.JUMP_BOOST;
       }
     }
     const nextPos = pos.plus(vel);
-    vel.y -= Constants.PHYSICS.TICK_GRAVITY;
-    vel.y *= Constants.PHYSICS.TICK_DRAG;
-    if (vel.y < Constants.PHYSICS.TERMINAL_VELOCITY_Y)
-      vel.y = Constants.PHYSICS.TERMINAL_VELOCITY_Y;
+    vel.y -= Constants.PHYSICS.GRAVITY;
+    vel.y *= Constants.PHYSICS.DRAG;
+    if (vel.y < Constants.PHYSICS.TERMINAL_VELOCITY)
+      vel.y = Constants.PHYSICS.TERMINAL_VELOCITY;
     const drag = onGround
-      ? St * Constants.PHYSICS.MOMENTUM_CONSERVATION
-      : Constants.PHYSICS.MOMENTUM_CONSERVATION;
+      ? St * Constants.PHYSICS.MOMENTUM
+      : Constants.PHYSICS.MOMENTUM;
     vel.x *= drag;
     vel.z *= drag;
     return { pos: nextPos, vel, onGround: entity.onGround };
@@ -538,17 +613,24 @@ export class UtilsManager {
     );
   }
 
-  getStrafePoint(source: Vec3, candidate: Vec3, pvpTarget?: Vec3): Vec3 | null {
+  getStrafePoint(
+    source: Vec3,
+    candidate: Vec3,
+    pvpTarget?: Vec3,
+    debugLog?: (msg: string) => void,
+  ): Vec3 | null {
     return getStrafePoint(
       source,
       candidate,
       pvpTarget || (this.bot.entity as any).position,
-      (pos: Vec3) => this.getSolidBlocks(pos),
+      (pos: Vec3) => this.bot.blockAt(pos),
       (a: Vec3, b: Vec3) => this.isJumpPathClear(a, b),
       this.recentPoints,
       this.recentPointsMax,
-      pvpTarget,
+      undefined,
       this._obstacles,
+      this._holes,
+      debugLog,
     );
   }
 
@@ -572,7 +654,7 @@ export class UtilsManager {
     source: Vec3,
     target: Vec3,
     angleDeg = 0,
-    speed: number = Constants.MOVEMENT.FLAT_VELOCITY_XZ,
+    speed: number = Constants.MOVEMENT.FLAT_SPEED,
     vy = 0,
   ): Vec3 {
     return getFlatVelocity(source, target, angleDeg, speed, vy);
@@ -587,7 +669,7 @@ export class UtilsManager {
   getSolidBlocks(source: Vec3): Vec3[] {
     return getSolidBlocks(
       source,
-      Constants.MOVEMENT.SOLID_BLOCK_SEARCH_RADIUS,
+      Constants.MOVEMENT.SOLID_BLOCK_RADIUS,
       (pos: Vec3) => this.bot.blockAt(pos),
       (this.bot.entity as any).width,
       this._solidCache,
@@ -607,7 +689,7 @@ export class UtilsManager {
   updateObstacles(): void {
     const entity = this.bot.entity as any;
     const pos = entity.position;
-    const radius = Constants.MOVEMENT.SOLID_BLOCK_SEARCH_RADIUS;
+    const radius = Constants.MOVEMENT.SOLID_BLOCK_RADIUS;
     const obstacles: AABB[] = [];
     const minX = Math.floor(pos.x - radius);
     const maxX = Math.floor(pos.x + radius);
@@ -637,6 +719,35 @@ export class UtilsManager {
       }
     }
     this._obstacles = obstacles;
+
+    // Detect holes: XZ grid cells within the search radius that have no
+    // walkable surface (no solid block with empty space above it).
+    const holes: [number, number][] = [];
+    for (let x = minX; x <= maxX; x++) {
+      for (let z = minZ; z <= maxZ; z++) {
+        let hasSurface = false;
+        for (
+          let y = maxY;
+          y >= minY + Constants.BLOCK_DETECTION.WALKABLE_Y_OFFSET;
+          y--
+        ) {
+          const block = this.bot.blockAt(new Vec3(x, y, z));
+          const above = this.bot.blockAt(new Vec3(x, y + 1, z));
+          if (
+            block &&
+            block.boundingBox !== "empty" &&
+            (!above || above.boundingBox === "empty")
+          ) {
+            hasSurface = true;
+            break;
+          }
+        }
+        if (!hasSurface) {
+          holes.push([x, z]);
+        }
+      }
+    }
+    this._holes = holes;
   }
 
   getGroundBelow(): number {
@@ -647,6 +758,17 @@ export class UtilsManager {
 
   getFallDamage(distance: number): number {
     return getFallDamage(distance);
+  }
+
+  /**
+   * Check whether the bot's full AABB (0.6×1.8×0.6) fits at the given
+   * position without intersecting any solid block. Uses strict-inequality
+   * overlap (touching a face is not a collision).
+   * @param pos - The position (feet-level) to check
+   * @returns true if the position is clear of solid blocks
+   */
+  isPositionClear(pos: Vec3): boolean {
+    return isPositionClear(pos, (p: Vec3) => this.bot.blockAt(p));
   }
 
   // ---------------------------------------------------------------------------
@@ -752,18 +874,14 @@ export class UtilsManager {
 
   isInUnwanted(
     source: Vec3,
-    height: number = Constants.GEOMETRY.UNWANTED_CHECK_HEIGHT,
-    offset: number = Constants.GEOMETRY.UNWANTED_CHECK_OFFSET,
+    height: number = Constants.GEOMETRY.UNWANTED_HEIGHT,
+    offset: number = Constants.GEOMETRY.UNWANTED_OFFSET,
   ): boolean {
     const unwantedBlocks = Constants.BLOCK_DETECTION.UNWANTED_BLOCK_NAMES;
-    const layerHeight = height / Constants.GEOMETRY.UNWANTED_CHECK_LAYERS;
-    const offsets = [offset, offset + Constants.PHYSICS.COLLISION_OFFSET_FINE];
+    const layerHeight = height / Constants.GEOMETRY.UNWANTED_LAYERS;
+    const offsets = [offset, offset + Constants.PHYSICS.COLLISION_OFFSET];
     for (const off of offsets) {
-      for (
-        let layer = 0;
-        layer < Constants.GEOMETRY.UNWANTED_CHECK_LAYERS;
-        layer++
-      ) {
+      for (let layer = 0; layer < Constants.GEOMETRY.UNWANTED_LAYERS; layer++) {
         const y = source.y + layer * layerHeight;
         const points = [
           new Vec3(source.x + off, y, source.z + off),
@@ -786,8 +904,8 @@ export class UtilsManager {
 
   isInLiquid(
     source: Vec3,
-    height: number = Constants.GEOMETRY.LIQUID_CHECK_HEIGHT,
-    width: number = Constants.GEOMETRY.LIQUID_CHECK_WIDTH,
+    height: number = Constants.GEOMETRY.LIQUID_HEIGHT,
+    width: number = Constants.GEOMETRY.LIQUID_WIDTH,
   ): boolean {
     const w2 = width / 2;
     const levels = [0, height / 2, height];
@@ -809,11 +927,11 @@ export class UtilsManager {
   drawRectColLine(source: Vec3, target: Vec3): boolean {
     const dir = target.minus(source);
     const len = dir.norm();
-    const segments = Math.ceil(len / Constants.MOVEMENT.COLLISION_SEGMENT_SIZE);
+    const segments = Math.ceil(len / Constants.MOVEMENT.COLLISION_SEGMENT);
     const step = dir.scaled(1 / segments);
     for (let i = 0; i <= segments; i++) {
       const base = source.plus(step.scaled(i));
-      for (const dy of Constants.MOVEMENT.COLLISION_CHECK_HEIGHTS) {
+      for (const dy of Constants.MOVEMENT.COLLISION_HEIGHTS) {
         for (const offset of Constants.MOVEMENT.COLLISION_OFFSETS) {
           const p = new Vec3(base.x + offset.x, base.y + dy, base.z + offset.z);
           const block = this.bot.blockAt(p);
