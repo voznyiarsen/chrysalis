@@ -228,7 +228,12 @@ declare class UtilsManager {
   isInLiquid(pos: Vec3): boolean;
   getCollisions(aabb: AABB, minYThreshold?: number): AABB[];
   isJumpPathClear(source: Vec3, target: Vec3): boolean;
-  getStrafePoint(source: Vec3, candidate: Vec3, pvpTarget?: Vec3): Vec3 | null;
+  getStrafePoint(
+    source: Vec3,
+    candidate: Vec3,
+    pvpTarget?: Vec3,
+    debugLog?: (msg: string) => void,
+  ): Vec3 | null;
   getStrafeYaw(source: Vec3, target: Vec3, direction?: number): number;
   getHorizontalSpeed(): number;
   getGroundJumpSpeed(source: Vec3): number;
