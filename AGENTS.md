@@ -68,11 +68,12 @@ All source code is written in TypeScript under `src/`. Key configuration:
 
 ### Module Documentation Index
 
-The `documentation/` directory contains API documentation for the following modules:
+The `documentation/module-documentation/` directory contains API documentation for the following modules:
 
 - `flying-squid_api.md`
 - `mineflayer-cmd_api.md`
 - `mineflayer-collectblock_api.md`
+- `mineflayer-pvp_api.md`
 - `mineflayer-statemachine_api.md`
 - `mineflayer-tool_api.md`
 - `mineflayer_api.md`
@@ -81,17 +82,20 @@ The `documentation/` directory contains API documentation for the following modu
 - `node-minecraft-data_api.md`
 - `node-minecraft-packets_api.md`
 - `node-minecraft-protocol_api.md`
+- `node-vec3_readme.md`
 - `prismarine-auth_api.md`
 - `prismarine-block_api.md`
 - `prismarine-realms_api.md`
 - `prismarine-windows_api.md`
 - `prismarine-world_api.md`
 
+Additional Minecraft gameplay documentation lives in `documentation/minecraft/` (fall damage, food, golden apples, projectiles) and `documentation/parkour/` (blocks, cobweb, collisions, ladders/vines, movement formulas, movement types, slipperiness, status effects, units).
+
 ---
 
 ## Development Guidelines
 
-- **Runtime**: Node.js (see `package.json` engines).
+- **Runtime**: Node.js.
 - **Language**: TypeScript. Source files live under `src/` with a `.ts` extension.
   Compiled JavaScript output goes to `dist/`.
 - **Linting**: ESLint (`eslint.config.mjs`) with Prettier (`.prettierrc`).
@@ -233,23 +237,23 @@ logger.packet(msg, level?, caller?);
 
 ### Canonical Tags
 
-| Tag           | Domain                                                                                 | Default Level |
-| ------------- | -------------------------------------------------------------------------------------- | ------------- |
-| `Client`      | Bot lifecycle (login, kick, end, reconnect)                                            | INFO          |
-| `Combat`      | Decisions, modes, pearls, strafing                                                     | INFO/DEBUG    |
-| `Inventory`   | Equip, toss, record, restore, consume                                                  | INFO          |
-| `Command`     | User commands, run loops, pause                                                        | INFO          |
-| `Status`      | Health, food, position, version                                                        | INFO          |
-| `Config`      | Runtime config get/set/list                                                            | INFO          |
-| `Chat`        | Incoming chat messages                                                                 | INFO          |
-| `Error`       | Recoverable failures                                                                   | ERROR         |
-| `Exception`   | Uncaught exceptions, unhandled rejections                                              | ERROR         |
-| `Warning`     | Node warnings                                                                          | WARN          |
-| `Debug`       | Verbose debug output                                                     | DEBUG         |
-| `Movement`    | Movement logic, path execution, navigation                                             | INFO/DEBUG    |
-| `Pathfinding` | Path computation, goal setting, A\* search                                             | INFO/DEBUG    |
-| `Entity`      | Entity tracking, targeting, interaction                                                | INFO/DEBUG    |
-| `Packet`      | Packet handling, protocol events                                                       | DEBUG         |
+| Tag           | Domain                                      | Default Level |
+| ------------- | ------------------------------------------- | ------------- |
+| `Client`      | Bot lifecycle (login, kick, end, reconnect) | INFO          |
+| `Combat`      | Decisions, modes, pearls, strafing          | INFO/DEBUG    |
+| `Inventory`   | Equip, toss, record, restore, consume       | INFO          |
+| `Command`     | User commands, run loops, pause             | INFO          |
+| `Status`      | Health, food, position, version             | INFO          |
+| `Config`      | Runtime config get/set/list                 | INFO          |
+| `Chat`        | Incoming chat messages                      | INFO          |
+| `Error`       | Recoverable failures                        | ERROR         |
+| `Exception`   | Uncaught exceptions, unhandled rejections   | ERROR         |
+| `Warning`     | Node warnings                               | WARN          |
+| `Debug`       | Verbose debug output                        | DEBUG         |
+| `Movement`    | Movement logic, path execution, navigation  | INFO/DEBUG    |
+| `Pathfinding` | Path computation, goal setting, A\* search  | INFO/DEBUG    |
+| `Entity`      | Entity tracking, targeting, interaction     | INFO/DEBUG    |
+| `Packet`      | Packet handling, protocol events            | DEBUG         |
 
 ### Debug Mode
 
@@ -293,12 +297,23 @@ without restarting the bot. Example:
 
 ```
 cfg COMBAT.ATTACK_RANGE 4.0
-cfg COMBAT.STRAFE_RANGE 4.0
+cfg MOVEMENT.STRAFE_RADIUS 4.0
 cfg                    # list all active overrides
 ```
 
 Adjustable values are routed through `src/config.ts` (the `RuntimeConfig` class),
 which wraps `src/constants.ts` and allows per-key overrides via a `Map`.
+
+DEBUG-level logging can be toggled at runtime via the `debug` command:
+
+```
+debug                  # toggle DEBUG logging on/off
+```
+
+When enabled, verbose metrics are emitted for strafe point selection, combat
+decisions, target acquisition, edge protection, fall protection, and inventory
+equip decisions. All debug output uses the `logger.debug()` facade and is
+suppressed by default.
 
 ---
 
@@ -310,6 +325,7 @@ Unit tests live in `tests/unit/` and follow the `*.test.ts` naming convention. T
 require a running Minecraft server and use mocked bot instances. Suites:
 
 - `tests/unit/utils.test.ts` — AABB collision detection, fall damage, projectile prediction
+- `tests/unit/aabb-strafe.test.ts` — AABB strafing movement and collision
 - `tests/unit/pvp.test.ts` — CombatDecision, health status, targeting, fall protection
 - `tests/unit/config.test.ts` — RuntimeConfig get/set/reset/overrides
 - `tests/unit/pvp-manager.test.ts` — Attack speed, cooldown, damage multiplier
@@ -408,11 +424,11 @@ Configuration is loaded from `.env` via `dotenv`. See `.env.example` for the ful
 | `src/listener-manager.ts`   | Event listener lifecycle management                     |
 | `src/logger.ts`             | Unified logging facade                                  |
 | `src/movement.ts`           | Movement mechanics (jump, strafe, collision physics)    |
-| `src/projectile.ts`         | Projectile trajectory calculation (pearl arcs)         |
-| `src/pvp.ts`                | PvP combat logic (CombatManager, PVPManager)           |
+| `src/projectile.ts`         | Projectile trajectory calculation (pearl arcs)          |
+| `src/pvp.ts`                | PvP combat logic (CombatManager, PVPManager)            |
 | `src/tui.ts`                | Terminal UI (blessed-based)                             |
 | `src/types/mineflayer.d.ts` | Type augmentations for mineflayer Bot/Entity interfaces |
-| `src/utils.ts`              | Utility functions (AABB, math, block cache)              |
+| `src/utils.ts`              | Utility functions (AABB, math, block cache)             |
 
 ---
 
@@ -432,9 +448,9 @@ Do not use simple set intersection to calculate physical collisions. Game physic
 
 When checking if an entity's AABB overlaps with a block's AABB, evaluate using **strict inequalities**:
 
-* `Overlap X = (Entity.MinX < Block.MaxX) AND (Entity.MaxX > Block.MinX)`
-* `Overlap Y = (Entity.MinY < Block.MaxY) AND (Entity.MaxY > Block.MinY)`
-* `Overlap Z = (Entity.MinZ < Block.MaxZ) AND (Entity.MaxZ > Block.MinZ)`
+- `Overlap X = (Entity.MinX < Block.MaxX) AND (Entity.MaxX > Block.MinX)`
+- `Overlap Y = (Entity.MinY < Block.MaxY) AND (Entity.MaxY > Block.MinY)`
+- `Overlap Z = (Entity.MinZ < Block.MaxZ) AND (Entity.MaxZ > Block.MinZ)`
 
 A physical collision only occurs if all three axes report true. An entity standing perfectly at $y = 1.0$ on top of a block at $(0,0,0)$ shares exactly one mathematical point (set intersection of $\{1\}$), but because $1.0$ is not strictly less than $1.0$, the overlap logic evaluates to false. The entity is supported, not colliding.
 
@@ -442,12 +458,12 @@ A physical collision only occurs if all three axes report true. An entity standi
 
 Unlike movement physics, raycasting (used for mining, shooting, or placing blocks) evaluates the strict mathematical boundaries.
 
-* A ray intersecting the exact coordinate $x=1.0$ or $y=1.0$ of the block $[0, 1]$ registers a successful hit on the outer face.
-* Do not treat the block as an open interval $(0, 1)$ for raycasting, or rays striking the exact face will pass through the block.
+- A ray intersecting the exact coordinate $x=1.0$ or $y=1.0$ of the block $[0, 1]$ registers a successful hit on the outer face.
+- Do not treat the block as an open interval $(0, 1)$ for raycasting, or rays striking the exact face will pass through the block.
 
 ### 4. Movement Resolution Protocol
 
-When an entity's velocity vector projects its AABB *into* a solid block's AABB (violating the strict inequality rule above):
+When an entity's velocity vector projects its AABB _into_ a solid block's AABB (violating the strict inequality rule above):
 
 1. Halt velocity on the colliding axis.
 2. Snap the entity's boundary exactly to the block's maximum or minimum boundary.
@@ -474,9 +490,17 @@ When an entity's velocity vector projects its AABB *into* a solid block's AABB (
 
 ## Rules for Agents
 
-1. **Divide-Verify-Refine**: For complex tasks, break them down into smaller, manageable sub-tasks (Divide). After each sub-task, verify the result through builds, tests, or manual inspection (Verify). If issues are found, refine the implementation before proceeding to the next sub-task (Refine).
-2. When implementing new features, prefer enhancing existing modules over creating new top-level files.
-3. **Formatting**: Run linters to auto-fix formatting issues instead of manual fixes:
+1. **Ask Clarifying Questions**: Before making code changes, ask the user to confirm intent if any of the following is ambiguous:
+   - Which file(s) or module(s) to modify
+   - The expected behavior or outcome of the change
+   - Which tests to add or update
+   - Configuration values, thresholds, or constants to use
+   - Scope of the change (e.g., refactor vs. targeted fix)
+
+   If the task description already provides all the necessary details (specific files, exact behavior, test expectations), proceed without asking. Prefer a single focused question over multiple ones when possible.
+2. **Divide-Verify-Refine**: For complex tasks, break them down into smaller, manageable sub-tasks (Divide). After each sub-task, verify the result through builds, tests, or manual inspection (Verify). If issues are found, refine the implementation before proceeding to the next sub-task (Refine).
+3. When implementing new features, prefer enhancing existing modules over creating new top-level files.
+4. **Formatting**: Run linters to auto-fix formatting issues instead of manual fixes:
 
    ```bash
    npm run lint   # Run ESLint (includes --fix)
@@ -490,7 +514,7 @@ When an entity's velocity vector projects its AABB *into* a solid block's AABB (
    { "command": "npm run format", "cd": "/home/tsuchinoko/code-nodejs/pupa" }
    ```
 
-4. **Build & Verify**: After making code changes, run `npm run build` to compile TypeScript and `npm start -- --headless --bot1` to verify functionality.
+5. **Build & Verify**: After making code changes, run `npm run build` to compile TypeScript and `npm start -- --headless --bot1` to verify functionality.
 
    Using the `terminal` tool:
 
@@ -499,18 +523,32 @@ When an entity's velocity vector projects its AABB *into* a solid block's AABB (
    { "command": "npm start -- --headless --bot1 \"\"", "cd": "/home/tsuchinoko/code-nodejs/pupa" }
    ```
 
-5. **Documentation**: After making code changes, update `README.md` and `AGENTS.md` to reflect any changes to:
+5a. **Test Suite**: After making code changes, run the full test suite (`npm test`) to verify nothing is broken. If the change affects a specific module, also run the targeted test scope (e.g., `npm test -- tests/unit/pvp.test.ts`). E2E tests are skipped when `E2E_HOST` is not set.
+
+Using the `terminal` tool:
+
+```json
+{ "command": "npm test", "cd": "/home/tsuchinoko/code-nodejs/pupa" }
+{ "command": "npm test -- tests/unit", "cd": "/home/tsuchinoko/code-nodejs/pupa" }
+```
+
+6. **Documentation**: After making code changes, update `README.md` and `AGENTS.md` to reflect any changes to:
    - Command signatures and behavior
    - File structure and architecture overview
    - Test commands and examples
    - API signatures and type definitions
    - Configuration options and environment variables
-6. **Jest Tests**: Always aim to resolve the underlying issue causing a test failure. **NEVER** bypass failures by modifying values inside `.expect()` calls to force a test to pass. Doing so masks real bugs and undermines the reliability of the test suite. Modifying an expectation is only acceptable if you have verified that the test expectation itself is incorrect.
-7. **Troubleshooting**: If issues arise during development or testing, assume they are caused by the codebase. The server is never at fault.
-8. **Terminal Tool Usage**: When using the `terminal` tool to execute shell commands, both `command` and `cd` parameters are **required**. The `terminal` tool will **NEVER** run if either parameter is missing — the call will fail every time.
+7. **Jest Tests**: Always aim to resolve the underlying issue causing a test failure. **NEVER** bypass failures by modifying values inside `.expect()` calls to force a test to pass. Doing so masks real bugs and undermines the reliability of the test suite. Modifying an expectation is only acceptable if you have verified that the test expectation itself is incorrect.
+8. **Troubleshooting**: If issues arise during development or testing, assume they are caused by the codebase. The server is never at fault.
+9. **Terminal Tool Usage**: When using the `terminal` tool to execute shell commands, both `command` and `cd` parameters are **required**. The `terminal` tool will **NEVER** run if either parameter is missing — the call will fail every time.
    - `cd` (required): An absolute path to a directory within the workspace (e.g., `/home/tsuchinoko/code-nodejs/pupa`). Never embed `cd` inside the command string.
    - `command` (required): The shell one-liner to execute. Do not include shell substitutions like `$VAR`, `$(...)`, or backticks — resolve values beforehand.
    - Always provide both parameters in every `terminal` tool invocation without exception.
+10. **Use MCP Web Search Tools**: When you need to look up information outside the codebase — such as library documentation, API references, Minecraft protocol details, or library changelogs — prefer the MCP web search tools (`web_search_exa`, `web_fetch_exa`, `firecrawl_search`, `firecrawl_scrape`) over guessing or relying on stale local knowledge. This is especially useful for:
+   - Looking up the latest Mineflayer API changes or usage patterns.
+   - Finding documentation for npm packages or Minecraft protocol behavior.
+   - Researching bugs, errors, or unfamiliar patterns encountered during development.
+   - Checking for updates or releases of dependencies.
 
 ---
 
