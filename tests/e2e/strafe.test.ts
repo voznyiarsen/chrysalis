@@ -14,25 +14,27 @@
  * Skipped automatically when E2E_HOST is not set.
  */
 
-import 'dotenv/config';
-import mineflayer, { Bot } from 'mineflayer';
-import { pathfinder } from 'mineflayer-pathfinder';
-import { PVPManager } from '../../src/pvp';
-import { attachInventory } from '../../src/inventory';
-import { attachCombat } from '../../src/pvp';
-import { attachCommands } from '../../src/commands';
-import { attachUtils } from '../../src/utils';
-import { RuntimeConfig } from '../../src/config';
-import { logger } from '../../src/logger';
-import { Vec3 } from 'vec3';
+import "dotenv/config";
+import mineflayer, { Bot } from "mineflayer";
+import { pathfinder } from "mineflayer-pathfinder";
+import { PVPManager } from "../../src/pvp";
+import { attachInventory } from "../../src/inventory";
+import { attachCombat } from "../../src/pvp";
+import { attachCommands } from "../../src/commands";
+import { attachUtils } from "../../src/utils";
+import { RuntimeConfig } from "../../src/config";
+import { logger } from "../../src/logger";
+import { Vec3 } from "vec3";
+import { Constants } from "../../src/constants";
+import { terrain, STRAFE_FIXTURES } from "../helpers/terrain";
 
 // ── E2E configuration ───────────────────────────────────────────────
 
 const HOST = process.env.E2E_HOST;
-const PORT = parseInt(process.env.E2E_PORT || '25565', 10);
-const USERNAME = 'strafe_test';
+const PORT = parseInt(process.env.E2E_PORT || "25565", 10);
+const USERNAME = "strafe_test";
 const VERSION = process.env.E2E_VERSION || undefined;
-const TIMEOUT_MS = parseInt(process.env.E2E_TIMEOUT || '60', 10) * 1000;
+const TIMEOUT_MS = parseInt(process.env.E2E_TIMEOUT || "60", 10) * 1000;
 const CONNECT_TIMEOUT_MS = 15_000;
 const POSITION = new Vec3(200, 1, 200);
 
@@ -54,23 +56,23 @@ async function createBot(): Promise<Bot> {
 
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => {
-      bot.removeAllListeners('spawn');
-      bot.removeAllListeners('error');
-      bot.removeAllListeners('end');
-      reject(new Error('Connection timed out'));
+      bot.removeAllListeners("spawn");
+      bot.removeAllListeners("error");
+      bot.removeAllListeners("end");
+      reject(new Error("Connection timed out"));
     }, CONNECT_TIMEOUT_MS);
 
-    bot.once('spawn', () => {
+    bot.once("spawn", () => {
       clearTimeout(timer);
       resolve();
     });
-    bot.once('error', (err: Error) => {
+    bot.once("error", (err: Error) => {
       clearTimeout(timer);
       reject(err);
     });
-    bot.once('end', () => {
+    bot.once("end", () => {
       clearTimeout(timer);
-      reject(new Error('Bot disconnected before spawn'));
+      reject(new Error("Bot disconnected before spawn"));
     });
   });
 
@@ -93,26 +95,24 @@ async function createBot(): Promise<Bot> {
 
 // ── E2E test suite ──────────────────────────────────────────────────
 
-describeE2E('E2E Strafe Tests', () => {
+describeE2E("E2E Strafe Tests", () => {
   let bot: Bot;
 
   // Set overall suite timeout to 5 minutes (300 seconds)
   jest.setTimeout(TIMEOUT_MS * 5);
 
   beforeAll(async () => {
-    // Run before all tests
     bot = await createBot();
     if (bot && bot.entity) {
       try {
         await bot.waitForChunksToLoad!();
         await bot.waitForTicks!(1);
-        bot.chat!(`/tp ${Object.values(POSITION).join(' ')}`);
-
+        bot.chat!(`/tp ${Object.values(POSITION).join(" ")}`);
         await bot.waitForChunksToLoad!();
         await bot.waitForTicks!(1);
-        bot.chat!('/gamemode creative'); // Set gamemode to creative
+        bot.chat!("/gamemode creative");
       } catch (error) {
-        console.error('beforeAll cleanup failed:', error);
+        console.error("beforeAll setup failed:", error);
       }
     }
   }, TIMEOUT_MS);
@@ -123,7 +123,7 @@ describeE2E('E2E Strafe Tests', () => {
       try {
         await bot.waitForChunksToLoad!();
         await bot.waitForTicks!(1);
-        bot.chat!(`/tp ${Object.values(POSITION).join(' ')}`);
+        bot.chat!(`/tp ${Object.values(POSITION).join(" ")}`);
 
         await bot.waitForChunksToLoad!();
         await bot.waitForTicks!(1);
@@ -142,76 +142,134 @@ describeE2E('E2E Strafe Tests', () => {
           bot.combatManager.setMode(0);
         }
       } catch (error) {
-        console.error('beforeEach cleanup failed:', error);
+        console.error("beforeEach cleanup failed:", error);
       }
     }
   }, TIMEOUT_MS);
 
   afterAll(async () => {
-    // Run after all tests
     if (bot) {
       try {
         bot.quit!();
         bot.end!();
       } catch (error) {
-        console.error('afterAll cleanup failed:', error);
+        console.error("afterAll cleanup failed:", error);
       }
     }
     logger.setDebugMode(false);
   }, TIMEOUT_MS);
 
-  // ----------------------------------------------------------------
-  // Strafe Tests
-  // ----------------------------------------------------------------
+  // ────────────────────────────────────────────────────────────────
+  // Flat terrain
+  // ────────────────────────────────────────────────────────────────
 
-  test(
-    'executeStrafe — executes single strafe',
-    async () => {
-      const cm = bot.combatManager;
-      const dist = await cm.executeStrafe(bot.entity.position.offset(3, 0, 0));
-      expect(dist).toBeGreaterThanOrEqual(0);
-      expect(dist).toBeLessThanOrEqual(2.0);
-    },
-    TIMEOUT_MS,
-  );
+  describe("Flat terrain", () => {
+    test(
+      "executeStrafe — executes single strafe",
+      async () => {
+        const cm = bot.combatManager;
+        const targetPos = bot.entity.position;
+        const distToStrafe = await cm.executeStrafe(targetPos);
+        expect(distToStrafe).toBeGreaterThanOrEqual(0);
+        expect(distToStrafe).toBeLessThanOrEqual(0.5);
+        const distToTarget = bot.entity.position.distanceTo(targetPos);
+        expect(distToTarget).toBeLessThanOrEqual(
+          Constants.MOVEMENT.STRAFE_RADIUS,
+        );
+      },
+      TIMEOUT_MS,
+    );
 
-  test(
-    'executeStrafeLoop — loops strafe 3 times',
-    async () => {
-      const cm = bot.combatManager;
-      const targetPos = bot.entity.position.offset(3, 0, 0);
-      const distances = await cm.executeStrafeLoop(
-        targetPos,
-        3,
+    test(
+      "executeStrafeLoop — loops strafe 3 times",
+      async () => {
+        const cm = bot.combatManager;
+        const targetPos = bot.entity.position;
+        const distances = await cm.executeStrafeLoop(targetPos, 3);
+        expect(distances.length).toBe(3);
+        distances.forEach((distToStrafe) => {
+          expect(distToStrafe).toBeGreaterThanOrEqual(0);
+          expect(distToStrafe).toBeLessThanOrEqual(0.5);
+        });
+        const distToTarget = bot.entity.position.distanceTo(targetPos);
+        expect(distToTarget).toBeLessThanOrEqual(
+          Constants.MOVEMENT.STRAFE_RADIUS,
+        );
+      },
+      TIMEOUT_MS,
+    );
+
+    test(
+      "executeStrafeLoop — loops strafe 15 times",
+      async () => {
+        const cm = bot.combatManager;
+        const targetPos = bot.entity.position;
+        const distances = await cm.executeStrafeLoop(targetPos, 15);
+        expect(distances.length).toBe(15);
+        distances.forEach((distToStrafe) => {
+          expect(distToStrafe).toBeGreaterThanOrEqual(0);
+          expect(distToStrafe).toBeLessThanOrEqual(0.5);
+        });
+        const distToTarget = bot.entity.position.distanceTo(targetPos);
+        expect(distToTarget).toBeLessThanOrEqual(
+          Constants.MOVEMENT.STRAFE_RADIUS,
+        );
+      },
+      TIMEOUT_MS,
+    );
+  });
+
+  // ────────────────────────────────────────────────────────────────
+  // Modified terrain
+  // ────────────────────────────────────────────────────────────────
+
+  describe("Modified terrain", () => {
+    // Clear y=0 and y=1 in a 20x20 area around the bot before each test
+    beforeEach(async () => {
+      const pos = bot.entity.position;
+      bot.chat(
+        `/fill ${pos.x - 10} ${pos.y} ${pos.z - 10} ${pos.x + 10} ${pos.y} ${pos.z + 10} air`,
       );
-      expect(distances.length).toBe(3);
-      distances.forEach((dist) => {
-        expect(dist).toBeGreaterThanOrEqual(0);
-        expect(dist).toBeLessThanOrEqual(2.0);
-      });
-      const distToTarget = bot.entity.position.distanceTo(targetPos);
-      expect(distToTarget).toBeLessThanOrEqual(3.0);
-    },
-    TIMEOUT_MS,
-  );
-
-  test(
-    'executeStrafeLoop — loops strafe 15 times',
-    async () => {
-      const cm = bot.combatManager;
-      const targetPos = bot.entity.position.offset(3, 0, 0);
-      const distances = await cm.executeStrafeLoop(
-        targetPos,
-        15,
+      bot.chat(
+        `/fill ${pos.x - 10} ${pos.y + 1} ${pos.z - 10} ${pos.x + 10} ${pos.y + 1} ${pos.z + 10} air`,
       );
-      expect(distances.length).toBe(15);
-      distances.forEach((dist) => {
-        expect(dist).toBeGreaterThanOrEqual(0);
-        expect(dist).toBeLessThanOrEqual(2.0);
-      });
-      const distToTarget = bot.entity.position.distanceTo(targetPos);
-      expect(distToTarget).toBeLessThanOrEqual(3.0);
-    },
-    TIMEOUT_MS,
-  );
+      await bot.waitForTicks!(2);
+    });
+
+    // Clean up the cleared area after all modified terrain tests
+    afterEach(async () => {
+      const pos = bot.entity.position;
+      bot.chat(
+        `/fill ${pos.x - 10} ${pos.y} ${pos.z - 10} ${pos.x + 10} ${pos.y} ${pos.z + 10} air`,
+      );
+      bot.chat(
+        `/fill ${pos.x - 10} ${pos.y + 1} ${pos.z - 10} ${pos.x + 10} ${pos.y + 1} ${pos.z + 10} air`,
+      );
+      await bot.waitForTicks!(2);
+    });
+
+    // Dynamically generate one test per fixture
+    for (const fixture of Object.values(STRAFE_FIXTURES)) {
+      test(
+        `executeStrafeLoop — 15 iterations on ${fixture.name}`,
+        async () => {
+          const base = bot.entity.position.clone();
+          await terrain.with(bot, base, fixture, async () => {
+            const cm = bot.combatManager;
+            const distances = await cm.executeStrafeLoop(base, 15);
+            expect(distances.length).toBe(15);
+            distances.forEach((distToStrafe) => {
+              expect(distToStrafe).toBeGreaterThanOrEqual(0);
+              expect(distToStrafe).toBeLessThanOrEqual(0.5);
+            });
+            const distToTarget = bot.entity.position.distanceTo(base);
+            expect(distToTarget).toBeLessThanOrEqual(
+              Constants.MOVEMENT.STRAFE_RADIUS,
+            );
+          });
+        },
+        TIMEOUT_MS,
+      );
+    }
+  });
 });

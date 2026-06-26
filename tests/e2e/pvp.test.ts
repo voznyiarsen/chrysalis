@@ -685,7 +685,7 @@ describeE2E("E2E PvP Tests", () => {
         // Use a fixed target position (10 blocks away on flat ground)
         const eyePos = bot.entity.position.offset(
           0,
-          Constants.PHYSICS.EYE_HEIGHT_OFFSET,
+          Constants.PHYSICS.EYE_HEIGHT,
           0,
         );
         const targetPos = bot.entity.position.offset(10, 0, 0);
@@ -720,7 +720,7 @@ describeE2E("E2E PvP Tests", () => {
 
         const eyePos = bot.entity.position.offset(
           0,
-          Constants.PHYSICS.EYE_HEIGHT_OFFSET,
+          Constants.PHYSICS.EYE_HEIGHT,
           0,
         );
         const targetPos = zombie.position.offset(0, zombie.height * 0.5, 0);

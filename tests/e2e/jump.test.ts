@@ -212,7 +212,7 @@ describeE2E("E2E Jump Tests", () => {
               result,
             });
             console.log(
-              `  ${dir.name} ${distance} blocks: ${result.toFixed(3)}`,
+              `  ${dir.name} ${distance} blocks. Distance to target point remaining: ${result.toFixed(3)}`,
             );
           },
           TIMEOUT_MS,
