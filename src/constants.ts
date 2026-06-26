@@ -8,14 +8,14 @@ export const Constants = {
   // PHYSICS & GEOMETRY
   // ============================================================================
   PHYSICS: {
-    /** Tick-based vertical gravity (blocks per tick squared) */
-    TICK_GRAVITY: 0.08,
-    /** Tick-based vertical drag multiplier (applied to velocity every tick) */
-    TICK_DRAG: 0.98,
+    /** Vertical gravity (blocks per tick squared) */
+    GRAVITY: 0.08,
+    /** Vertical drag multiplier (applied to velocity every tick) */
+    DRAG: 0.98,
     /** Terminal velocity for falling (m/t) */
-    TERMINAL_VELOCITY_Y: -3.92,
+    TERMINAL_VELOCITY: -3.92,
     /** Base momentum conservation factor for airborne and some ground movement */
-    MOMENTUM_CONSERVATION: 0.91,
+    MOMENTUM: 0.91,
     /** Slipperiness factors (St) for different blocks affecting friction and acceleration */
     SLIPPERINESS: {
       DEFAULT: 0.6,
@@ -31,16 +31,15 @@ export const Constants = {
       SPRINT_MULTIPLIER: 1.3,
       SNEAK_MULTIPLIER: 0.3,
       STRAFE_MULTIPLIER: 0.98,
-      STRAFE_45_MULTIPLIER: 1.0,
     },
     /** Initial upwards vertical velocity for a jump (V_Y,1) */
     JUMP_VELOCITY: 0.42,
-    /** Instantaneous horizontal velocity boost applied during a sprint-jump takeoff */
-    SPRINT_JUMP_BOOST: 0.2,
+    /** Horizontal velocity boost applied during a sprint-jump takeoff */
+    JUMP_BOOST: 0.2,
     /** Empirical calibration factor for jump velocity to account for model inaccuracies */
-    JUMP_VELOCITY_CALIBRATION: 0.95,
+    JUMP_CALIBRATION: 0.85,
     /** Empirical calibration factor for strafe velocity to account for model inaccuracies */
-    STRAFE_VELOCITY_CALIBRATION: 0.95,
+    STRAFE_CALIBRATION: 0.85,
     /** Momentum thresholds for stopping movement */
     MOMENTUM_THRESHOLD_1_8: 0.005,
     /** Momentum thresholds for stopping movement (1.9+) */
@@ -52,26 +51,26 @@ export const Constants = {
     /** Half-width of the player for offset calculations */
     PLAYER_OFFSET: 0.3,
     /** Vertical offset from position to eye level */
-    EYE_HEIGHT_OFFSET: 1.62,
+    EYE_HEIGHT: 1.62,
     /** Small offset used to prevent precision-related collision issues (1/16th of a block) */
-    COLLISION_OFFSET_FINE: 0.0625,
+    COLLISION_OFFSET: 0.0625,
   },
 
   GEOMETRY: {
     /** Width used for liquid collision checking */
-    LIQUID_CHECK_WIDTH: 0.6,
+    LIQUID_WIDTH: 0.6,
     /** Height used for liquid collision checking */
-    LIQUID_CHECK_HEIGHT: 1.8,
+    LIQUID_HEIGHT: 1.8,
     /** Vertical levels (indices) used to sample liquid presence */
-    LIQUID_CHECK_LEVELS: [0, 1, 2],
+    LIQUID_LEVELS: [0, 1, 2],
     /** Width used for unwanted block detection (e.g., webs, cactus) */
-    UNWANTED_CHECK_WIDTH: 0.6,
+    UNWANTED_WIDTH: 0.6,
     /** Height used for unwanted block detection */
-    UNWANTED_CHECK_HEIGHT: 1.8,
+    UNWANTED_HEIGHT: 1.8,
     /** Horizontal offset for sampling points around the entity position */
-    UNWANTED_CHECK_OFFSET: 0.3,
+    UNWANTED_OFFSET: 0.3,
     /** Number of vertical layers for unwanted block detection */
-    UNWANTED_CHECK_LAYERS: 3,
+    UNWANTED_LAYERS: 3,
   },
 
   // ============================================================================
@@ -91,33 +90,32 @@ export const Constants = {
   // ============================================================================
   MOVEMENT: {
     /** Asymptotic walking speed on ground (blocks per tick) */
-    WALKING_GROUND_SPEED: 0.21585,
+    WALK_SPEED: 0.21585,
     /** Asymptotic sprinting speed on ground (blocks per tick) */
-    SPRINTING_GROUND_SPEED: 0.280605,
+    SPRINT_SPEED: 0.280605,
     /** Maximum allowed horizontal velocity per axis (X or Z) for strafing impulses */
-    PER_AXIS_MAX_SPEED: 0.35635,
+    MAX_AXIS_SPEED: 0.35635,
     /** Velocity used for fine-tuned horizontal positioning (e.g., micro-adjustments) */
-    FLAT_VELOCITY_XZ: 0.05,
+    FLAT_SPEED: 0.05,
     /** Radius (in blocks) to search for solid floor blocks for strafing targets */
-    SOLID_BLOCK_SEARCH_RADIUS: 3,
-    /** Maximum distance from the bot (source) to consider a strafe point valid */
-    STRAFE_POINT_MAX_DISTANCE_BOT: 4.0,
+    SOLID_BLOCK_RADIUS: 3,
     /** Maximum distance from the target to consider a strafe point valid */
-    STRAFE_POINT_MAX_DISTANCE_TARGET: 3.0,
+    STRAFE_RADIUS: 3.0,
+    /** Maximum distance the bot can jump in a single strafe */
+    STRAFE_JUMP_DISTANCE: 4.0,
     /** Minimum distance between consecutive strafe points to avoid repetitive paths */
-    STRAFE_POINT_MIN_SPACING: 2.5,
+    STRAFE_MIN_SPACING: 2.5,
     /** Minimum distance from the bot's current position to consider a strafe point valid */
-    STRAFE_POINT_SOURCE_MIN_DISTANCE: 0.3,
-    /** Preferred distance range from the PvP target when selecting strafe points */
-    STRAFE_PREFERRED_MIN: 1.0,
-    STRAFE_PREFERRED_MAX: 2.0,
+    STRAFE_MIN_DISTANCE: 0.3,
+    /** Grid resolution for sampling candidate strafe points */
+    STRAFE_GRID_RESOLUTION: 0.3,
     /** Maximum number of previous strafe points to keep in history for spacing checks */
-    STRAFE_POINTS_MAX_HISTORY: 3,
+    STRAFE_HISTORY_SIZE: 3,
     /** Step size for segmenting trajectory paths during collision checks */
-    COLLISION_SEGMENT_SIZE: 0.2,
-    /** Vertical offsets used for Sampling 1.8m high collision box */
-    COLLISION_CHECK_HEIGHTS: [0, 0.6, 1.2, 1.8],
-    /** Horizontal X/Z offsets for Sampling the 0.6m wide collision box corners */
+    COLLISION_SEGMENT: 0.2,
+    /** Vertical offsets used for sampling 1.8m high collision box */
+    COLLISION_HEIGHTS: [0, 0.6, 1.2, 1.8],
+    /** Horizontal X/Z offsets for sampling the 0.6m wide collision box corners */
     COLLISION_OFFSETS: [
       { x: -0.3, z: -0.3 },
       { x: 0.3, z: -0.3 },
@@ -133,19 +131,17 @@ export const Constants = {
     /** Maximum reach distance for melee attacks */
     ATTACK_RANGE: 3.5,
     /** Preferred distance to maintain behind/around a target while following */
-    FOLLOW_RANGE: 3.45,
+    FOLLOW_RANGE: 2.99,
     /** Maximum distance to track/respond to entities */
     VIEW_DISTANCE: 128,
-    /** Horizontal distance threshold for initiating/maintaining strafing maneuvers */
-    STRAFE_RANGE: 3.5,
     /** Multiplier to prioritize actions when health is dangerously low */
-    CRITICAL_HEALTH_MULTIPLIER: 2,
+    CRITICAL_HP_MULT: 2,
     /** Food level below which sprinting and health regeneration are disabled */
-    LOW_FOOD_THRESHOLD: 18,
+    LOW_FOOD: 18,
     /** Default power for custom projectile calculations */
-    DEFAULT_PROJECTILE_VELOCITY: 10,
+    PROJECTILE_VELOCITY: 10,
     /** Vertical eye offset for projectile origin */
-    PROJECTILE_EYE_OFFSET: 1.62,
+    PROJECTILE_EYE_HEIGHT: 1.62,
     /** Physics and offset profiles for various throwable items */
     PROJECTILES: {
       ender_pearl: {
@@ -169,7 +165,7 @@ export const Constants = {
       fireball: { VELOCITY: 1.0, GRAVITY: 0.0, DRAG: 0.95, PITCH_OFFSET: 0 },
     },
     /** Enable offset-based pearl throwing (true) or angle-based (false) */
-    USE_OFFSET_BASED_PEARLS: true,
+    OFFSET_PEARLS: true,
     /** Specialized settings for ender pearl usage */
     ENDER_PEARL: {
       VELOCITY: 1.5,
@@ -181,19 +177,19 @@ export const Constants = {
     /** HP and Survival settings */
     SURVIVAL: {
       MAX_HP: 20,
-      DANGER_THRESHOLD: 2,
-      GAPPLE_ABSORPTION: 8,
-      ENCHANTED_GAPPLE_ABSORPTION: 32,
-      ENCHANTED_GAPPLE_RESISTANCE: 0.8,
+      DANGER_HP: 2,
+      GAPPLE_ABSORB: 8,
+      EGAPPLE_ABSORB: 32,
+      EGAPPLE_RESIST: 0.8,
       EAT_TICKS: 32,
-      EAT_TICKS_BUFFER: 10,
+      EAT_BUFFER: 10,
     },
   },
 
   // ============================================================================
   // WEAPON ATTACK SPEEDS (from mineflayer-pvp AttackSpeeds.json)
   // ============================================================================
-  WEAPON_ATTACK_SPEEDS: {
+  WEAPON_SPEEDS: {
     wooden_sword: 1.6,
     golden_sword: 1.6,
     stone_sword: 1.6,
@@ -232,14 +228,14 @@ export const Constants = {
   // BLOCK DETECTION & CACHING
   // ============================================================================
   BLOCK_DETECTION: {
-    /** Time in milliseconds to cache solid block search results */
-    SOLID_BLOCKS_CACHE_DURATION: 500,
+    /** Time-to-live in milliseconds for solid block search cache */
+    SOLID_CACHE_TTL: 500,
     /** Distance threshold to invalidate cache if bot moves too far from cached position */
-    CACHE_POSITION_THRESHOLD: 0.5,
+    CACHE_POS_THRESHOLD: 0.5,
     /** Vertical offset to start searching for walkable ground relative to a target */
-    MIN_WALKABLE_Y_OFFSET: -1,
+    WALKABLE_Y_OFFSET: -1,
     /** Maximum depth to search downwards for a solid block surface */
-    WALKABLE_SEARCH_DEPTH: 2,
+    WALKABLE_DEPTH: 2,
     /** Block names identified as liquid for physics/navigation */
     LIQUID_BLOCK_NAMES: ["water", "lava"],
     /** Blocks to avoid entirely due to hazard or movement impairment */
@@ -251,9 +247,9 @@ export const Constants = {
   // ============================================================================
   TIMING: {
     /** Delay in milliseconds before attempting to reconnect to a server */
-    RECONNECT_DELAY: 6000,
+    RECONNECT_MS: 6000,
     /** Number of ticks to wait after an item swap before using it */
-    EQUIP_WAIT_TICKS: 2,
+    EQUIP_TICKS: 2,
     /** Default timeout for asynchronous operations */
     DEFAULT_TIMEOUT: 2000,
   },
