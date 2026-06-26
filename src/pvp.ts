@@ -27,13 +27,11 @@ const WEAPON_NAMES = [
 ] as const;
 
 export function getAttackSpeed(itemName?: string | null): number {
-  if (!itemName) return Constants.WEAPON_ATTACK_SPEEDS.OTHER;
+  if (!itemName) return Constants.WEAPON_SPEEDS.OTHER;
   for (const prefix of WEAPON_NAMES) {
     if (itemName.includes(prefix)) {
       const key = itemName.replace(/^minecraft:/, "");
-      const speed = (Constants.WEAPON_ATTACK_SPEEDS as Record<string, number>)[
-        key
-      ];
+      const speed = (Constants.WEAPON_SPEEDS as Record<string, number>)[key];
       if (speed !== undefined) return speed;
       const speeds: Record<string, number> = {
         sword: 1.6,
@@ -43,10 +41,10 @@ export function getAttackSpeed(itemName?: string | null): number {
         shovel: 1.0,
         hoe: 1.0,
       };
-      return speeds[prefix] ?? Constants.WEAPON_ATTACK_SPEEDS.OTHER;
+      return speeds[prefix] ?? Constants.WEAPON_SPEEDS.OTHER;
     }
   }
-  return Constants.WEAPON_ATTACK_SPEEDS.OTHER;
+  return Constants.WEAPON_SPEEDS.OTHER;
 }
 
 export function getCooldown(itemName?: string | null): number {
@@ -317,7 +315,7 @@ class CombatManager {
    * Initialize the combat decision tree.
    */
   setupDecisions(): void {
-    const { CRITICAL_HEALTH_MULTIPLIER, LOW_FOOD_THRESHOLD } = Constants.COMBAT;
+    const { CRITICAL_HP_MULT, LOW_FOOD } = Constants.COMBAT;
     const inv = () => (this.bot as any).inventoryManager;
 
     this.decisions = [
@@ -381,8 +379,7 @@ class CombatManager {
           const hasGapple = inv().hasItem("golden_apple");
           return (
             hasTotems &&
-            (totalHealth <=
-              (this.lastDamage || 1) * CRITICAL_HEALTH_MULTIPLIER ||
+            (totalHealth <= (this.lastDamage || 1) * CRITICAL_HP_MULT ||
               !hasGapple)
           );
         },
@@ -409,7 +406,7 @@ class CombatManager {
 
           const eyePos = this.bot.entity!.position.offset(
             0,
-            Constants.PHYSICS.EYE_HEIGHT_OFFSET,
+            Constants.PHYSICS.EYE_HEIGHT,
             0,
           );
           const targetPos = target.position.offset(0, target.height / 2, 0);
@@ -420,7 +417,7 @@ class CombatManager {
           const target = (this.bot as any).pvp.target;
           const eyePos = this.bot.entity!.position.offset(
             0,
-            Constants.PHYSICS.EYE_HEIGHT_OFFSET,
+            Constants.PHYSICS.EYE_HEIGHT,
             0,
           );
           const targetPos = target.position.offset(0, target.height / 2, 0);
@@ -453,8 +450,7 @@ class CombatManager {
             hasGapple &&
             healthPoints < 20 &&
             !regeneration &&
-            (totalHealth >
-              (this.lastDamage || 1) * CRITICAL_HEALTH_MULTIPLIER ||
+            (totalHealth > (this.lastDamage || 1) * CRITICAL_HP_MULT ||
               !hasTotems)
           );
         },
@@ -488,9 +484,9 @@ class CombatManager {
           const regeneration = (this.bot as any).entity.effects["10"];
 
           const safe =
-            totalHealth > (this.lastDamage || 1) * CRITICAL_HEALTH_MULTIPLIER ||
+            totalHealth > (this.lastDamage || 1) * CRITICAL_HP_MULT ||
             !hasTotems;
-          const needsFood = this.bot.food! < LOW_FOOD_THRESHOLD;
+          const needsFood = this.bot.food! < LOW_FOOD;
           const needsHealingFood =
             healthPoints < 20 && !regeneration && !hasGapple;
 
@@ -504,7 +500,7 @@ class CombatManager {
         () => {
           const { totalHealth } = this.getHealthStatus();
           return (
-            totalHealth > (this.lastDamage || 1) * CRITICAL_HEALTH_MULTIPLIER ||
+            totalHealth > (this.lastDamage || 1) * CRITICAL_HP_MULT ||
             !inv().hasItem("totem_of_undying")
           );
         },
@@ -637,9 +633,16 @@ class CombatManager {
 
       for (const decision of this.decisions) {
         if (decision.condition()) {
+          this.logger.debug(`Decision: ${decision.name} triggered`, "Combat");
           if (priorityNames.has(decision.name)) {
             await track(decision.action)();
-            if (svc.switchedItem) break;
+            if (svc.switchedItem) {
+              this.logger.debug(
+                `Decision: item swapped by ${decision.name}, skipping lower priority`,
+                "Combat",
+              );
+              break;
+            }
           } else {
             await decision.action();
           }
@@ -770,12 +773,12 @@ class CombatManager {
     needsTotem?: boolean;
   } {
     const {
-      DANGER_THRESHOLD,
-      GAPPLE_ABSORPTION,
-      ENCHANTED_GAPPLE_ABSORPTION,
-      ENCHANTED_GAPPLE_RESISTANCE,
+      DANGER_HP,
+      GAPPLE_ABSORB,
+      EGAPPLE_ABSORB,
+      EGAPPLE_RESIST,
       EAT_TICKS,
-      EAT_TICKS_BUFFER,
+      EAT_BUFFER,
     } = Constants.COMBAT.SURVIVAL;
     const { totalHealth } = this.getHealthStatus();
     const velY = (this.bot as any).entity.velocity.y;
@@ -791,25 +794,35 @@ class CombatManager {
     );
 
     // Tolerance: 32 ticks (1.6s) to eat + 10 ticks buffer = 42 ticks
-    const EAT_TICKS_WITH_TOLERANCE = EAT_TICKS + EAT_TICKS_BUFFER;
+    const EAT_TICKS_WITH_TOLERANCE = EAT_TICKS + EAT_BUFFER;
     // Rough time to impact: distance / average velocity (simplified)
     // Using current velocity as a lower bound for time (conservative)
     const ticksToImpact = Math.abs(fallDistance / (velY || -0.01));
     const hasTimeToEat = ticksToImpact > EAT_TICKS_WITH_TOLERANCE;
 
-    const isDangerous = predictedDamage >= totalHealth - DANGER_THRESHOLD; // Dangerous if it leaves us with < DANGER_THRESHOLD HP
-    if (!isDangerous) return { isDangerous: false };
+    const isDangerous = predictedDamage >= totalHealth - DANGER_HP; // Dangerous if it leaves us with < DANGER_HP HP
+    if (!isDangerous) {
+      this.logger.debug(
+        `Fall: not dangerous (predictedDmg=${predictedDamage.toFixed(1)} totalHP=${totalHealth.toFixed(1)} fallDist=${fallDistance.toFixed(1)})`,
+        "Combat",
+      );
+      return { isDangerous: false };
+    }
 
     // Survival with Regular Gapple: +8 Absorption HP
     const canEatGapple =
-      hasTimeToEat && predictedDamage < totalHealth + GAPPLE_ABSORPTION;
+      hasTimeToEat && predictedDamage < totalHealth + GAPPLE_ABSORB;
     // Survival with Enchanted Gapple: +32 Absorption HP and 20% Resistance
-    const damageWithResistance = predictedDamage * ENCHANTED_GAPPLE_RESISTANCE;
+    const damageWithResistance = predictedDamage * EGAPPLE_RESIST;
     const canEatEGapple =
-      hasTimeToEat &&
-      damageWithResistance < totalHealth + ENCHANTED_GAPPLE_ABSORPTION;
+      hasTimeToEat && damageWithResistance < totalHealth + EGAPPLE_ABSORB;
 
     const needsTotem = !canEatGapple && !canEatEGapple;
+
+    this.logger.debug(
+      `Fall: DANGEROUS predictedDmg=${predictedDamage.toFixed(1)} totalHP=${totalHealth.toFixed(1)} ticksToImpact=${ticksToImpact.toFixed(0)} canGapple=${canEatGapple} canEGapple=${canEatEGapple} needsTotem=${needsTotem}`,
+      "Combat",
+    );
 
     return {
       isDangerous,
@@ -833,11 +846,15 @@ class CombatManager {
       this.updateTarget();
       this.doAvoid();
       this.doEdgeProtection();
-      if ((this.bot as any).pvp.target) this.doStrafe();
+      const hasTarget = !!(this.bot as any).pvp.target;
+      if (hasTarget) {
+        this.doStrafe();
+      }
       await this.executeDecisions();
     } catch (error: unknown) {
       const err = error as Error;
-      err.message = `Error in combat loop: ${err.message}`;
+      const targetName = (this.bot as any).pvp?.target?.username ?? "none";
+      err.message = `Error in combat loop (mode=${this.mode}, target=${targetName}, health=${this.bot.health?.toFixed(1) ?? "unknown"}): ${err.message}`;
       this.logger.error(err, "Combat");
     } finally {
       this._isDeciding = false;
@@ -855,9 +872,12 @@ class CombatManager {
       if (!id) continue;
       const item = (this.bot as any).inventory.findInventoryItem(id, null);
       if (item) {
-        this.logger.combat(`Tossing junk: ${item.name} x${item.count}...`);
+        this.logger.debug(
+          `Tossing junk item: ${item.name} (count: ${item.count})`,
+          "Inventory",
+        );
         await this.bot.toss!(item.type, item.metadata, item.count);
-        await this.bot.waitForTicks!(Constants.TIMING.EQUIP_WAIT_TICKS);
+        await this.bot.waitForTicks!(Constants.TIMING.EQUIP_TICKS);
         break;
       }
     }
@@ -871,6 +891,10 @@ class CombatManager {
       this.bot.entity!.position,
     );
     if (unwanted) {
+      this.logger.debug(
+        `Avoid: in unwanted block, applying escape impulse`,
+        "Combat",
+      );
       const impulse = (this.bot as any).utilsManager.getFlatVelocity(
         this.bot.entity!.position,
         unwanted,
@@ -905,11 +929,18 @@ class CombatManager {
       if (this._edgeSneaking) {
         bot.setControlState("sneak", false);
         this._edgeSneaking = false;
+        this.logger.debug(`Edge: released sneak (centered)`, "Combat");
       }
       return;
     }
 
     // Edge detected — sneak and nudge toward center
+    if (!this._edgeSneaking) {
+      this.logger.debug(
+        `Edge: near block boundary. Offset from center: dx=${dx.toFixed(2)}b, dz=${dz.toFixed(2)}b. Engaging sneak`,
+        "Combat",
+      );
+    }
     bot.setControlState("sneak", true);
     this._edgeSneaking = true;
 
@@ -948,16 +979,24 @@ class CombatManager {
     const distToTarget = source.distanceTo(target);
 
     const strafeRange =
-      (this.bot as any).runtimeConfig?.get("COMBAT", "STRAFE_RANGE") ??
-      Constants.COMBAT.STRAFE_RANGE;
+      (this.bot as any).runtimeConfig?.get("MOVEMENT", "STRAFE_RADIUS") ??
+      Constants.MOVEMENT.STRAFE_RADIUS;
 
-    if (distToTarget > strafeRange + 1) {
+    if (distToTarget > strafeRange) {
+      this.logger.debug(
+        `Strafe: target out of range. Distance to target: ${distToTarget.toFixed(1)}b, strafe range: ${strafeRange.toFixed(1)}b`,
+        "Combat",
+      );
       this.strafePoint = null;
       return;
     }
 
     // Flip direction on horizontal collision
     if ((this.bot as any).entity.isCollidedHorizontally) {
+      this.logger.debug(
+        `Strafe: horizontal collision detected. Flipping direction from ${this.strafeDirection} to ${-this.strafeDirection}`,
+        "Combat",
+      );
       this.strafeDirection = -this.strafeDirection;
       this.strafePoint = null;
     }
@@ -966,13 +1005,24 @@ class CombatManager {
       if (this.strafePoint) {
         const distToPoint = dist2D(source, this.strafePoint);
         if (distToPoint > strafeRange + 1) {
+          this.logger.debug(
+            `Strafe: point out of range. Distance to point: ${distToPoint.toFixed(1)}b, maximum allowed: ${strafeRange + 1}b`,
+            "Combat",
+          );
           this.strafePoint = null;
         } else {
           const isBlocked = !utils.isJumpPathClear(source, this.strafePoint);
           if (isBlocked) {
-            this.logger.debug("Clearing blocked strafe point");
+            this.logger.debug(
+              `Strafe: path blocked to point (${this.strafePoint.x.toFixed(1)}, ${this.strafePoint.z.toFixed(1)}). Clearing strafe point`,
+              "Combat",
+            );
             this.strafePoint = null;
           } else if (distToPoint < 0.2) {
+            this.logger.debug(
+              `Strafe: reached strafe point. Distance remaining: ${distToPoint.toFixed(2)}b. Clearing`,
+              "Combat",
+            );
             this.strafePoint = null;
           }
         }
@@ -982,7 +1032,7 @@ class CombatManager {
         // Try all 4 cardinal directions relative to the target to find a
         // valid strafe point.  The directions are ordered by preference:
         // perpendicular (orbital), then forward/backward (radial).
-        const strafeDist = Constants.MOVEMENT.STRAFE_POINT_MAX_DISTANCE_BOT;
+        const strafeDist = Constants.MOVEMENT.STRAFE_JUMP_DISTANCE;
         const directions: { dir: number; label: string }[] = [
           { dir: this.strafeDirection, label: "strafe" },
           { dir: -this.strafeDirection, label: "opposite" },
@@ -997,18 +1047,34 @@ class CombatManager {
             0,
             Math.cos(yaw) * strafeDist,
           );
-          this.strafePoint = utils.getStrafePoint(source, candidate, target);
+          this.strafePoint = utils.getStrafePoint(
+            source,
+            candidate,
+            target,
+            (msg: string) => this.logger.debug(`Strafe: ${msg}`, "Combat"),
+          );
           if (this.strafePoint) {
+            const distToNewPoint = dist2D(source, this.strafePoint);
             if (dir !== this.strafeDirection) {
+              this.logger.debug(
+                `Strafe: direction changed from ${this.strafeDirection} to ${dir} (${label})`,
+                "Combat",
+              );
               this.strafeDirection = dir;
             }
-            this.logger.debug(`Strafe point found (${label})`, "Combat");
+            this.logger.debug(
+              `Strafe: point selected via ${label}. Position: (${this.strafePoint.x.toFixed(1)}, ${this.strafePoint.z.toFixed(1)}). Distance to bot: ${distToNewPoint.toFixed(1)}b, distance to target: ${dist2D(this.strafePoint, target).toFixed(1)}b. Recent candidates: ${utils.recentPoints.length}`,
+              "Combat",
+            );
             break;
           }
         }
 
         if (!this.strafePoint) {
-          this.logger.debug("No strafe point found in any direction");
+          this.logger.debug(
+            `Strafe: no valid point found. Distance to target: ${distToTarget.toFixed(1)}b. Obstacles: ${utils._obstacles.length}, holes: ${utils._holes.length}`,
+            "Combat",
+          );
         }
       }
 
@@ -1021,8 +1087,14 @@ class CombatManager {
 
         const impulse = utils.getJumpVelocity(source, this.strafePoint);
         if (impulse) {
-          this.logger.combat(
-            `Jump strafe to ${this.strafePoint.x.toFixed(1)}, ${this.strafePoint.z.toFixed(1)} (dist=${distToTarget.toFixed(1)}, dir=${this.strafeDirection})`,
+          const impulseMag = Math.hypot(impulse.x, impulse.z);
+          this.logger.debug(
+            `Strafe: applying jump impulse. Velocity: (${impulse.x.toFixed(2)}, ${impulse.y.toFixed(2)}, ${impulse.z.toFixed(2)}). Magnitude: ${impulseMag.toFixed(2)}`,
+            "Combat",
+          );
+          this.logger.debug(
+            `Strafe: jump to (${this.strafePoint.x.toFixed(1)}, ${this.strafePoint.z.toFixed(1)}). Distance to target: ${distToTarget.toFixed(1)}b, direction: ${this.strafeDirection}`,
+            "Combat",
           );
           utils.applyImpulse(impulse, "set", true);
         }
@@ -1044,6 +1116,10 @@ class CombatManager {
           (dx / len) * airAccel,
           0,
           (dz / len) * airAccel,
+        );
+        this.logger.debug(
+          `Strafe: air steer. Horizontal speed: ${currentSpeed.toFixed(2)}, distance to point: ${len.toFixed(1)}b, air acceleration: ${airAccel.toFixed(3)}`,
+          "Combat",
         );
         utils.applyImpulse(impulse, "add");
       }
@@ -1094,8 +1170,16 @@ class CombatManager {
 
     const target = this.bot.nearestEntity!(filter);
     if (target) {
+      const dist = this.bot.entity!.position.distanceTo(target.position);
+      this.logger.debug(
+        `Target: acquired ${target.username ?? target.name ?? "entity"}. Distance: ${dist.toFixed(1)}b`,
+        "Combat",
+      );
       (this.bot as any).pvp.attack(target);
     } else {
+      if (currentTarget) {
+        this.logger.debug(`Target: lost. No valid entity in range`, "Combat");
+      }
       (this.bot as any).pvp.forceStop();
     }
   }
@@ -1132,23 +1216,9 @@ class CombatManager {
     iterations: number = 3,
   ): Promise<number[]> {
     const distances: number[] = [];
-    const offset = targetPos.minus(this.bot.entity.position);
     for (let i = 0; i < iterations; i++) {
-      const botPos = this.bot.entity.position;
-      const currentTarget = botPos.plus(offset);
-      const strafePoint = this.strafePoint;
-      if (strafePoint) {
-        const distToStrafePoint = Math.hypot(
-          strafePoint.x - botPos.x,
-          strafePoint.z - botPos.z,
-        );
-        this.logger.combat(
-          `Strafe[${i}]: bot(${botPos.x.toFixed(1)},${botPos.z.toFixed(1)}) -> strafePoint(${strafePoint.x.toFixed(1)},${strafePoint.z.toFixed(1)}) dist=${distToStrafePoint.toFixed(2)}`,
-        );
-      } else {
-        this.logger.combat(`Strafe[${i}]: no strafe point selected`);
-      }
-      distances.push(await this.executeStrafe(currentTarget));
+      const dist = await this.executeStrafe(targetPos);
+      distances.push(dist);
     }
     return distances;
   }
