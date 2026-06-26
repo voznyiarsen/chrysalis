@@ -181,13 +181,23 @@ class InventoryManager {
       const destSlot = this.bot.getEquipmentDestSlot(targetSlot);
       const currentItem = this.bot.inventory.slots[destSlot];
 
-      if (currentItem && currentItem.name === itemName) return true;
+      if (currentItem && currentItem.name === itemName) {
+        this.logger.debug(
+          `Equip: ${itemName} already in ${targetSlot}`,
+          "Inventory",
+        );
+        return true;
+      }
 
       const item = this.bot.inventory
         .items()
         .find((i: any) => i.name === itemName);
 
       if (!item) {
+        this.logger.debug(
+          `Equip: ${itemName} not found in inventory`,
+          "Inventory",
+        );
         return false;
       }
 
@@ -195,14 +205,14 @@ class InventoryManager {
         `Equipping ${item.displayName} to ${targetSlot}...`,
       );
       await this.bot.equip!(item, targetSlot as any);
-      await this.bot.waitForTicks!(Constants.TIMING.EQUIP_WAIT_TICKS);
+      await this.bot.waitForTicks!(Constants.TIMING.EQUIP_TICKS);
       return true;
     } catch (error: unknown) {
       const err = error as Error;
       if (!err.message.includes("not found")) {
-        err.message = `Failed to equip ${itemName}: ${err.message}`;
+        err.message = `Failed to equip ${itemName} to ${targetSlot}: ${err.message}`;
       }
-      this.logger.error(err);
+      this.logger.error(err, "Inventory");
       return false;
     }
   }
@@ -251,7 +261,7 @@ class InventoryManager {
   ): Promise<void> {
     await this.clearInventory();
     await this.bot.chat!(`/give @p ${itemName} ${count}`);
-    await this.bot.waitForTicks!(Constants.TIMING.EQUIP_WAIT_TICKS);
+    await this.bot.waitForTicks!(Constants.TIMING.EQUIP_TICKS);
 
     for (let attempt = 0; attempt < 10; attempt++) {
       const destSlot = this.bot.getEquipmentDestSlot(targetSlot);
@@ -266,6 +276,86 @@ class InventoryManager {
     if (!equipped) {
       throw new Error(
         `Failed to obtain ${itemName}: not found in inventory after /give`,
+      );
+    }
+  }
+
+  /**
+   * Give an item to the bot via the /give command and wait for it to arrive.
+   *
+   * Java Edition syntax: `/give <target> <item> [amount] [dataTag]`
+   * The optional `dataTag` accepts SNBT for enchantments, lore, custom names, etc.
+   * See https://minecraft.fandom.com/wiki/Commands/give
+   *
+   * @param itemName - Item name (e.g. "ender_pearl")
+   * @param count - Stack size (default: 1)
+   * @param metadata - Item metadata / data value (e.g. 1 for enchanted golden apple).
+   *   Appended as the fourth /give argument (Java Edition data value).
+   * @param nbt - Optional NBT object (SNBT string) for enchantments, lore, etc.
+   *   Appended as `{...}` after the item id in the /give command.
+   * @param target - Target selector (default: "@p")
+   * @param timeoutMs - Max time to wait for the item to appear (default: TIMEOUT_MS)
+   */
+  async giveItem(
+    itemName: string,
+    count: number = 1,
+    metadata?: number,
+    nbt?: string,
+    target: string = "@p",
+    timeoutMs: number = 10000,
+  ): Promise<void> {
+    let command = `/give ${target} ${itemName}`;
+    if (count !== 1) command += ` ${count}`;
+    if (metadata !== undefined) command += ` ${metadata}`;
+    if (nbt) command += ` ${nbt}`;
+
+    await this.bot.chat!(command);
+
+    const t0 = Date.now();
+    while (Date.now() - t0 < timeoutMs) {
+      const items = this.bot.inventory.items();
+      const item = items.find(
+        (i: any) =>
+          i.name === itemName &&
+          (metadata === undefined || i.metadata === metadata),
+      );
+      if (item && item.count >= count) return;
+      await this.bot.waitForTicks!(2);
+    }
+    throw new Error(
+      `Timed out waiting for /give ${target} ${itemName} ${count}`,
+    );
+  }
+
+  /**
+   * Give multiple items to the bot in sequence via /give.
+   *
+   * @param items - Array of item descriptors. Each entry may specify:
+   *   - name: Item name
+   *   - count: Stack size (default: 1)
+   *   - metadata: Item data value (e.g. 1 for enchanted golden apple)
+   *   - nbt: Optional SNBT string for enchantments, lore, etc.
+   *   - target: Target selector (default: "@p")
+   *   - timeoutMs: Max wait per item (default: 10000)
+   */
+  async giveItems(
+    items: Array<{
+      name: string;
+      count?: number;
+      metadata?: number;
+      nbt?: string;
+      target?: string;
+      timeoutMs?: number;
+    }>,
+  ): Promise<void> {
+    for (const item of items) {
+      await this.giveItem(
+        item.name,
+        item.count ?? 1,
+        item.metadata,
+        item.nbt,
+        item.target,
+        item.timeoutMs,
       );
     }
   }
@@ -382,7 +472,7 @@ class InventoryManager {
           item.nbt,
         );
         await this.bot.creative.setInventorySlot(item.slot, newItem);
-        await this.bot.waitForTicks!(Constants.TIMING.EQUIP_WAIT_TICKS);
+        await this.bot.waitForTicks!(Constants.TIMING.EQUIP_TICKS);
         this.logger.inventory(`Slot ${item.slot} (item: ${item.displayName})`);
       } catch (error: unknown) {
         const err = error as Error;
@@ -431,7 +521,7 @@ class InventoryManager {
     for (const destination of destinations) {
       const slot = this.bot.getEquipmentDestSlot(destination);
       if (this.bot.inventory.slots[slot] !== null) {
-        await this.bot.waitForTicks!(Constants.TIMING.EQUIP_WAIT_TICKS);
+        await this.bot.waitForTicks!(Constants.TIMING.EQUIP_TICKS);
         await this.bot.unequip!(destination as any);
       }
     }
@@ -443,7 +533,7 @@ class InventoryManager {
   async tossAllItems(): Promise<void> {
     const items = this.bot.inventory.items();
     for (const item of items) {
-      await this.bot.waitForTicks!(Constants.TIMING.EQUIP_WAIT_TICKS);
+      await this.bot.waitForTicks!(Constants.TIMING.EQUIP_TICKS);
       await this.bot.toss!(item.type, item.metadata, item.count);
     }
   }
@@ -512,11 +602,15 @@ class InventoryManager {
         : -1;
 
       if (bestScore > currentScore) {
+        this.logger.debug(
+          `Armor: ${bestItem.displayName} outscores current ${currentArmor?.displayName ?? "empty"} for ${slot}. New score: ${bestScore.toFixed(1)}, current score: ${currentScore.toFixed(1)}`,
+          "Inventory",
+        );
         this.logger.inventory(
           `Equipping ${bestItem.displayName} to ${slot} (score: ${bestScore})...`,
         );
         await this.bot.equip!(bestItem, slot as any);
-        await this.bot.waitForTicks!(Constants.TIMING.EQUIP_WAIT_TICKS);
+        await this.bot.waitForTicks!(Constants.TIMING.EQUIP_TICKS);
       }
     }
   }
@@ -575,9 +669,18 @@ class InventoryManager {
     const items = (this.bot as any).inventory
       .items()
       .filter((i: any) => i.name === "golden_apple");
-    if (items.length === 0) return;
+    if (items.length === 0) {
+      this.logger.debug(`Gapple: no golden apples in inventory`, "Inventory");
+      return;
+    }
 
-    if (this.bot.entity.effects["10"]) return;
+    if (this.bot.entity.effects["10"]) {
+      this.logger.debug(
+        `Gapple: already has regeneration, skipping`,
+        "Inventory",
+      );
+      return;
+    }
 
     const bestGapple = items.sort(
       (a: any, b: any) => (b.metadata || 0) - (a.metadata || 0),
@@ -595,7 +698,7 @@ class InventoryManager {
         `Equipping ${bestGapple.displayName} to off-hand...`,
       );
       await this.bot.equip!(bestGapple, "off-hand" as any);
-      await this.bot.waitForTicks!(Constants.TIMING.EQUIP_WAIT_TICKS);
+      await this.bot.waitForTicks!(Constants.TIMING.EQUIP_TICKS);
     }
 
     // In creative mode, eating doesn't grant effects — skip activation
@@ -643,7 +746,10 @@ class InventoryManager {
       (item: any) =>
         (foodStats as Record<string, unknown>)[item.name] !== undefined,
     );
-    if (items.length === 0) return;
+    if (items.length === 0) {
+      this.logger.debug(`Food: no food items in inventory`, "Inventory");
+      return;
+    }
 
     const food = items.reduce((best: any, current: any) => {
       const bStats = (
@@ -704,7 +810,13 @@ class InventoryManager {
    * Prefers strong_strength over regular strength.
    */
   async equipBuff(): Promise<void> {
-    if (this.bot.entity.effects["5"]) return;
+    if (this.bot.entity.effects["5"]) {
+      this.logger.debug(
+        `Buff: already has strength effect, skipping`,
+        "Inventory",
+      );
+      return;
+    }
 
     const inventory: any[] = [
       ...this.bot.inventory.items(),
@@ -853,7 +965,10 @@ class InventoryManager {
           item.name.endsWith("_shovel") ||
           item.name.endsWith("_hoe"),
       );
-    if (weapons.length === 0) return;
+    if (weapons.length === 0) {
+      this.logger.debug(`Weapon: no weapons in inventory`, "Inventory");
+      return;
+    }
 
     const weapon = weapons.reduce((best: any | null, item: any) => {
       const score = this._computeWeaponScore(item, materialStats);
@@ -869,11 +984,15 @@ class InventoryManager {
     const bestScore = this._computeWeaponScore(weapon, materialStats);
 
     if (bestScore > currentScore) {
+      this.logger.debug(
+        `Weapon: ${weapon.displayName} outscores current ${held?.displayName ?? "empty"}. New DPS: ${bestScore.toFixed(2)}, current DPS: ${currentScore.toFixed(2)}`,
+        "Inventory",
+      );
       this.logger.inventory(
         `Equipping ${weapon.displayName} (#${weapon.type}) (DPS: ${bestScore.toFixed(2)}) to hand...`,
       );
       await this.bot.equip!(weapon, "hand" as any);
-      await this.bot.waitForTicks!(Constants.TIMING.EQUIP_WAIT_TICKS);
+      await this.bot.waitForTicks!(Constants.TIMING.EQUIP_TICKS);
     }
   }
 
@@ -906,14 +1025,22 @@ class InventoryManager {
     const items = this.bot.inventory
       .items()
       .filter((i: any) => i.name === "golden_apple");
-    if (items.length === 0) return;
+    if (items.length === 0) {
+      this.logger.debug(`Utility: no golden apples for off-hand`, "Inventory");
+      return;
+    }
 
     const bestGapple = items.sort(
       (a: any, b: any) => (b.metadata || 0) - (a.metadata || 0),
     )[0];
 
+    this.logger.debug(
+      `Utility: equipping ${bestGapple.displayName} to off-hand. Metadata variant: ${bestGapple.metadata}`,
+      "Inventory",
+    );
+
     await this.bot.equip!(bestGapple, "off-hand" as any);
-    await this.bot.waitForTicks!(Constants.TIMING.EQUIP_WAIT_TICKS);
+    await this.bot.waitForTicks!(Constants.TIMING.EQUIP_TICKS);
   }
 }
 
