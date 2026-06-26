@@ -248,7 +248,7 @@ export class BotRegistry {
           bot.listenerManager.offAll(bot);
         }
         const attemptReconnect = (attempt: number = 1) => {
-          const delay = Constants.TIMING.RECONNECT_DELAY * Math.min(attempt, 5);
+          const delay = Constants.TIMING.RECONNECT_MS * Math.min(attempt, 5);
           setTimeout(() => {
             botLog.client(`Reconnect attempt ${attempt}...`);
             this.createBot(botNumber).catch((err: unknown) => {
@@ -262,7 +262,7 @@ export class BotRegistry {
     });
 
     lm.on(bot, "error", (err: Error) => {
-      err.message = `Mineflayer Error: ${err.message}`;
+      err.message = `Mineflayer connection error for bot ${botNumber} (${cfg.username}@${cfg.host}:${cfg.port}): ${err.message}`;
       botLog.error(err);
     });
 
