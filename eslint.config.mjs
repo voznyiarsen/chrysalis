@@ -13,6 +13,7 @@ export default [
       "patching-scripts/**",
       "logs/**",
       "dist/**",
+      "codeArchive/**",
     ],
   },
   pluginJs.configs.recommended,

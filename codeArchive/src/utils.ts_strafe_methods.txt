@@ -1,0 +1,159 @@
+/**
+ * Original Path: src/utils.ts (strafe-related code)
+ * Archive Date: June 28, 2026
+ * Note: This code snippet has been archived pending a complete rewrite.
+ */
+
+// ─────────────────────────────────────────────────────────────────────────
+// WithStrafeOptions interface (lines 355-359)
+// ─────────────────────────────────────────────────────────────────────────
+
+interface WithStrafeOptions {
+  yaw: number;
+  speed?: number;
+  strength?: number;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// UtilsManager properties (lines 370-371, 375-376, 394-395, 397)
+// ─────────────────────────────────────────────────────────────────────────
+
+// In UtilsManager class:
+recentPoints: Vec3[];
+recentPointsMax: number;
+_obstacles: AABB[];
+_holes: [number, number][];
+
+// In constructor:
+this.recentPoints = [];
+this.recentPointsMax = Constants.MOVEMENT.STRAFE_HISTORY_SIZE;
+this._obstacles = [];
+
+// Note: _holes is initialized in _initializeLiquidCache() or similar
+
+// ─────────────────────────────────────────────────────────────────────────
+// getStrafePoint wrapper (lines 667-686)
+// ─────────────────────────────────────────────────────────────────────────
+
+getStrafePoint(
+  source: Vec3,
+  candidate: Vec3,
+  pvpTarget?: Vec3,
+  debugLog?: (msg: string) => void,
+): Vec3 | null {
+  return getStrafePoint(
+    source,
+    candidate,
+    pvpTarget || (this.bot.entity as any).position,
+    (pos: Vec3) => this.bot.blockAt(pos),
+    (a: Vec3, b: Vec3) => this.isJumpPathClear(a, b),
+    this.recentPoints,
+    this.recentPointsMax,
+    undefined,
+    this._obstacles,
+    this._holes,
+    debugLog,
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// getStrafeYaw wrapper (lines 688-690)
+// ─────────────────────────────────────────────────────────────────────────
+
+getStrafeYaw(playerPos: Vec3, targetPos: Vec3, direction: number): number {
+  return getStrafeYaw(playerPos, targetPos, direction);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// updateObstacles (lines 740-802)
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * Build obstacle AABBs from blocks surrounding the bot.
+ * Called each tick by CombatManager.doStrafe so that strafe points
+ * behind walls / inside blocks are rejected via raycast.
+ */
+updateObstacles(): void {
+  const entity = this.bot.entity as any;
+  const pos = entity.position;
+  const radius = Constants.MOVEMENT.SOLID_BLOCK_RADIUS;
+  const obstacles: AABB[] = [];
+  const minX = Math.floor(pos.x - radius);
+  const maxX = Math.floor(pos.x + radius);
+  const minZ = Math.floor(pos.z - radius);
+  const maxZ = Math.floor(pos.z + radius);
+  const minY = Math.floor(pos.y);
+  const maxY = Math.floor(pos.y + Constants.PHYSICS.PLAYER_HEIGHT);
+  for (let x = minX; x <= maxX; x++) {
+    for (let y = minY; y <= maxY; y++) {
+      for (let z = minZ; z <= maxZ; z++) {
+        const block = this.bot.blockAt(new Vec3(x, y, z));
+        if (block && block.boundingBox !== "empty" && block.shapes) {
+          for (const shape of block.shapes) {
+            obstacles.push(
+              new AABB(
+                x + shape[0],
+                y + shape[1],
+                z + shape[2],
+                x + shape[3],
+                y + shape[4],
+                z + shape[5],
+              ),
+            );
+          }
+        }
+      }
+    }
+  }
+  this._obstacles = obstacles;
+
+  // Detect holes: XZ grid cells within the search radius that have no
+  // walkable surface (no solid block with empty space above it).
+  const holes: [number, number][] = [];
+  for (let x = minX; x <= maxX; x++) {
+    for (let z = minZ; z <= maxZ; z++) {
+      let hasSurface = false;
+      for (
+        let y = maxY;
+        y >= minY + Constants.BLOCK_DETECTION.WALKABLE_Y_OFFSET;
+        y--
+      ) {
+        const block = this.bot.blockAt(new Vec3(x, y, z));
+        const above = this.bot.blockAt(new Vec3(x, y + 1, z));
+        if (
+          block &&
+          block.boundingBox !== "empty" &&
+          (!above || above.boundingBox === "empty")
+        ) {
+          hasSurface = true;
+          break;
+        }
+      }
+      if (!hasSurface) {
+        holes.push([x, z]);
+      }
+    }
+  }
+  this._holes = holes;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// withStrafe (lines 996-1011)
+// ─────────────────────────────────────────────────────────────────────────
+
+withStrafe(
+  velocity: Vec3,
+  { yaw, speed, strength = 1.0 }: WithStrafeOptions,
+): Vec3 {
+  const currentSpeed = Math.hypot(velocity.x, velocity.z);
+  const usedSpeed = speed !== undefined ? speed : currentSpeed;
+  const oneMinusStrength = 1.0 - strength;
+  const prevX = velocity.x * oneMinusStrength;
+  const prevZ = velocity.z * oneMinusStrength;
+  const used = usedSpeed * strength;
+  return new Vec3(
+    prevX - Math.sin(yaw) * used,
+    velocity.y,
+    prevZ + Math.cos(yaw) * used,
+  );
+}

@@ -1,0 +1,31 @@
+/**
+ * Original Path: src/constants.ts (strafe-related constants)
+ * Archive Date: June 28, 2026
+ * Note: This code snippet has been archived pending a complete rewrite.
+ */
+
+// From PHYSICS.ACCELERATION (line 33):
+/** Strafe multiplier for horizontal velocity in V_H formulas */
+STRAFE_MULTIPLIER: 0.98,
+
+// From PHYSICS (line 42):
+/** Empirical calibration factor for strafe velocity to account for model inaccuracies */
+STRAFE_CALIBRATION: 0.85,
+
+// From MOVEMENT (lines 114-131):
+/** Maximum allowed horizontal velocity per axis (X or Z) for strafing impulses */
+MAX_AXIS_SPEED: 0.35635,
+/** Radius (in blocks) to search for solid floor blocks for strafing targets */
+SOLID_BLOCK_RADIUS: 3,
+/** Maximum distance from the target to consider a strafe point valid */
+STRAFE_RADIUS: 3.0,
+/** Maximum distance the bot can jump in a single strafe */
+STRAFE_JUMP_DISTANCE: 4.0,
+/** Minimum distance between consecutive strafe points to avoid repetitive paths */
+STRAFE_MIN_SPACING: 2.5,
+/** Minimum distance from the bot's current position to consider a strafe point valid */
+STRAFE_MIN_DISTANCE: 0.3,
+/** Grid resolution for sampling candidate strafe points */
+STRAFE_GRID_RESOLUTION: 0.3,
+/** Maximum number of previous strafe points to keep in history for spacing checks */
+STRAFE_HISTORY_SIZE: 3,

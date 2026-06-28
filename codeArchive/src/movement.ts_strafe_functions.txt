@@ -1,0 +1,303 @@
+/**
+ * Original Path: src/movement.ts (strafe-specific functions, lines 357-366 and 576-829)
+ * Archive Date: June 28, 2026
+ * Note: This code snippet has been archived pending a complete rewrite.
+ */
+
+// ─────────────────────────────────────────────────────────────────────────
+// getStrafeYaw — lines 357-366
+// ─────────────────────────────────────────────────────────────────────────
+
+export function getStrafeYaw(
+  playerPos: Vec3,
+  targetPos: Vec3,
+  direction: number,
+): number {
+  const dx = targetPos.x - playerPos.x;
+  const dz = targetPos.z - playerPos.z;
+  const minecraftYawToTarget = Math.atan2(-dx, dz);
+  return minecraftYawToTarget + direction * (Math.PI / 2);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// scoreDistance — lines 576-581
+// ─────────────────────────────────────────────────────────────────────────
+
+function scoreDistance(dist: number): number {
+  if (dist < 1.0) return 0;
+  if (dist < 2.0) return dist;
+  if (dist <= 2.5) return 6.0 - 2.0 * dist;
+  return -1;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// isInsideObstacleXZ — lines 587-604
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * Check if an XZ position falls within any obstacle's XZ footprint expanded by eps.
+ * Uses half-open interval so the obstacle footprint matches its grid cell exactly.
+ */
+function isInsideObstacleXZ(
+  x: number,
+  z: number,
+  obstacles: AABB[],
+  eps: number,
+): boolean {
+  for (const obs of obstacles) {
+    if (
+      x >= obs.minX - eps &&
+      x <= obs.maxX + eps &&
+      z >= obs.minZ - eps &&
+      z <= obs.maxZ + eps
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// isInsideObstacle — lines 609-623
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * Check if a surface point is inside any obstacle's 3D AABB.
+ */
+function isInsideObstacle(point: Vec3, obstacles: AABB[]): boolean {
+  for (const obs of obstacles) {
+    if (
+      point.x >= obs.minX &&
+      point.x <= obs.maxX &&
+      point.y >= obs.minY &&
+      point.y <= obs.maxY &&
+      point.z >= obs.minZ &&
+      point.z <= obs.maxZ
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// isHole — lines 629-636
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * Check if an XZ position is a hole (no solid ground at that grid cell).
+ * Uses half-open interval [hx, hx+1) x [hz, hz+1) so each hole covers exactly one 1x1 cell.
+ */
+function isHole(x: number, z: number, holes: [number, number][]): boolean {
+  const bx = Math.floor(x);
+  const bz = Math.floor(z);
+  for (const [hx, hz] of holes) {
+    if (bx === hx && bz === hz) return true;
+  }
+  return false;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// isPathBlocked — lines 641-665
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * Check if the straight-line path from source to point is blocked by any obstacle.
+ */
+function isPathBlocked(source: Vec3, point: Vec3, obstacles: AABB[]): boolean {
+  const dx = point.x - source.x;
+  const dy = point.y - source.y;
+  const dz = point.z - source.z;
+  const length = Math.hypot(dx, dy, dz);
+  if (length < 1e-6) return false;
+  const dirX = dx / length;
+  const dirY = dy / length;
+  const dirZ = dz / length;
+
+  const PROXIMITY_EPS = Constants.PHYSICS.PLAYER_OFFSET;
+  for (const obs of obstacles) {
+    const mask = new AABB(
+      obs.minX - PROXIMITY_EPS,
+      obs.minY - PROXIMITY_EPS,
+      obs.minZ - PROXIMITY_EPS,
+      obs.maxX + PROXIMITY_EPS,
+      obs.maxY + PROXIMITY_EPS,
+      obs.maxZ + PROXIMITY_EPS,
+    );
+    const [, tFar] = mask.rayHitTFar(source, new Vec3(dirX, dirY, dirZ));
+    if (tFar < 1.0) return true;
+  }
+  return false;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// findWalkableSurface — lines 671-736
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * Find a walkable surface point at the given (x, z) by scanning downward
+ * from targetY + jumpDistance to targetY - 2.
+ */
+export function findWalkableSurface(
+  x: number,
+  z: number,
+  targetY: number,
+  blockAtFn: (pos: Vec3) => any,
+): Vec3 | null {
+  const step = Constants.MOVEMENT.STRAFE_GRID_RESOLUTION;
+  const maxY = targetY + Constants.MOVEMENT.STRAFE_JUMP_DISTANCE;
+  const minY = targetY - 2;
+  const halfWidth = Constants.PHYSICS.PLAYER_OFFSET; // 0.3
+  const height = Constants.PHYSICS.PLAYER_HEIGHT; // 1.8
+  for (let y = maxY; y >= minY; y -= step) {
+    const bx = Math.floor(x);
+    const by = Math.floor(y);
+    const bz = Math.floor(z);
+    const block = blockAtFn(new Vec3(bx, by, bz));
+    if (!block || block.boundingBox === "empty") continue;
+
+    // Compute actual top surface Y from shape
+    const shape = block.shapes[0];
+    const surfaceY = shape ? by + shape[Constants.SHAPE.MAX_Y] : by + 1;
+
+    // Check that the full player AABB above the surface is clear
+    // Player occupies [x-0.3, x+0.3] x [surfaceY, surfaceY+1.8] x [z-0.3, z+0.3]
+    const clearMinX = Math.floor(x - halfWidth);
+    const clearMaxX = Math.floor(x + halfWidth);
+    const clearMinY = Math.floor(surfaceY);
+    const clearMaxY = Math.floor(surfaceY + height);
+    const clearMinZ = Math.floor(z - halfWidth);
+    const clearMaxZ = Math.floor(z + halfWidth);
+
+    let isClear = true;
+    for (let cx = clearMinX; cx <= clearMaxX && isClear; cx++) {
+      for (let cy = clearMinY; cy <= clearMaxY && isClear; cy++) {
+        for (let cz = clearMinZ; cz <= clearMaxZ && isClear; cz++) {
+          const aboveBlock = blockAtFn(new Vec3(cx, cy, cz));
+          if (aboveBlock && aboveBlock.boundingBox !== "empty") {
+            // Check actual shape overlap with the player AABB volume
+            if (aboveBlock.shapes && aboveBlock.shapes.length > 0) {
+              for (const s of aboveBlock.shapes) {
+                if (
+                  x + halfWidth > cx + s[Constants.SHAPE.MIN_X] &&
+                  x - halfWidth < cx + s[Constants.SHAPE.MAX_X] &&
+                  surfaceY + height > cy + s[Constants.SHAPE.MIN_Y] &&
+                  surfaceY < cy + s[Constants.SHAPE.MAX_Y] &&
+                  z + halfWidth > cz + s[Constants.SHAPE.MIN_Z] &&
+                  z - halfWidth < cz + s[Constants.SHAPE.MAX_Z]
+                ) {
+                  isClear = false;
+                  break;
+                }
+              }
+            } else {
+              isClear = false;
+            }
+          }
+        }
+      }
+    }
+
+    if (isClear) {
+      return new Vec3(x, surfaceY, z);
+    }
+  }
+  return null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// getStrafePoint — lines 741-829
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * Find the best strafe point by sampling a dense grid and scoring candidates.
+ */
+export function getStrafePoint(
+  source: Vec3,
+  _candidate: Vec3,
+  target: Vec3,
+  blockAtFn: (pos: Vec3) => any,
+  isJumpPathClearFn: (a: Vec3, b: Vec3) => boolean,
+  recentPoints: Vec3[],
+  recentPointsMax: number,
+  _pvpTarget?: Vec3,
+  obstacles?: AABB[],
+  holes?: [number, number][],
+  debugLog?: (msg: string) => void,
+): Vec3 | null {
+  const resolution = Constants.MOVEMENT.STRAFE_GRID_RESOLUTION;
+  const maxDistTarget = Constants.MOVEMENT.STRAFE_RADIUS;
+  const maxDistBot = Constants.MOVEMENT.STRAFE_JUMP_DISTANCE;
+  const minDistBot = Constants.MOVEMENT.STRAFE_MIN_DISTANCE;
+  const minSpacing = Constants.MOVEMENT.STRAFE_MIN_SPACING;
+  const dist2D = (a: Vec3, b: Vec3): number => Math.hypot(a.x - b.x, a.z - b.z);
+
+  const minX = target.x - maxDistTarget;
+  const maxX = target.x + maxDistTarget;
+  const minZ = target.z - maxDistTarget;
+  const maxZ = target.z + maxDistTarget;
+
+  /**
+   * Collect all valid candidates that pass hard filters, AABB clearance,
+   * and jump-path clearance.  Returns an array of { point, score } sorted
+   * by descending score.
+   */
+  const collectCandidates = (): { point: Vec3; score: number }[] => {
+    const candidates: { point: Vec3; score: number }[] = [];
+    for (let x = minX; x <= maxX; x += resolution) {
+      for (let z = minZ; z <= maxZ; z += resolution) {
+        const surface = findWalkableSurface(x, z, target.y, blockAtFn);
+        if (!surface) continue;
+
+        const dTarget = dist2D(surface, target);
+        const dBot = dist2D(surface, source);
+
+        if (dTarget >= maxDistTarget) continue;
+        if (dBot >= maxDistBot) continue;
+        if (dBot < minDistBot) continue;
+        if (dTarget < 0.3) continue;
+
+        if (holes && isHole(surface.x, surface.z, holes)) continue;
+        if (!isPositionClear(surface, blockAtFn)) continue;
+        if (!isJumpPathClearFn(source, surface)) continue;
+
+        const score = scoreDistance(dTarget);
+        candidates.push({ point: surface, score });
+      }
+    }
+    candidates.sort((a, b) => b.score - a.score);
+    return candidates;
+  };
+
+  // ── Pass 1: try with full spacing constraint ──
+  const allCandidates = collectCandidates();
+  const spacingBlocked = allCandidates.filter(({ point }) =>
+    recentPoints.some((rp) => dist2D(point, rp) <= minSpacing),
+  );
+  debugLog?.(
+    `getStrafePoint: candidates=${allCandidates.length} spacingBlocked=${spacingBlocked.length}/${allCandidates.length} recentPts=${recentPoints.length} topScore=${allCandidates[0]?.score.toFixed(1) ?? "n/a"}`,
+  );
+  for (const { point, score } of allCandidates) {
+    if (recentPoints.some((rp) => dist2D(point, rp) <= minSpacing)) continue;
+    recentPoints.push(point);
+    if (recentPoints.length > recentPointsMax) recentPoints.shift();
+    return point;
+  }
+
+  // ── Pass 2: spacing blocked every candidate — clear history and retry ──
+  // When surrounded by obstacles, all candidates may be close to recent
+  // points. Clearing history allows the bot to revisit any point.
+  debugLog?.(
+    `getStrafePoint: Pass 1 exhausted, clearing history and retrying`,
+  );
+  recentPoints.length = 0;
+  for (const { point, score } of allCandidates) {
+    recentPoints.push(point);
+    if (recentPoints.length > recentPointsMax) recentPoints.shift();
+    return point;
+  }
+  debugLog?.(
+    `getStrafePoint: no candidates at all (grid=${resolution}, range=${maxDistTarget})`,
+  );
+  return null;
+}

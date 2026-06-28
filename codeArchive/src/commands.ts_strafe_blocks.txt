@@ -1,0 +1,71 @@
+/**
+ * Original Path: src/commands.ts (strafe command registration + handler)
+ * Archive Date: June 28, 2026
+ * Note: This code snippet has been archived pending a complete rewrite.
+ */
+
+// ─────────────────────────────────────────────────────────────────────────
+// Command tree registration — lines 305-328
+// ─────────────────────────────────────────────────────────────────────────
+
+// Inside setupCommandTree():
+strafe: {
+  description: "Strafe toward an offset position and return distance remaining",
+  subcommands: {
+    "<xoffset>": {
+      description: "X offset from current position",
+      positional: true,
+      subcommands: {
+        "<yoffset>": {
+          description: "Y offset from current position",
+          positional: true,
+          subcommands: {
+            "<zoffset>": {
+              description: "Z offset from current position",
+              positional: true,
+              handler: async (args: string[]) => {
+                await this.strafe(args);
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+},
+
+// ─────────────────────────────────────────────────────────────────────────
+// Handler — lines 794-824
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * Strafe toward an offset position and return distance remaining.
+ * args[1]=xoffset, args[2]=yoffset, args[3]=zoffset
+ */
+async strafe(args: string[]): Promise<void> {
+  const xOffset = parseFloat(args[1]);
+  const yOffset = parseFloat(args[2]);
+  const zOffset = parseFloat(args[3]);
+
+  if (isNaN(xOffset) || isNaN(yOffset) || isNaN(zOffset)) {
+    this.logger.error(
+      new Error("Invalid arguments: strafe <xoffset> <yoffset> <zoffset>"),
+      "Command",
+    );
+    return;
+  }
+
+  const source = this.bot.entity.position.clone();
+  const target = source.offset(xOffset, yOffset, zOffset);
+
+  // Wait until settled on ground
+  await (this.bot as any).combatManager._waitUntilSettled();
+
+  // Execute strafe using the combat manager's executeStrafe
+  const cm = (this.bot as any).combatManager;
+  const dist = await cm.executeStrafe(target);
+
+  this.logger.command(
+    `Strafe: target position (${target.x.toFixed(2)}, ${target.y.toFixed(2)}, ${target.z.toFixed(2)}). Distance remaining: ${dist.toFixed(3)}b`,
+  );
+}

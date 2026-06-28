@@ -1,0 +1,41 @@
+/**
+ * Original Path: src/types/mineflayer.d.ts (strafe-related type declarations)
+ * Archive Date: June 28, 2026
+ * Note: This code snippet has been archived pending a complete rewrite.
+ */
+
+// ─────────────────────────────────────────────────────────────────────────
+// CombatManager class declaration — strafe-specific members (lines 77-78, 116, 119-120)
+// ─────────────────────────────────────────────────────────────────────────
+
+// In declare class CombatManager:
+strafeDirection: number;
+strafePoint: Vec3 | null;
+// ...
+doStrafe(overrideTarget?: Vec3): void;
+executeStrafe(targetPos: Vec3): Promise<number>;
+executeStrafeLoop(targetPos: Vec3, iterations?: number): Promise<number[]>;
+
+// ─────────────────────────────────────────────────────────────────────────
+// UtilsManager class declaration — strafe-related members (lines 228-234, 241-242, 254-257)
+// ─────────────────────────────────────────────────────────────────────────
+
+// In declare class UtilsManager:
+getStrafePoint(
+  source: Vec3,
+  candidate: Vec3,
+  pvpTarget?: Vec3,
+  debugLog?: (msg: string) => void,
+): Vec3 | null;
+getStrafeYaw(source: Vec3, target: Vec3, direction?: number): number;
+// getJumpVelocity has an `isStrafe` parameter (line 241):
+getJumpVelocity(
+  source: Vec3,
+  target: Vec3,
+  angleDeg?: number,
+  isStrafe?: boolean,
+): Vec3 | null;
+withStrafe(
+  velocity: Vec3,
+  options: { yaw: number; speed?: number; strength?: number },
+): Vec3;

@@ -1,0 +1,81 @@
+/**
+ * Original Path: tests/e2e/pvp.test.ts (lines 559-629)
+ * Archive Date: June 28, 2026
+ * Note: This code snippet has been archived pending a complete rewrite.
+ */
+
+  // ══════════════════════════════════════════════════════════════════
+  // Category 6: Strafe Movement
+  // ══════════════════════════════════════════════════════════════════
+
+  describe("Strafe Movement", () => {
+    test(
+      "doStrafe — runs without error when target is in range",
+      async () => {
+        const cm = getCm();
+
+        // Use a nearby position as override target — no need for a real entity
+        const targetPos = bot.entity.position.offset(2, 0, 0);
+
+        // doStrafe with overrideTarget should run without throwing
+        for (let i = 0; i < 10; i++) {
+          cm.doStrafe(targetPos);
+          await bot.waitForTicks!(1);
+        }
+
+        // Verify strafe logic ran (strafePoint may be null if no valid points)
+        expect(cm.strafePoint).toBeDefined();
+      },
+      TIMEOUT_MS,
+    );
+
+    test(
+      "doStrafe — clears point when target too far",
+      async () => {
+        const cm = getCm();
+
+        const zombie = await summonMob(bot);
+        await getPvp().attack(zombie);
+
+        await bot.utilsManager.assertCommandSuccess("tp", `@e[type=zombie,limit=1,sort=nearest] ${POSITION.x + 50} ${POSITION.y} ${POSITION.z}`);
+        await bot.waitForTicks!(5);
+
+        cm.doStrafe();
+        expect(cm.strafePoint).toBeNull();
+      },
+      TIMEOUT_MS,
+    );
+
+    test(
+      "doStrafe — no strafe point when no target",
+      () => {
+        const cm = getCm();
+        getPvp().forceStop();
+        cm.doStrafe();
+        expect(cm.strafePoint).toBeNull();
+      },
+      TIMEOUT_MS,
+    );
+
+    test(
+      "doStrafe — flips direction on horizontal collision",
+      () => {
+        const cm = getCm();
+        const initialDir = cm.strafeDirection;
+
+        // Use overrideTarget to provide a target position without needing a real entity
+        // Place target within strafe range so collision logic runs
+        const targetPos = new Vec3(POSITION.x + 2, POSITION.y, POSITION.z);
+        cm.strafePoint = new Vec3(POSITION.x + 3, POSITION.y, POSITION.z);
+        (bot as any).entity.isCollidedHorizontally = true;
+
+        cm.doStrafe(targetPos);
+
+        expect(cm.strafeDirection).toBe(-initialDir);
+        expect(cm.strafePoint).toBeNull();
+
+        (bot as any).entity.isCollidedHorizontally = false;
+      },
+      TIMEOUT_MS,
+    );
+  });

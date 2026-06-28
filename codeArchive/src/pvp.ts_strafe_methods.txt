@@ -1,0 +1,234 @@
+/**
+ * Original Path: src/pvp.ts (strafe-related properties and methods)
+ * Archive Date: June 28, 2026
+ * Note: This code snippet has been archived pending a complete rewrite.
+ */
+
+// ─────────────────────────────────────────────────────────────────────────
+// CombatManager class — strafe properties (lines 279-280, 300-301)
+// ─────────────────────────────────────────────────────────────────────────
+
+// In class CombatManager declaration:
+strafeDirection: number;
+strafePoint: Vec3 | null;
+
+// In constructor:
+this.strafeDirection = 1;
+this.strafePoint = null;
+
+// ─────────────────────────────────────────────────────────────────────────
+// Strafe invocation in doDecide (lines 849-852)
+// ─────────────────────────────────────────────────────────────────────────
+
+// Inside doDecide():
+const hasTarget = !!(this.bot as any).pvp.target;
+if (hasTarget) {
+  this.doStrafe();
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// doStrafe method (lines 960-1081)
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * Strafe around a PvP target by computing an orbital/radial jump point,
+ * selecting a valid landing surface via getStrafePoint, and applying a
+ * jump impulse.  Direction flips on horizontal collision.
+ *
+ * The strafe point is cached (`strafePoint`) but re-validated only when
+ * on ground to avoid false "blocked" reports from velocity mismatches mid-air.
+ *
+ * @param overrideTarget - Optional fixed point to strafe around
+ */
+doStrafe(overrideTarget?: Vec3): void {
+  const source = this.bot.entity!.position;
+  const target = overrideTarget || (this.bot as any).pvp?.target?.position;
+  if (!source || !target) {
+    this.strafePoint = null;
+    return;
+  }
+
+  const utils = (this.bot as any).utilsManager;
+  utils.updateObstacles();
+  const dist2D = (a: Vec3, b: Vec3) => Math.hypot(a.x - b.x, a.z - b.z);
+  const distToTarget = source.distanceTo(target);
+
+  const strafeRange =
+    (this.bot as any).runtimeConfig?.get("MOVEMENT", "STRAFE_RADIUS") ??
+    Constants.MOVEMENT.STRAFE_RADIUS;
+
+  if (distToTarget > strafeRange) {
+    this.strafePoint = null;
+    return;
+  }
+
+  // Flip direction on horizontal collision
+  if ((this.bot as any).entity.isCollidedHorizontally) {
+    this.strafeDirection = -this.strafeDirection;
+    this.strafePoint = null;
+  }
+
+  if ((this.bot as any).entity.onGround) {
+    if (this.strafePoint) {
+      const distToPoint = dist2D(source, this.strafePoint);
+      if (distToPoint > strafeRange + 1) {
+        this.strafePoint = null;
+      } else {
+        const isBlocked = !utils.isJumpPathClear(source, this.strafePoint);
+        if (isBlocked || distToPoint < 0.2) {
+          this.strafePoint = null;
+        }
+      }
+    }
+
+    if (!this.strafePoint && distToTarget <= strafeRange) {
+      // Try all 4 cardinal directions relative to the target to find a
+      // valid strafe point.  The directions are ordered by preference:
+      // perpendicular (orbital), then forward/backward (radial).
+      const strafeDist = Constants.MOVEMENT.STRAFE_JUMP_DISTANCE;
+      const directions: { dir: number; label: string }[] = [
+        { dir: this.strafeDirection, label: "strafe" },
+        { dir: -this.strafeDirection, label: "opposite" },
+        { dir: 0, label: "forward" },
+        { dir: 2, label: "backward" }, // 2 = PI rad = 180°
+      ];
+
+      for (const { dir, label } of directions) {
+        const yaw = utils.getStrafeYaw(source, target, dir);
+        const candidate = source.offset(
+          -Math.sin(yaw) * strafeDist,
+          0,
+          Math.cos(yaw) * strafeDist,
+        );
+        this.strafePoint = utils.getStrafePoint(
+          source,
+          candidate,
+          target,
+        );
+        if (this.strafePoint) {
+          this.strafeDirection = dir;
+          break;
+        }
+      }
+    }
+
+    if (this.strafePoint) {
+      // Enable sprint so prismarine-physics uses sprint ground acceleration
+      // (otherwise it would use walking acceleration and slow us down).
+      // The sprint-jump boost from prismarine-physics gets overwritten
+      // by our impulse below, so we include it in getJumpVelocity instead.
+      (this.bot as any).setControlState("sprint", true);
+
+      // Pass airAccel so getJumpVelocity accounts for the air steering
+      // that executeStrafe will apply (LCE flyingSpeed model).
+      const airAccel =
+        Constants.PHYSICS.ACCELERATION.AIR *
+        Constants.PHYSICS.ACCELERATION.SPRINT_MULTIPLIER;
+      const impulse = utils.getJumpVelocity(
+        source,
+        this.strafePoint,
+        0,
+        true,
+        undefined,
+        undefined,
+        airAccel,
+      );
+      if (impulse) {
+        this.logger.debug(
+          `Strafe: jumping to (${this.strafePoint.x.toFixed(1)}, ${this.strafePoint.z.toFixed(1)}) with impulse magnitude ${Math.hypot(impulse.x, impulse.z).toFixed(2)}, dist to target: ${distToTarget.toFixed(1)}b, dir: ${this.strafeDirection}`,
+          "Combat",
+        );
+        utils.applyImpulse(impulse, "set", true);
+      }
+    }
+  } else if (this.strafePoint) {
+    const currentSpeed = utils.getHorizontalSpeed();
+    if (currentSpeed > 0.001) {
+      // Steer velocity toward the strafe point using LCE air speed.
+      // Matches LCE flyingSpeed (Player.cpp:1017-1018): 0.02 base, 0.026 sprint.
+      const airAccel = Constants.MOVEMENT.SPRINT_AIR_SPEED;
+
+      const dx = this.strafePoint.x - source.x;
+      const dz = this.strafePoint.z - source.z;
+      const len = Math.hypot(dx, dz) || 1e-6;
+
+      // Add air acceleration in the direction of the strafe point
+      const impulse = new Vec3(
+        (dx / len) * airAccel,
+        0,
+        (dz / len) * airAccel,
+      );
+      utils.applyImpulse(impulse, "add");
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// executeStrafe method (lines 1150-1189)
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * Execute a single strafe toward targetPos and measure accuracy.
+ * Waits for the bot to settle before and after strafing.
+ * @returns Distance from achieved position to strafe point (or target).
+ */
+async executeStrafe(targetPos: Vec3): Promise<number> {
+  await this._waitUntilSettled();
+  this.strafePoint = null;
+  this.doStrafe(targetPos);
+  await this.bot.waitForTicks!(1);
+
+  // Steer in the air toward the strafe point.  getJumpVelocity computes
+  // the initial impulse assuming air acceleration is applied each tick
+  // toward the target, so we must apply that acceleration here to match
+  // the model — otherwise the bot follows a pure ballistic arc and falls
+  // short of the strafe point.
+  //
+  // LCE reference: Player::_init (Player.cpp:1017-1018) sets flyingSpeed
+  // to 0.02 base, 0.026 with sprint.  This is the per-tick air acceleration.
+  const utils = (this.bot as any).utilsManager;
+  const airAccel = Constants.MOVEMENT.SPRINT_AIR_SPEED;
+  while (!this.bot.entity.onGround) {
+    if (this.strafePoint) {
+      const pos = this.bot.entity.position;
+      const dx = this.strafePoint.x - pos.x;
+      const dz = this.strafePoint.z - pos.z;
+      const len = Math.hypot(dx, dz) || 1e-6;
+      const impulse = new Vec3(
+        (dx / len) * airAccel,
+        0,
+        (dz / len) * airAccel,
+      );
+      utils.applyImpulse(impulse, "add");
+    }
+    await this.bot.waitForTicks!(1);
+  }
+
+  await this._waitUntilSettled();
+  const finalPos = this.bot.entity.position;
+  const strafePoint = this.strafePoint;
+  if (strafePoint) {
+    return Math.hypot(strafePoint.x - finalPos.x, strafePoint.z - finalPos.z);
+  }
+  return Math.hypot(targetPos.x - finalPos.x, targetPos.z - finalPos.z);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// executeStrafeLoop method (lines 1195-1205)
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * Execute multiple strafes toward targetPos and measure each result.
+ * @returns Array of distances after each strafe.
+ */
+async executeStrafeLoop(
+  targetPos: Vec3,
+  iterations: number = 3,
+): Promise<number[]> {
+  const distances: number[] = [];
+  for (let i = 0; i < iterations; i++) {
+    const dist = await this.executeStrafe(targetPos);
+    distances.push(dist);
+  }
+  return distances;
+}
