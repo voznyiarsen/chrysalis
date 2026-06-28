@@ -4,7 +4,7 @@
  */
 
 import util from "node:util";
-import { Logger } from "./logger";
+import { Logger, logger } from "./logger";
 import { tokenize, resolve, getHelp, CommandNode } from "./cli-engine";
 import type { Bot, EquipmentDestination } from "mineflayer";
 
@@ -180,8 +180,14 @@ export class CommandManager {
       },
       blockat: {
         description: "Get the block at the bot's current position",
-        handler: () =>
-          this.logger.info(this.bot.world.getBlock(this.bot.entity.position)),
+        handler: () => {
+          const block = this.bot.world.getBlock(this.bot.entity.position);
+          if (block) {
+            this.logger.status(`Block at current position: ${block.name} (id: ${block.type})`);
+          } else {
+            this.logger.status("No block at current position");
+          }
+        },
       },
       cfg: {
         description: "View or edit runtime configuration",
@@ -242,6 +248,16 @@ export class CommandManager {
           );
         },
       },
+      msglog: {
+        description:
+          "Toggle server message event logging on/off (raw chat/system/command packets)",
+        handler: () => {
+          const enabled = this.logger.toggleMessageLog();
+          this.logger.command(
+            `Message logging ${enabled ? "enabled" : "disabled"}`,
+          );
+        },
+      },
       vel: {
         description: "Show bot's current velocity",
         handler: () => {
@@ -278,30 +294,6 @@ export class CommandManager {
                     positional: true,
                     handler: async (args: string[]) => {
                       await this.jump(args);
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-      strafe: {
-        description: "Strafe toward an offset position and return distance remaining",
-        subcommands: {
-          "<xoffset>": {
-            description: "X offset from current position",
-            positional: true,
-            subcommands: {
-              "<yoffset>": {
-                description: "Y offset from current position",
-                positional: true,
-                subcommands: {
-                  "<zoffset>": {
-                    description: "Z offset from current position",
-                    positional: true,
-                    handler: async (args: string[]) => {
-                      await this.strafe(args);
                     },
                   },
                 },
@@ -452,7 +444,7 @@ export class CommandManager {
       (this.bot.registry as any).items[parseInt(args[1])] ||
       (this.bot.registry as any).itemsByName[args[1]];
     if (!item) {
-      this.logger.error(new Error(`Item '${args[1]}' not found`));
+      this.logger.error(new Error(`Item '${args[1]}' not found`), "Inventory");
       return;
     }
     const count = args.length >= 3 ? parseInt(args[2]) : 1;
@@ -462,8 +454,8 @@ export class CommandManager {
       this.logger.inventory(`Tossed ${item.displayName} x${count}`);
     } catch (error: unknown) {
       const err = error instanceof Error ? error : new Error(String(error));
-      err.message = `Failed to toss: ${err.message}`;
-      this.logger.error(err);
+      err.message = `Failed to toss ${item.displayName}: ${err.message}`;
+      this.logger.error(err, "Inventory");
     }
   }
 
@@ -480,8 +472,8 @@ export class CommandManager {
       );
     } catch (error: unknown) {
       const err = error instanceof Error ? error : new Error(String(error));
-      err.message = `Failed to toss: ${err.message}`;
-      this.logger.error(err);
+      err.message = `Failed to toss all items: ${err.message}`;
+      this.logger.error(err, "Inventory");
     }
   }
 
@@ -495,7 +487,7 @@ export class CommandManager {
       (this.bot.registry as any).itemsByName[args[1]];
     const destination = args[2];
     if (!item) {
-      this.logger.error(new Error(`Item '${args[1]}' not found`));
+      this.logger.error(new Error(`Item '${args[1]}' not found`), "Inventory");
       return;
     }
 
@@ -507,8 +499,8 @@ export class CommandManager {
       this.logger.inventory(`Equipped ${item.displayName} to ${destination}`);
     } catch (error: unknown) {
       const err = error instanceof Error ? error : new Error(String(error));
-      err.message = `Failed to equip: ${err.message}`;
-      this.logger.error(err);
+      err.message = `Failed to equip ${item.displayName} to ${destination}: ${err.message}`;
+      this.logger.error(err, "Inventory");
     }
   }
 
@@ -528,8 +520,8 @@ export class CommandManager {
       );
     } catch (error: unknown) {
       const err = error instanceof Error ? error : new Error(String(error));
-      err.message = `Failed to unequip: ${err.message}`;
-      this.logger.error(err);
+      err.message = `Failed to unequip from ${destination}: ${err.message}`;
+      this.logger.error(err, "Inventory");
     }
   }
 
@@ -544,8 +536,8 @@ export class CommandManager {
       this.logger.inventory(`Unequipped ${count} items`);
     } catch (error: unknown) {
       const err = error instanceof Error ? error : new Error(String(error));
-      err.message = `Failed: ${err.message}`;
-      this.logger.error(err);
+      err.message = `Failed to unequip all items: ${err.message}`;
+      this.logger.error(err, "Inventory");
     }
   }
 
@@ -553,14 +545,14 @@ export class CommandManager {
    * Show bot's Minecraft version.
    */
   showVersion(): void {
-    this.logger.status(this.bot.version);
+    this.logger.status(`Minecraft version: ${this.bot.version}`);
   }
 
   /**
    * Show bot's position.
    */
   showPosition(): void {
-    this.logger.status(this.bot.entity.position);
+    this.logger.status(`Position: ${this.bot.entity.position.toString()}`);
   }
 
   /**
@@ -631,7 +623,7 @@ export class CommandManager {
     // mineflayer plugin property access
     const player = (this.bot as any).players[username];
     if (!player) {
-      this.logger.error(new Error(`Player '${username}' not found`));
+      this.logger.error(new Error(`Player '${username}' not found`), "Command");
       return;
     }
     this.logger.debug(`Player Debug: '${player.username}'`, "Debug");
@@ -649,7 +641,7 @@ export class CommandManager {
     const slotNumber = parseInt(args[1], 10);
     const item = this.bot.inventory!.slots![slotNumber];
     if (!item) {
-      this.logger.error(new Error(`Item in slot ${slotNumber} not found`));
+      this.logger.error(new Error(`Item in slot ${slotNumber} not found`), "Inventory");
       return;
     }
     this.logger.debug(
@@ -674,7 +666,7 @@ export class CommandManager {
     // mineflayer plugin property access
     const rc = (this.bot as any).runtimeConfig;
     if (!rc) {
-      this.logger.error(new Error("Runtime config not available"));
+      this.logger.error(new Error("Runtime config not available"), "Config");
       return;
     }
 
@@ -745,6 +737,7 @@ export class CommandManager {
     if (isNaN(xOffset) || isNaN(yOffset) || isNaN(zOffset)) {
       this.logger.error(
         new Error("Invalid arguments: jump <xoffset> <yoffset> <zoffset>"),
+        "Command",
       );
       return;
     }
@@ -775,37 +768,6 @@ export class CommandManager {
   }
 
   /**
-   * Strafe toward an offset position and return distance remaining.
-   * args[1]=xoffset, args[2]=yoffset, args[3]=zoffset
-   */
-  async strafe(args: string[]): Promise<void> {
-    const xOffset = parseFloat(args[1]);
-    const yOffset = parseFloat(args[2]);
-    const zOffset = parseFloat(args[3]);
-
-    if (isNaN(xOffset) || isNaN(yOffset) || isNaN(zOffset)) {
-      this.logger.error(
-        new Error("Invalid arguments: strafe <xoffset> <yoffset> <zoffset>"),
-      );
-      return;
-    }
-
-    const source = this.bot.entity.position.clone();
-    const target = source.offset(xOffset, yOffset, zOffset);
-
-    // Wait until settled on ground
-    await (this.bot as any).combatManager._waitUntilSettled();
-
-    // Execute strafe using the combat manager's executeStrafe
-    const cm = (this.bot as any).combatManager;
-    const dist = await cm.executeStrafe(target);
-
-    this.logger.command(
-      `Strafe: target position (${target.x.toFixed(2)}, ${target.y.toFixed(2)}, ${target.z.toFixed(2)}). Distance remaining: ${dist.toFixed(3)}b`,
-    );
-  }
-
-  /**
    * Stop any active run loop.
    */
   private _stopRun(): void {
@@ -825,7 +787,7 @@ export class CommandManager {
     const m = parseInt(args[3], 10);
 
     if (n <= 0 || m < 0) {
-      this.logger.error("Invalid arguments: run <cmd> <N> <M> where N>0, M>=0");
+      this.logger.error("Invalid arguments: run <cmd> <N> <M> where N>0, M>=0", "Command");
       return;
     }
 
@@ -960,6 +922,7 @@ export class CommandManager {
     if (args.length < 2) {
       this.logger.error(
         "Function name required. Usage: func <functionName> [args...]",
+        "Command",
       );
       return;
     }
@@ -971,6 +934,7 @@ export class CommandManager {
       const availableFunctions = Object.keys(this.functionRegistry).sort();
       this.logger.error(
         `Function '${functionName}' not found. Available functions:\n  ${availableFunctions.join(", ")}`,
+        "Command",
       );
       return;
     }
@@ -987,7 +951,7 @@ export class CommandManager {
       }
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : String(error);
-      this.logger.error(`Error calling function '${functionName}': ${msg}`);
+      this.logger.error(`Error calling function '${functionName}': ${msg}`, "Command");
     }
   }
 }
@@ -999,8 +963,10 @@ export function attachCommands(bot: Bot): Bot {
   try {
     bot.commandManager = new CommandManager(bot);
   } catch (error: unknown) {
-    console.error("CommandManager attachment failed:", error);
+    logger.error(`CommandManager attachment failed: ${(error as Error).message}`, "Command");
     throw error;
   }
+  // Attach the bot to the logger so the message listener can be registered.
+  logger.attachBot(bot);
   return bot;
 }

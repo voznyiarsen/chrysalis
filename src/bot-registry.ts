@@ -131,7 +131,7 @@ export class BotRegistry {
         bot.pvp = new PVPManager(bot);
         botLog.client("  ✓ Standard plugins loaded (pathfinder, pvp)");
       } catch (e: unknown) {
-        botLog.error(`  ✗ Standard plugins failed: ${(e as Error).message}`);
+        botLog.error(`  ✗ Standard plugins failed: ${(e as Error).message}`, "Client");
       }
 
       // Load Pupa managers
@@ -158,7 +158,7 @@ export class BotRegistry {
         botLog.client(`  ✓ Loaded: ${loaded.join(", ")}`);
       }
       if (failed.length > 0) {
-        botLog.error(`  ✗ Failed: ${failed.map((f) => f.name).join(", ")}`);
+        botLog.error(`  ✗ Failed: ${failed.map((f) => f.name).join(", ")}`, "Client");
       }
 
       botLog.client(
@@ -172,6 +172,7 @@ export class BotRegistry {
         } catch (e: unknown) {
           botLog.error(
             `CommandManager function registry update failed: ${(e as Error).message}`,
+            "Command",
           );
         }
       }
@@ -213,6 +214,7 @@ export class BotRegistry {
             } catch (error: unknown) {
               botLog.error(
                 `Headless command failed: ${(error as Error).message}`,
+                "Command",
               );
             } finally {
               bot.end();
@@ -252,7 +254,7 @@ export class BotRegistry {
           setTimeout(() => {
             botLog.client(`Reconnect attempt ${attempt}...`);
             this.createBot(botNumber).catch((err: unknown) => {
-              botLog.error(`Reconnect failed: ${(err as Error).message}`);
+              botLog.error(`Reconnect failed: ${(err as Error).message}`, "Client");
               attemptReconnect(attempt + 1);
             });
           }, delay);
@@ -263,11 +265,287 @@ export class BotRegistry {
 
     lm.on(bot, "error", (err: Error) => {
       err.message = `Mineflayer connection error for bot ${botNumber} (${cfg.username}@${cfg.host}:${cfg.port}): ${err.message}`;
-      botLog.error(err);
+      botLog.error(err, "Client");
     });
 
     lm.on(bot, "chat", (username: string, message: string) => {
       botLog.chat(`<${username}> ${message}`);
+    });
+
+    // Translation keys for command success messages.
+    // The message event provides raw JSON with a `translate` field that
+    // identifies the message type on all protocol versions.
+    // Reference: https://minecraft.wiki/w/Commands and en_US.lang
+    const translateKeys = new Set([
+      "commands.advancement.grant.criterion.success",
+      "commands.advancement.grant.criterion.to.many.success",
+      "commands.advancement.grant.criterion.to.one.success",
+      "commands.advancement.grant.everything.success",
+      "commands.advancement.grant.from.success",
+      "commands.advancement.grant.many.to.many.success",
+      "commands.advancement.grant.many.to.one.success",
+      "commands.advancement.grant.one.to.many.success",
+      "commands.advancement.grant.one.to.one.success",
+      "commands.advancement.grant.only.success",
+      "commands.advancement.grant.through.success",
+      "commands.advancement.grant.until.success",
+      "commands.advancement.revoke.criterion.success",
+      "commands.advancement.revoke.criterion.to.many.success",
+      "commands.advancement.revoke.criterion.to.one.success",
+      "commands.advancement.revoke.everything.success",
+      "commands.advancement.revoke.from.success",
+      "commands.advancement.revoke.many.to.many.success",
+      "commands.advancement.revoke.many.to.one.success",
+      "commands.advancement.revoke.one.to.many.success",
+      "commands.advancement.revoke.one.to.one.success",
+      "commands.advancement.revoke.only.success",
+      "commands.advancement.revoke.through.success",
+      "commands.advancement.revoke.until.success",
+      "commands.advancement.test.advancement.success",
+      "commands.advancement.test.criterion.success",
+      "commands.attribute.base_value.get.success",
+      "commands.attribute.base_value.set.success",
+      "commands.attribute.modifier.add.success",
+      "commands.attribute.modifier.remove.success",
+      "commands.attribute.modifier.value.get.success",
+      "commands.attribute.value.get.success",
+      "commands.ban.success",
+      "commands.banip.success",
+      "commands.banip.success.players",
+      "commands.blockdata.success",
+      "commands.bossbar.create.success",
+      "commands.bossbar.remove.success",
+      "commands.bossbar.set.color.success",
+      "commands.bossbar.set.max.success",
+      "commands.bossbar.set.name.success",
+      "commands.bossbar.set.players.success.none",
+      "commands.bossbar.set.players.success.some",
+      "commands.bossbar.set.style.success",
+      "commands.bossbar.set.value.success",
+      "commands.bossbar.set.visible.success.hidden",
+      "commands.bossbar.set.visible.success.visible",
+      "commands.clear.success",
+      "commands.clear.success.multiple",
+      "commands.clear.success.single",
+      "commands.clone.success",
+      "commands.compare.success",
+      "commands.damage.success",
+      "commands.datapack.list.available.success",
+      "commands.datapack.list.enabled.success",
+      "commands.debug.function.success.multiple",
+      "commands.debug.function.success.single",
+      "commands.defaultgamemode.success",
+      "commands.deop.success",
+      "commands.difficulty.success",
+      "commands.downfall.success",
+      "commands.drop.success.multiple",
+      "commands.drop.success.multiple_with_table",
+      "commands.drop.success.single",
+      "commands.drop.success.single_with_table",
+      "commands.effect.clear.everything.success.multiple",
+      "commands.effect.clear.everything.success.single",
+      "commands.effect.clear.specific.success.multiple",
+      "commands.effect.clear.specific.success.single",
+      "commands.effect.give.success.multiple",
+      "commands.effect.give.success.single",
+      "commands.effect.success",
+      "commands.effect.success.removed",
+      "commands.effect.success.removed.all",
+      "commands.enchant.success",
+      "commands.enchant.success.multiple",
+      "commands.enchant.success.single",
+      "commands.entitydata.success",
+      "commands.experience.add.levels.success.multiple",
+      "commands.experience.add.levels.success.single",
+      "commands.experience.add.points.success.multiple",
+      "commands.experience.add.points.success.single",
+      "commands.experience.set.levels.success.multiple",
+      "commands.experience.set.levels.success.single",
+      "commands.experience.set.points.success.multiple",
+      "commands.experience.set.points.success.single",
+      "commands.fill.success",
+      "commands.fillbiome.success",
+      "commands.fillbiome.success.count",
+      "commands.forceload.query.success",
+      "commands.function.success",
+      "commands.function.success.multiple",
+      "commands.function.success.multiple.result",
+      "commands.function.success.single",
+      "commands.function.success.single.result",
+      "commands.gamemode.success.other",
+      "commands.gamemode.success.self",
+      "commands.gamerule.success",
+      "commands.give.success",
+      "commands.give.success.multiple",
+      "commands.give.success.single",
+      "commands.item.block.set.success",
+      "commands.item.entity.set.success.multiple",
+      "commands.item.entity.set.success.single",
+      "commands.kick.success",
+      "commands.kick.success.reason",
+      "commands.kill.success.multiple",
+      "commands.kill.success.single",
+      "commands.kill.successful",
+      "commands.locate.biome.success",
+      "commands.locate.poi.success",
+      "commands.locate.structure.success",
+      "commands.locate.success",
+      "commands.op.success",
+      "commands.pardon.success",
+      "commands.pardonip.success",
+      "commands.particle.success",
+      "commands.place.feature.success",
+      "commands.place.jigsaw.success",
+      "commands.place.structure.success",
+      "commands.place.template.success",
+      "commands.playsound.success",
+      "commands.playsound.success.multiple",
+      "commands.playsound.success.single",
+      "commands.publish.success",
+      "commands.random.reset.all.success",
+      "commands.random.reset.success",
+      "commands.random.sample.success",
+      "commands.recipe.give.success.all",
+      "commands.recipe.give.success.multiple",
+      "commands.recipe.give.success.one",
+      "commands.recipe.give.success.single",
+      "commands.recipe.take.success.all",
+      "commands.recipe.take.success.multiple",
+      "commands.recipe.take.success.one",
+      "commands.recipe.take.success.single",
+      "commands.reload.success",
+      "commands.replaceitem.success",
+      "commands.ride.dismount.success",
+      "commands.ride.mount.success",
+      "commands.save.success",
+      "commands.schedule.cleared.success",
+      "commands.scoreboard.objectives.add.success",
+      "commands.scoreboard.objectives.list.success",
+      "commands.scoreboard.objectives.remove.success",
+      "commands.scoreboard.objectives.setdisplay.successCleared",
+      "commands.scoreboard.objectives.setdisplay.successSet",
+      "commands.scoreboard.players.add.success.multiple",
+      "commands.scoreboard.players.add.success.single",
+      "commands.scoreboard.players.display.name.clear.success.multiple",
+      "commands.scoreboard.players.display.name.clear.success.single",
+      "commands.scoreboard.players.display.name.set.success.multiple",
+      "commands.scoreboard.players.display.name.set.success.single",
+      "commands.scoreboard.players.display.numberFormat.clear.success.multiple",
+      "commands.scoreboard.players.display.numberFormat.clear.success.single",
+      "commands.scoreboard.players.display.numberFormat.set.success.multiple",
+      "commands.scoreboard.players.display.numberFormat.set.success.single",
+      "commands.scoreboard.players.enable.success",
+      "commands.scoreboard.players.enable.success.multiple",
+      "commands.scoreboard.players.enable.success.single",
+      "commands.scoreboard.players.get.success",
+      "commands.scoreboard.players.list.entity.success",
+      "commands.scoreboard.players.list.success",
+      "commands.scoreboard.players.operation.success",
+      "commands.scoreboard.players.operation.success.multiple",
+      "commands.scoreboard.players.operation.success.single",
+      "commands.scoreboard.players.remove.success.multiple",
+      "commands.scoreboard.players.remove.success.single",
+      "commands.scoreboard.players.reset.success",
+      "commands.scoreboard.players.resetscore.success",
+      "commands.scoreboard.players.set.success",
+      "commands.scoreboard.players.set.success.multiple",
+      "commands.scoreboard.players.set.success.single",
+      "commands.scoreboard.players.tag.success.add",
+      "commands.scoreboard.players.tag.success.remove",
+      "commands.scoreboard.players.test.success",
+      "commands.scoreboard.teams.add.success",
+      "commands.scoreboard.teams.empty.success",
+      "commands.scoreboard.teams.join.success",
+      "commands.scoreboard.teams.leave.success",
+      "commands.scoreboard.teams.option.success",
+      "commands.scoreboard.teams.remove.success",
+      "commands.seed.success",
+      "commands.setblock.success",
+      "commands.setidletimeout.success",
+      "commands.setworldspawn.success",
+      "commands.spawnpoint.success",
+      "commands.spawnpoint.success.multiple",
+      "commands.spawnpoint.success.single",
+      "commands.spectate.success.started",
+      "commands.spectate.success.stopped",
+      "commands.spreadplayers.success.entities",
+      "commands.spreadplayers.success.players",
+      "commands.spreadplayers.success.teams",
+      "commands.stats.success",
+      "commands.stopsound.success.all",
+      "commands.stopsound.success.individualSound",
+      "commands.stopsound.success.soundSource",
+      "commands.stopsound.success.source.any",
+      "commands.stopsound.success.source.sound",
+      "commands.stopsound.success.sourceless.any",
+      "commands.stopsound.success.sourceless.sound",
+      "commands.summon.success",
+      "commands.tag.add.success.multiple",
+      "commands.tag.add.success.single",
+      "commands.tag.list.multiple.success",
+      "commands.tag.list.single.success",
+      "commands.tag.remove.success.multiple",
+      "commands.tag.remove.success.single",
+      "commands.team.add.success",
+      "commands.team.empty.success",
+      "commands.team.join.success.multiple",
+      "commands.team.join.success.single",
+      "commands.team.leave.success.multiple",
+      "commands.team.leave.success.single",
+      "commands.team.list.members.success",
+      "commands.team.list.teams.success",
+      "commands.team.option.collisionRule.success",
+      "commands.team.option.color.success",
+      "commands.team.option.deathMessageVisibility.success",
+      "commands.team.option.name.success",
+      "commands.team.option.nametagVisibility.success",
+      "commands.team.option.prefix.success",
+      "commands.team.option.suffix.success",
+      "commands.team.remove.success",
+      "commands.teleport.success.coordinates",
+      "commands.teleport.success.entity.multiple",
+      "commands.teleport.success.entity.single",
+      "commands.teleport.success.location.multiple",
+      "commands.teleport.success.location.single",
+      "commands.testfor.success",
+      "commands.testforblock.success",
+      "commands.tick.rate.success",
+      "commands.tick.sprint.stop.success",
+      "commands.tick.step.stop.success",
+      "commands.tick.step.success",
+      "commands.title.success",
+      "commands.tp.success",
+      "commands.tp.success.coordinates",
+      "commands.transfer.success.multiple",
+      "commands.transfer.success.single",
+      "commands.trigger.add.success",
+      "commands.trigger.set.success",
+      "commands.trigger.simple.success",
+      "commands.trigger.success",
+      "commands.unban.success",
+      "commands.unbanip.success",
+      "commands.whitelist.add.success",
+      "commands.whitelist.remove.success",
+      "commands.worldborder.center.success",
+      "commands.worldborder.damage.amount.success",
+      "commands.worldborder.damage.buffer.success",
+      "commands.worldborder.get.success",
+      "commands.worldborder.set.success",
+      "commands.worldborder.setSlowly.grow.success",
+      "commands.worldborder.setSlowly.shrink.success",
+      "commands.worldborder.warning.distance.success",
+      "commands.worldborder.warning.time.success",
+      "commands.xp.success",
+      "commands.xp.success.levels",
+      "commands.xp.success.negative.levels"
+    ]);
+
+    lm.on(bot, "message", (jsonMsg: any) => {
+      const translate =
+        (jsonMsg as any)?.json?.translate ?? (jsonMsg as any)?.translate;
+      if (translate && translateKeys.has(translate)) {
+        botLog.command(`Command success: ${translate}`, "INFO", "Command");
+      }
     });
 
     lm.on(bot, "entityHurt" as any, async (entity: any) => {
