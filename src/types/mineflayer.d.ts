@@ -36,9 +36,9 @@ declare class PVPManager {
 }
 
 declare class InventoryManager {
+  findItem(itemName: string, metadata?: number, notFull?: boolean): any[];
   getItemCount(itemName: string): number;
-  hasItem(itemName: string): boolean;
-  hasItemWithMetadata(itemName: string, metadata: number): boolean;
+  hasItem(itemName: string, metadata?: number): boolean;
   hasFood(): boolean;
   clearInventory(): Promise<void>;
   recordInventory(slot: string): Promise<void>;
@@ -50,17 +50,14 @@ declare class InventoryManager {
   equipBuff(): Promise<void>;
   equipTotem(): Promise<boolean>;
   equipPearl(
-    yaw?: number | null,
-    pitch?: number | null,
-    itemType?: string,
-  ): Promise<void>;
-  equipPearlWithOffset(
     targetPos: Vec3,
     offset: number,
     itemType?: string,
     sourcePos?: Vec3,
   ): Promise<void>;
   equipWeapon(): Promise<void>;
+  /**
+   * Equip golden apple to off-hand without activating it. */
   equipUtility(): Promise<void>;
   unequipAllItems(): Promise<void>;
   getItemViaCommand(
@@ -77,8 +74,6 @@ declare class CombatManager {
   debounce: boolean;
   lastDamage: number;
   lastHealth: number;
-  strafeDirection: number;
-  strafePoint: Vec3 | null;
   lastDist: number | null;
   mode: number;
   decisions: CombatDecision[];
@@ -116,11 +111,8 @@ declare class CombatManager {
   decideIfToss(): Promise<void>;
   doAvoid(): void;
   doEdgeProtection(): void;
-  doStrafe(overrideTarget?: Vec3): void;
   nudgeToCenter(target: Vec3): Promise<void>;
   updateTarget(): void;
-  executeStrafe(targetPos: Vec3): Promise<number>;
-  executeStrafeLoop(targetPos: Vec3, iterations?: number): Promise<number[]>;
   throwPearlAt(
     targetPos: Vec3,
     arcType?: "low" | "high" | "auto",
@@ -167,8 +159,6 @@ declare class UtilsManager {
   isNewThreshold: boolean;
   momentumThreshold: number;
   applyEffects: boolean;
-  recentPoints: Vec3[];
-  recentPointsMax: number;
   logger: unknown;
   getSlipperiness(pos: Vec3): number;
   getEffectsMultiplier(): number;
@@ -228,20 +218,11 @@ declare class UtilsManager {
   isInLiquid(pos: Vec3): boolean;
   getCollisions(aabb: AABB, minYThreshold?: number): AABB[];
   isJumpPathClear(source: Vec3, target: Vec3): boolean;
-  getStrafePoint(
-    source: Vec3,
-    candidate: Vec3,
-    pvpTarget?: Vec3,
-    debugLog?: (msg: string) => void,
-  ): Vec3 | null;
-  getStrafeYaw(source: Vec3, target: Vec3, direction?: number): number;
   getHorizontalSpeed(): number;
-  getGroundJumpSpeed(source: Vec3): number;
   getJumpVelocity(
     source: Vec3,
     target: Vec3,
     angleDeg?: number,
-    isStrafe?: boolean,
   ): Vec3 | null;
   jumpViaOffset(offset?: Vec3): Promise<number>;
   getFlatVelocity(
@@ -254,10 +235,11 @@ declare class UtilsManager {
   getGroundBelow(pos: Vec3): number;
   getFallDamage(fallDistance: number): number;
   clearSolidCache(): void;
-  withStrafe(
-    velocity: Vec3,
-    options: { yaw: number; speed?: number; strength?: number },
-  ): Vec3;
+  assertCommandSuccess(
+    command: string,
+    args?: string,
+    timeoutTicks?: number,
+  ): Promise<string>;
 }
 
 declare module "prismarine-windows" {

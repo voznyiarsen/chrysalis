@@ -30,7 +30,6 @@ export const Constants = {
       AIR: 0.02,
       SPRINT_MULTIPLIER: 1.3,
       SNEAK_MULTIPLIER: 0.3,
-      STRAFE_MULTIPLIER: 0.98,
     },
     /** Initial upwards vertical velocity for a jump (V_Y,1) */
     JUMP_VELOCITY: 0.42,
@@ -38,8 +37,6 @@ export const Constants = {
     JUMP_BOOST: 0.2,
     /** Empirical calibration factor for jump velocity to account for model inaccuracies */
     JUMP_CALIBRATION: 0.85,
-    /** Empirical calibration factor for strafe velocity to account for model inaccuracies */
-    STRAFE_CALIBRATION: 0.85,
     /** Momentum thresholds for stopping movement */
     MOMENTUM_THRESHOLD_1_8: 0.005,
     /** Momentum thresholds for stopping movement (1.9+) */
@@ -89,28 +86,34 @@ export const Constants = {
   // MOVEMENT & NAVIGATION
   // ============================================================================
   MOVEMENT: {
-    /** Asymptotic walking speed on ground (blocks per tick) */
-    WALK_SPEED: 0.21585,
-    /** Asymptotic sprinting speed on ground (blocks per tick) */
-    SPRINT_SPEED: 0.280605,
-    /** Maximum allowed horizontal velocity per axis (X or Z) for strafing impulses */
-    MAX_AXIS_SPEED: 0.35635,
+    /**
+     * Walking input scale — matches Legacy Console Edition (7th Gen)
+     * `Mob::walkingSpeed` (Mob.cpp:57).  The LCE ground model normalizes
+     * input to this speed via `moveRelative()`; actual asymptotic speed is
+     * `walkingSpeed * friction / (1 - friction)` ≈ 0.12 b/tick.
+     */
+    WALK_SPEED: 0.1,
+    /**
+     * Sprinting input scale — matches LCE `Player::_init` (Player.cpp:1013-1018)
+     * where `walkingSpeed += abilities.getWalkingSpeed() * 0.3f` → 0.1 + 0.03 = 0.13.
+     */
+    SPRINT_SPEED: 0.13,
+    /**
+     * Air movement scale — matches LCE `Mob::flyingSpeed` (Mob.cpp:58).
+     * In air, `moveRelative()` uses this as the normalized input speed.
+     * With sprint: `flyingSpeed += defaultFlySpeed * 0.3` = 0.026 (Player.cpp:1018).
+     */
+    AIR_SPEED: 0.02,
+    /**
+     * Sprinting air speed — matches LCE `Player::_init` (Player.cpp:1018).
+     */
+    SPRINT_AIR_SPEED: 0.026,
     /** Velocity used for fine-tuned horizontal positioning (e.g., micro-adjustments) */
     FLAT_SPEED: 0.05,
-    /** Radius (in blocks) to search for solid floor blocks for strafing targets */
+    /** Maximum allowed horizontal velocity per axis (X or Z) for movement impulses */
+    MAX_AXIS_SPEED: 0.35635,
+    /** Radius (in blocks) to search for solid floor blocks */
     SOLID_BLOCK_RADIUS: 3,
-    /** Maximum distance from the target to consider a strafe point valid */
-    STRAFE_RADIUS: 3.0,
-    /** Maximum distance the bot can jump in a single strafe */
-    STRAFE_JUMP_DISTANCE: 4.0,
-    /** Minimum distance between consecutive strafe points to avoid repetitive paths */
-    STRAFE_MIN_SPACING: 2.5,
-    /** Minimum distance from the bot's current position to consider a strafe point valid */
-    STRAFE_MIN_DISTANCE: 0.3,
-    /** Grid resolution for sampling candidate strafe points */
-    STRAFE_GRID_RESOLUTION: 0.3,
-    /** Maximum number of previous strafe points to keep in history for spacing checks */
-    STRAFE_HISTORY_SIZE: 3,
     /** Step size for segmenting trajectory paths during collision checks */
     COLLISION_SEGMENT: 0.2,
     /** Vertical offsets used for sampling 1.8m high collision box */
@@ -319,47 +322,7 @@ export const Constants = {
       legs: "leggings",
       feet: "boots",
     },
-    /** Hunger restoration and saturation values for food items */
-    FOOD: {
-      suspicious_stew: { hunger: 13, saturation: 21.2 },
-      golden_carrot: { hunger: 6, saturation: 14.4 },
-      cooked_porkchop: { hunger: 8, saturation: 12.8 },
-      steak: { hunger: 8, saturation: 12.8 },
-      rabbit_stew: { hunger: 10, saturation: 12.0 },
-      cooked_mutton: { hunger: 6, saturation: 9.6 },
-      cooked_salmon: { hunger: 6, saturation: 9.6 },
-      golden_apple: { hunger: 4, saturation: 9.6 },
-      enchanted_golden_apple: { hunger: 4, saturation: 9.6 },
-      cooked_chicken: { hunger: 6, saturation: 7.2 },
-      mushroom_stew: { hunger: 6, saturation: 7.2 },
-      beetroot_soup: { hunger: 6, saturation: 7.2 },
-      baked_potato: { hunger: 5, saturation: 6.0 },
-      bread: { hunger: 5, saturation: 6.0 },
-      cooked_cod: { hunger: 5, saturation: 6.0 },
-      cooked_rabbit: { hunger: 5, saturation: 6.0 },
-      pumpkin_pie: { hunger: 8, saturation: 4.8 },
-      carrot: { hunger: 3, saturation: 3.6 },
-      apple: { hunger: 4, saturation: 2.4 },
-      chorus_fruit: { hunger: 4, saturation: 2.4 },
-      raw_beef: { hunger: 3, saturation: 1.8 },
-      raw_porkchop: { hunger: 3, saturation: 1.8 },
-      raw_rabbit: { hunger: 3, saturation: 1.8 },
-      beetroot: { hunger: 1, saturation: 1.2 },
-      honey_bottle: { hunger: 6, saturation: 1.2 },
-      melon_slice: { hunger: 2, saturation: 1.2 },
-      poisonous_potato: { hunger: 2, saturation: 1.2 },
-      raw_chicken: { hunger: 2, saturation: 1.2 },
-      raw_mutton: { hunger: 2, saturation: 1.2 },
-      sweet_berries: { hunger: 2, saturation: 1.2 },
-      rotten_flesh: { hunger: 4, saturation: 0.8 },
-      potato: { hunger: 1, saturation: 0.6 },
-      dried_kelp: { hunger: 1, saturation: 0.6 },
-      cookie: { hunger: 2, saturation: 0.4 },
-      glow_berries: { hunger: 2, saturation: 0.4 },
-      raw_cod: { hunger: 2, saturation: 0.4 },
-      raw_salmon: { hunger: 2, saturation: 0.4 },
-      pufferfish: { hunger: 1, saturation: 0.2 },
-      tropical_fish: { hunger: 1, saturation: 0.2 },
-    },
   },
 } as const;
+
+

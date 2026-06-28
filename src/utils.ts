@@ -12,10 +12,7 @@ import {
 import {
   isJumpPathClear,
   getJumpVelocity,
-  getStrafePoint,
-  getStrafeYaw,
   getHorizontalSpeed,
-  getGroundJumpSpeed,
   getFlatVelocity,
   getCollisions,
   getSolidBlocks,
@@ -352,11 +349,7 @@ interface SimulateInputs {
   sneaking: boolean;
 }
 
-interface WithStrafeOptions {
-  yaw: number;
-  speed?: number;
-  strength?: number;
-}
+
 
 export class UtilsManager {
   bot: Bot;
@@ -367,13 +360,9 @@ export class UtilsManager {
   applyEffects: boolean;
   _solidCacheMaxSize: number;
   _solidCache: Map<string, { solids: Vec3[]; expiry: number }>;
-  recentPoints: Vec3[];
-  recentPointsMax: number;
   liquidBlockIds: Set<number>;
   lastImpulseTick?: number;
   logger: any;
-  _obstacles: AABB[];
-  _holes: [number, number][];
 
   constructor(bot: Bot) {
     this.bot = bot;
@@ -391,10 +380,7 @@ export class UtilsManager {
     this.applyEffects = false;
     this._solidCacheMaxSize = 16;
     this._solidCache = new Map();
-    this.recentPoints = [];
-    this.recentPointsMax = Constants.MOVEMENT.STRAFE_HISTORY_SIZE;
     this.liquidBlockIds = new Set();
-    this._obstacles = [];
     this._initializeLiquidCache();
   }
 
@@ -450,6 +436,19 @@ export class UtilsManager {
     return Math.max(0, multiplier);
   }
 
+  /**
+   * Simulate a single physics tick using the Legacy Console Edition
+   * movement model.  Mirrors the LCE `Mob::travel()` function
+   * (Mob.cpp:953-1030) which is the authoritative reference for ground/air
+   * movement, friction, and gravity.
+   *
+   * LCE tick order:
+   *   1. Compute friction (air=0.91, ground=block.friction*0.91)
+   *   2. Compute speed (air=flyingSpeed, ground=walkingSpeed*friction2)
+   *   3. moveRelative(): normalize input to `speed`, rotate by yaw, add to vel
+   *   4. move(): apply velocity with collision
+   *   5. Post-movement: gravity (-0.08), vertical drag (*0.98), horizontal friction
+   */
   simulateTick(
     state: SimulateTickState,
     inputs: SimulateInputs,
@@ -459,26 +458,58 @@ export class UtilsManager {
     if (Math.abs(vel.x) < this.momentumThreshold) vel.x = 0;
     if (Math.abs(vel.y) < this.momentumThreshold) vel.y = 0;
     if (Math.abs(vel.z) < this.momentumThreshold) vel.z = 0;
+
+    // ── Step 1: Friction (Mob.cpp:998-1001) ──────────────────────────
+    // LCE uses 0.91 for air, block.friction*0.91 for ground.
+    // Pupa maps slipperiness St to block.friction: default St=0.6 → friction=0.546.
     const St = this.getSlipperiness(pos);
-    const Mt_base = sprinting ? 1.3 : sneaking ? 0.3 : 1.0;
-    const Mt = Mt_base * Constants.PHYSICS.ACCELERATION.STRAFE_MULTIPLIER;
-    const Et = this.applyEffects ? this.getEffectsMultiplier() : 1.0;
-    let moveFactor = onGround
-      ? 0.1 * Mt * Et * Math.pow(0.6 / St, 3)
-      : Constants.PHYSICS.ACCELERATION.AIR * Mt_base;
+    let friction: number;
+    if (onGround) {
+      friction = St * Constants.PHYSICS.MOMENTUM; // 0.6*0.91=0.546 default
+    } else {
+      friction = Constants.PHYSICS.MOMENTUM; // 0.91
+    }
+
+    // ── Step 2: Speed (Mob.cpp:1003-1012) ──────────────────────────
+    // LCE friction2 = (0.6^3 * 0.91^3) / friction^3, normalized so that
+    // ground speed equals walkingSpeed when friction=0.546.
+    // In air, speed = flyingSpeed (0.02) regardless of sprint.
+    const friction2 =
+      Math.pow(0.6, 3) * Math.pow(Constants.PHYSICS.MOMENTUM, 3) /
+      Math.pow(friction, 3);
+    let speed: number;
+    if (onGround) {
+      const walkingSpeed = sprinting
+        ? Constants.MOVEMENT.SPRINT_SPEED
+        : sneaking
+          ? Constants.MOVEMENT.WALK_SPEED * 0.3
+          : Constants.MOVEMENT.WALK_SPEED;
+      speed = walkingSpeed * friction2;
+    } else {
+      // Air: flyingSpeed (Player.cpp:1017-1018). Sprint adds 0.3*flyingSpeed.
+      speed = sprinting
+        ? Constants.MOVEMENT.SPRINT_AIR_SPEED
+        : Constants.MOVEMENT.AIR_SPEED;
+    }
+
+    // ── Step 3: moveRelative (Entity.cpp:1094-1107) ──────────────────
+    // Normalize input to `speed`, rotate by yaw, add to velocity.
+    // Deadzone: ignore inputs with magnitude < 0.01 (squared).
     const entity = this.bot.entity as any;
     const yaw = entity.yaw;
     const sinYaw = Math.sin(yaw);
     const cosYaw = Math.cos(yaw);
-    let inputMag = Math.hypot(forward, strafe);
-    if (inputMag >= 1e-4) {
-      if (inputMag < 1.0) inputMag = 1.0;
-      const f = moveFactor / inputMag;
-      const s = strafe * f;
-      const fw = forward * f;
+    const inputMagSq = forward * forward + strafe * strafe;
+    if (inputMagSq >= 0.01 * 0.01) {
+      const inputMag = Math.sqrt(inputMagSq);
+      const scale = speed / Math.max(inputMag, 1.0);
+      const s = strafe * scale;
+      const fw = forward * scale;
       vel.x += s * cosYaw - fw * sinYaw;
       vel.z += fw * cosYaw + s * sinYaw;
     }
+
+    // ── Jump (Mob.cpp:1329-1343) ────────────────────────────────────
     if (onGround && jumping) {
       vel.y = Constants.PHYSICS.JUMP_VELOCITY;
       if (sprinting) {
@@ -486,16 +517,18 @@ export class UtilsManager {
         vel.z += cosYaw * Constants.PHYSICS.JUMP_BOOST;
       }
     }
+
+    // ── Step 4: move() — apply velocity (collision handled by server) ──
     const nextPos = pos.plus(vel);
+
+    // ── Step 5: Post-movement (Mob.cpp:1024-1027) ────────────────────
     vel.y -= Constants.PHYSICS.GRAVITY;
     vel.y *= Constants.PHYSICS.DRAG;
     if (vel.y < Constants.PHYSICS.TERMINAL_VELOCITY)
       vel.y = Constants.PHYSICS.TERMINAL_VELOCITY;
-    const drag = onGround
-      ? St * Constants.PHYSICS.MOMENTUM
-      : Constants.PHYSICS.MOMENTUM;
-    vel.x *= drag;
-    vel.z *= drag;
+    vel.x *= friction;
+    vel.z *= friction;
+
     return { pos: nextPos, vel, onGround: entity.onGround };
   }
 
@@ -601,53 +634,22 @@ export class UtilsManager {
     source: Vec3,
     target: Vec3,
     angleDeg = 0,
-    isStrafe = false,
+    _getSlipperiness?: (pos: Vec3) => number,
+    _getHorizontalSpeed?: () => number,
+    airAccel = 0,
   ): Vec3 {
     return getJumpVelocity(
       source,
       target,
       angleDeg,
-      isStrafe,
-      (pos: Vec3) => this.getSlipperiness(pos),
-      () => this.getHorizontalSpeed(),
+      _getSlipperiness ?? ((pos: Vec3) => this.getSlipperiness(pos)),
+      _getHorizontalSpeed ?? (() => this.getHorizontalSpeed()),
+      airAccel,
     );
-  }
-
-  getStrafePoint(
-    source: Vec3,
-    candidate: Vec3,
-    pvpTarget?: Vec3,
-    debugLog?: (msg: string) => void,
-  ): Vec3 | null {
-    return getStrafePoint(
-      source,
-      candidate,
-      pvpTarget || (this.bot.entity as any).position,
-      (pos: Vec3) => this.bot.blockAt(pos),
-      (a: Vec3, b: Vec3) => this.isJumpPathClear(a, b),
-      this.recentPoints,
-      this.recentPointsMax,
-      undefined,
-      this._obstacles,
-      this._holes,
-      debugLog,
-    );
-  }
-
-  getStrafeYaw(playerPos: Vec3, targetPos: Vec3, direction: number): number {
-    return getStrafeYaw(playerPos, targetPos, direction);
   }
 
   getHorizontalSpeed(): number {
     return getHorizontalSpeed(this.bot.entity as any);
-  }
-
-  getGroundJumpSpeed(source: Vec3): number {
-    return getGroundJumpSpeed(
-      source,
-      (pos: Vec3) => this.getSlipperiness(pos),
-      () => this.getHorizontalSpeed(),
-    );
   }
 
   getFlatVelocity(
@@ -679,75 +681,6 @@ export class UtilsManager {
 
   clearSolidCache(): void {
     clearSolidCache(this._solidCache);
-  }
-
-  /**
-   * Build obstacle AABBs from blocks surrounding the bot.
-   * Called each tick by CombatManager.doStrafe so that strafe points
-   * behind walls / inside blocks are rejected via raycast.
-   */
-  updateObstacles(): void {
-    const entity = this.bot.entity as any;
-    const pos = entity.position;
-    const radius = Constants.MOVEMENT.SOLID_BLOCK_RADIUS;
-    const obstacles: AABB[] = [];
-    const minX = Math.floor(pos.x - radius);
-    const maxX = Math.floor(pos.x + radius);
-    const minZ = Math.floor(pos.z - radius);
-    const maxZ = Math.floor(pos.z + radius);
-    const minY = Math.floor(pos.y);
-    const maxY = Math.floor(pos.y + Constants.PHYSICS.PLAYER_HEIGHT);
-    for (let x = minX; x <= maxX; x++) {
-      for (let y = minY; y <= maxY; y++) {
-        for (let z = minZ; z <= maxZ; z++) {
-          const block = this.bot.blockAt(new Vec3(x, y, z));
-          if (block && block.boundingBox !== "empty" && block.shapes) {
-            for (const shape of block.shapes) {
-              obstacles.push(
-                new AABB(
-                  x + shape[0],
-                  y + shape[1],
-                  z + shape[2],
-                  x + shape[3],
-                  y + shape[4],
-                  z + shape[5],
-                ),
-              );
-            }
-          }
-        }
-      }
-    }
-    this._obstacles = obstacles;
-
-    // Detect holes: XZ grid cells within the search radius that have no
-    // walkable surface (no solid block with empty space above it).
-    const holes: [number, number][] = [];
-    for (let x = minX; x <= maxX; x++) {
-      for (let z = minZ; z <= maxZ; z++) {
-        let hasSurface = false;
-        for (
-          let y = maxY;
-          y >= minY + Constants.BLOCK_DETECTION.WALKABLE_Y_OFFSET;
-          y--
-        ) {
-          const block = this.bot.blockAt(new Vec3(x, y, z));
-          const above = this.bot.blockAt(new Vec3(x, y + 1, z));
-          if (
-            block &&
-            block.boundingBox !== "empty" &&
-            (!above || above.boundingBox === "empty")
-          ) {
-            hasSurface = true;
-            break;
-          }
-        }
-        if (!hasSurface) {
-          holes.push([x, z]);
-        }
-      }
-    }
-    this._holes = holes;
   }
 
   getGroundBelow(): number {
@@ -942,22 +875,321 @@ export class UtilsManager {
     return false;
   }
 
-  withStrafe(
-    velocity: Vec3,
-    { yaw, speed, strength = 1.0 }: WithStrafeOptions,
-  ): Vec3 {
-    const currentSpeed = Math.hypot(velocity.x, velocity.z);
-    const usedSpeed = speed !== undefined ? speed : currentSpeed;
-    const oneMinusStrength = 1.0 - strength;
-    const prevX = velocity.x * oneMinusStrength;
-    const prevZ = velocity.z * oneMinusStrength;
-    const used = usedSpeed * strength;
-    return new Vec3(
-      prevX - Math.sin(yaw) * used,
-      velocity.y,
-      prevZ + Math.cos(yaw) * used,
-    );
+  /**
+   * Send a server command and assert it succeeds.
+   * Waits for the server's success message (matched by translate key)
+   * within the given timeout, then resolves with the matched text.
+   *
+   * @param command - Command name without leading slash (e.g. "give", "tp")
+   * @param args - Command arguments (e.g. "@p dirt 1", "100 64 100")
+   * @param timeoutTicks - Timeout in ticks (default 20 = 1 second)
+   * @returns The matched success message text
+   * @throws Error if no success message arrives within the timeout
+   */
+  async assertCommandSuccess(
+    command: string,
+    args: string = "",
+    timeoutTicks = 20,
+  ): Promise<string> {
+    const bot = this.bot;
+    const fullCommand = `/${command} ${args}`.trim();
+    const timeoutMs = timeoutTicks * 50;
+
+    // Translation keys for command success messages.
+    // The message event provides raw JSON with a `translate` field that
+    // identifies the message type on all protocol versions.
+    // Reference: https://minecraft.wiki/w/Commands and en_US.lang
+    // Full list extracted from minecraft-data 1.12.2 + 1.21.5-pre3 (261 keys).
+    const translateKeys = new Set([
+      "commands.advancement.grant.criterion.success",
+      "commands.advancement.grant.criterion.to.many.success",
+      "commands.advancement.grant.criterion.to.one.success",
+      "commands.advancement.grant.everything.success",
+      "commands.advancement.grant.from.success",
+      "commands.advancement.grant.many.to.many.success",
+      "commands.advancement.grant.many.to.one.success",
+      "commands.advancement.grant.one.to.many.success",
+      "commands.advancement.grant.one.to.one.success",
+      "commands.advancement.grant.only.success",
+      "commands.advancement.grant.through.success",
+      "commands.advancement.grant.until.success",
+      "commands.advancement.revoke.criterion.success",
+      "commands.advancement.revoke.criterion.to.many.success",
+      "commands.advancement.revoke.criterion.to.one.success",
+      "commands.advancement.revoke.everything.success",
+      "commands.advancement.revoke.from.success",
+      "commands.advancement.revoke.many.to.many.success",
+      "commands.advancement.revoke.many.to.one.success",
+      "commands.advancement.revoke.one.to.many.success",
+      "commands.advancement.revoke.one.to.one.success",
+      "commands.advancement.revoke.only.success",
+      "commands.advancement.revoke.through.success",
+      "commands.advancement.revoke.until.success",
+      "commands.advancement.test.advancement.success",
+      "commands.advancement.test.criterion.success",
+      "commands.attribute.base_value.get.success",
+      "commands.attribute.base_value.set.success",
+      "commands.attribute.modifier.add.success",
+      "commands.attribute.modifier.remove.success",
+      "commands.attribute.modifier.value.get.success",
+      "commands.attribute.value.get.success",
+      "commands.ban.success",
+      "commands.banip.success",
+      "commands.banip.success.players",
+      "commands.blockdata.success",
+      "commands.bossbar.create.success",
+      "commands.bossbar.remove.success",
+      "commands.bossbar.set.color.success",
+      "commands.bossbar.set.max.success",
+      "commands.bossbar.set.name.success",
+      "commands.bossbar.set.players.success.none",
+      "commands.bossbar.set.players.success.some",
+      "commands.bossbar.set.style.success",
+      "commands.bossbar.set.value.success",
+      "commands.bossbar.set.visible.success.hidden",
+      "commands.bossbar.set.visible.success.visible",
+      "commands.clear.success",
+      "commands.clear.success.multiple",
+      "commands.clear.success.single",
+      "commands.clone.success",
+      "commands.compare.success",
+      "commands.damage.success",
+      "commands.datapack.list.available.success",
+      "commands.datapack.list.enabled.success",
+      "commands.debug.function.success.multiple",
+      "commands.debug.function.success.single",
+      "commands.defaultgamemode.success",
+      "commands.deop.success",
+      "commands.difficulty.success",
+      "commands.downfall.success",
+      "commands.drop.success.multiple",
+      "commands.drop.success.multiple_with_table",
+      "commands.drop.success.single",
+      "commands.drop.success.single_with_table",
+      "commands.effect.clear.everything.success.multiple",
+      "commands.effect.clear.everything.success.single",
+      "commands.effect.clear.specific.success.multiple",
+      "commands.effect.clear.specific.success.single",
+      "commands.effect.give.success.multiple",
+      "commands.effect.give.success.single",
+      "commands.effect.success",
+      "commands.effect.success.removed",
+      "commands.effect.success.removed.all",
+      "commands.enchant.success",
+      "commands.enchant.success.multiple",
+      "commands.enchant.success.single",
+      "commands.entitydata.success",
+      "commands.experience.add.levels.success.multiple",
+      "commands.experience.add.levels.success.single",
+      "commands.experience.add.points.success.multiple",
+      "commands.experience.add.points.success.single",
+      "commands.experience.set.levels.success.multiple",
+      "commands.experience.set.levels.success.single",
+      "commands.experience.set.points.success.multiple",
+      "commands.experience.set.points.success.single",
+      "commands.fill.success",
+      "commands.fillbiome.success",
+      "commands.fillbiome.success.count",
+      "commands.forceload.query.success",
+      "commands.function.success",
+      "commands.function.success.multiple",
+      "commands.function.success.multiple.result",
+      "commands.function.success.single",
+      "commands.function.success.single.result",
+      "commands.gamemode.success.other",
+      "commands.gamemode.success.self",
+      "commands.gamerule.success",
+      "commands.give.success",
+      "commands.give.success.multiple",
+      "commands.give.success.single",
+      "commands.item.block.set.success",
+      "commands.item.entity.set.success.multiple",
+      "commands.item.entity.set.success.single",
+      "commands.kick.success",
+      "commands.kick.success.reason",
+      "commands.kill.success.multiple",
+      "commands.kill.success.single",
+      "commands.kill.successful",
+      "commands.locate.biome.success",
+      "commands.locate.poi.success",
+      "commands.locate.structure.success",
+      "commands.locate.success",
+      "commands.op.success",
+      "commands.pardon.success",
+      "commands.pardonip.success",
+      "commands.particle.success",
+      "commands.place.feature.success",
+      "commands.place.jigsaw.success",
+      "commands.place.structure.success",
+      "commands.place.template.success",
+      "commands.playsound.success",
+      "commands.playsound.success.multiple",
+      "commands.playsound.success.single",
+      "commands.publish.success",
+      "commands.random.reset.all.success",
+      "commands.random.reset.success",
+      "commands.random.sample.success",
+      "commands.recipe.give.success.all",
+      "commands.recipe.give.success.multiple",
+      "commands.recipe.give.success.one",
+      "commands.recipe.give.success.single",
+      "commands.recipe.take.success.all",
+      "commands.recipe.take.success.multiple",
+      "commands.recipe.take.success.one",
+      "commands.recipe.take.success.single",
+      "commands.reload.success",
+      "commands.replaceitem.success",
+      "commands.ride.dismount.success",
+      "commands.ride.mount.success",
+      "commands.save.success",
+      "commands.schedule.cleared.success",
+      "commands.scoreboard.objectives.add.success",
+      "commands.scoreboard.objectives.list.success",
+      "commands.scoreboard.objectives.remove.success",
+      "commands.scoreboard.objectives.setdisplay.successCleared",
+      "commands.scoreboard.objectives.setdisplay.successSet",
+      "commands.scoreboard.players.add.success.multiple",
+      "commands.scoreboard.players.add.success.single",
+      "commands.scoreboard.players.display.name.clear.success.multiple",
+      "commands.scoreboard.players.display.name.clear.success.single",
+      "commands.scoreboard.players.display.name.set.success.multiple",
+      "commands.scoreboard.players.display.name.set.success.single",
+      "commands.scoreboard.players.display.numberFormat.clear.success.multiple",
+      "commands.scoreboard.players.display.numberFormat.clear.success.single",
+      "commands.scoreboard.players.display.numberFormat.set.success.multiple",
+      "commands.scoreboard.players.display.numberFormat.set.success.single",
+      "commands.scoreboard.players.enable.success",
+      "commands.scoreboard.players.enable.success.multiple",
+      "commands.scoreboard.players.enable.success.single",
+      "commands.scoreboard.players.get.success",
+      "commands.scoreboard.players.list.entity.success",
+      "commands.scoreboard.players.list.success",
+      "commands.scoreboard.players.operation.success",
+      "commands.scoreboard.players.operation.success.multiple",
+      "commands.scoreboard.players.operation.success.single",
+      "commands.scoreboard.players.remove.success.multiple",
+      "commands.scoreboard.players.remove.success.single",
+      "commands.scoreboard.players.reset.success",
+      "commands.scoreboard.players.resetscore.success",
+      "commands.scoreboard.players.set.success",
+      "commands.scoreboard.players.set.success.multiple",
+      "commands.scoreboard.players.set.success.single",
+      "commands.scoreboard.players.tag.success.add",
+      "commands.scoreboard.players.tag.success.remove",
+      "commands.scoreboard.players.test.success",
+      "commands.scoreboard.teams.add.success",
+      "commands.scoreboard.teams.empty.success",
+      "commands.scoreboard.teams.join.success",
+      "commands.scoreboard.teams.leave.success",
+      "commands.scoreboard.teams.option.success",
+      "commands.scoreboard.teams.remove.success",
+      "commands.seed.success",
+      "commands.setblock.success",
+      "commands.setidletimeout.success",
+      "commands.setworldspawn.success",
+      "commands.spawnpoint.success",
+      "commands.spawnpoint.success.multiple",
+      "commands.spawnpoint.success.single",
+      "commands.spectate.success.started",
+      "commands.spectate.success.stopped",
+      "commands.spreadplayers.success.entities",
+      "commands.spreadplayers.success.players",
+      "commands.spreadplayers.success.teams",
+      "commands.stats.success",
+      "commands.stopsound.success.all",
+      "commands.stopsound.success.individualSound",
+      "commands.stopsound.success.soundSource",
+      "commands.stopsound.success.source.any",
+      "commands.stopsound.success.source.sound",
+      "commands.stopsound.success.sourceless.any",
+      "commands.stopsound.success.sourceless.sound",
+      "commands.summon.success",
+      "commands.tag.add.success.multiple",
+      "commands.tag.add.success.single",
+      "commands.tag.list.multiple.success",
+      "commands.tag.list.single.success",
+      "commands.tag.remove.success.multiple",
+      "commands.tag.remove.success.single",
+      "commands.team.add.success",
+      "commands.team.empty.success",
+      "commands.team.join.success.multiple",
+      "commands.team.join.success.single",
+      "commands.team.leave.success.multiple",
+      "commands.team.leave.success.single",
+      "commands.team.list.members.success",
+      "commands.team.list.teams.success",
+      "commands.team.option.collisionRule.success",
+      "commands.team.option.color.success",
+      "commands.team.option.deathMessageVisibility.success",
+      "commands.team.option.name.success",
+      "commands.team.option.nametagVisibility.success",
+      "commands.team.option.prefix.success",
+      "commands.team.option.suffix.success",
+      "commands.team.remove.success",
+      "commands.teleport.success.coordinates",
+      "commands.teleport.success.entity.multiple",
+      "commands.teleport.success.entity.single",
+      "commands.teleport.success.location.multiple",
+      "commands.teleport.success.location.single",
+      "commands.testfor.success",
+      "commands.testforblock.success",
+      "commands.tick.rate.success",
+      "commands.tick.sprint.stop.success",
+      "commands.tick.step.stop.success",
+      "commands.tick.step.success",
+      "commands.title.success",
+      "commands.tp.success",
+      "commands.tp.success.coordinates",
+      "commands.transfer.success.multiple",
+      "commands.transfer.success.single",
+      "commands.trigger.add.success",
+      "commands.trigger.set.success",
+      "commands.trigger.simple.success",
+      "commands.trigger.success",
+      "commands.unban.success",
+      "commands.unbanip.success",
+      "commands.whitelist.add.success",
+      "commands.whitelist.remove.success",
+      "commands.worldborder.center.success",
+      "commands.worldborder.damage.amount.success",
+      "commands.worldborder.damage.buffer.success",
+      "commands.worldborder.get.success",
+      "commands.worldborder.set.success",
+      "commands.worldborder.setSlowly.grow.success",
+      "commands.worldborder.setSlowly.shrink.success",
+      "commands.worldborder.warning.distance.success",
+      "commands.worldborder.warning.time.success",
+      "commands.xp.success",
+      "commands.xp.success.levels",
+      "commands.xp.success.negative.levels"
+    
+    ]);
+
+    return new Promise<string>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        bot.removeListener("message", onMessage);
+        reject(
+          new Error(
+            `Timed out after ${timeoutMs}ms waiting for success message after sending: ${fullCommand}`,
+          ),
+        );
+      }, timeoutMs);
+
+      const onMessage = (jsonMsg: any) => {
+        const translate =
+          (jsonMsg as any)?.json?.translate ?? (jsonMsg as any)?.translate;
+        if (translate && translateKeys.has(translate)) {
+          clearTimeout(timer);
+          bot.removeListener("message", onMessage);
+          resolve(jsonMsg?.toString?.() ?? String(jsonMsg));
+        }
+      };
+
+      bot.on("message", onMessage);
+      bot.chat!(fullCommand);
+    });
   }
+
 }
 
 /**

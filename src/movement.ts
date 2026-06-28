@@ -1,6 +1,6 @@
 /**
  * @fileoverview Movement mechanics for Pupa bot.
- * Jump, strafe, and collision physics — extracted from UtilsManager.
+ * Jump and collision physics — extracted from UtilsManager.
  *
  * Functions accept bot-dependency callbacks so they can be used both
  * by UtilsManager (bound to a live bot) and by E2E tests (with real or
@@ -121,8 +121,17 @@ export interface SolidCacheEntry {
 // ---------------------------------------------------------------------------
 
 /**
- * Simulate a sprint-jump trajectory and check whether it reaches the target
- * without colliding.
+ * Simulate a jump trajectory and check whether it reaches the target without
+ * colliding.  Uses the LCE airborne model:
+ *   - Gravity: -0.08 per tick (Mob.cpp:1024)
+ *   - Vertical drag: *0.98 per tick (Mob.cpp:1025)
+ *   - Horizontal drag: *0.91 per tick (Mob.cpp:998)
+ *   - No air acceleration without input (LCE air control comes from
+ *     moveRelative() which requires active forward/strafe input each tick).
+ *
+ * The bot applies air steering via applyImpulse each tick, so this function
+ * can model both ballistic (no steering) and guided (with steering) paths
+ * depending on the `airAccel` parameter.
  */
 export function isJumpPathClear(
   source: Vec3,
@@ -131,13 +140,11 @@ export function isJumpPathClear(
   getCollisions: (aabb: AABB, minYThreshold: number) => AABB[],
   botEntity: { position: Vec3; velocity: Vec3 },
   momentumThreshold: number,
+  airAccel = 0,
 ): boolean {
   const GRAVITY = Constants.PHYSICS.GRAVITY;
   const DRAG = Constants.PHYSICS.DRAG;
-  const AIRBORNE_MOMENTUM = Constants.PHYSICS.MOMENTUM;
-  const AIR_ACCEL =
-    Constants.PHYSICS.ACCELERATION.AIR *
-    Constants.PHYSICS.ACCELERATION.SPRINT_MULTIPLIER;
+  const AIR_FRICTION = Constants.PHYSICS.MOMENTUM; // 0.91
   const dx_tot = target.x - source.x;
   const dz_tot = target.z - source.z;
   const len = Math.hypot(dx_tot, dz_tot) || 1e-6;
@@ -145,16 +152,21 @@ export function isJumpPathClear(
   const dirZ = dz_tot / len;
 
   // Use getJumpVelocity for the initial velocity so the simulation matches
-  // the actual impulse applied by doStrafe.
+  // the actual impulse applied by jump logic.
   const jumpVel = getJumpVelocity(
     source,
     target,
     0,
-    false,
     getSlipperiness,
     () => Math.hypot(botEntity.velocity.x, botEntity.velocity.z),
   );
-  const vH1 = jumpVel.x / dirX;
+  // Decompose jumpVel into magnitude along the target direction.
+  // jumpVel.x = dirX * vH1, jumpVel.z = dirZ * vH1 → vH1 = jumpVel.x / dirX
+  // Handle dirX=0 by using dirZ component instead.
+  const vH1 =
+    Math.abs(dirX) > 1e-6
+      ? jumpVel.x / dirX
+      : jumpVel.z / dirZ;
   let currPos = source.clone();
   let currVel = new Vec3(
     dirX * vH1,
@@ -197,7 +209,6 @@ export function isJumpPathClear(
     else if (currVel.y < 0 && dy > currVel.y + EPS) {
       const dist = Math.hypot(currPos.x - source.x, currPos.z - source.z);
       if (dist >= distToTargetXZ - 0.6) {
-        // Validate landing AABB is clear at the current position
         if (!isLandingClear(currPos, getCollisions)) return false;
         return true;
       }
@@ -210,7 +221,6 @@ export function isJumpPathClear(
     if (currVel.y < 0 && currPos.y <= source.y + EPS) {
       const dist = Math.hypot(currPos.x - source.x, currPos.z - source.z);
       if (dist >= distToTargetXZ - 0.6) {
-        // Validate landing AABB is clear at the current position
         if (!isLandingClear(currPos, getCollisions)) return false;
         return true;
       }
@@ -232,16 +242,17 @@ export function isJumpPathClear(
     if (
       Math.hypot(currPos.x - source.x, currPos.z - source.z) >= distToTargetXZ
     ) {
-      // Validate landing AABB is clear at the final position
       if (!isLandingClear(currPos, getCollisions)) return false;
       return true;
     }
+    // LCE airborne physics (Mob.cpp:1024-1027): gravity, drag, friction.
+    // Optional air acceleration models the bot's air-steering impulse.
     currVel.y -= GRAVITY;
     currVel.y *= DRAG;
     if (currVel.y < Constants.PHYSICS.TERMINAL_VELOCITY)
       currVel.y = Constants.PHYSICS.TERMINAL_VELOCITY;
-    currVel.x = currVel.x * AIRBORNE_MOMENTUM + dirX * AIR_ACCEL;
-    currVel.z = currVel.z * AIRBORNE_MOMENTUM + dirZ * AIR_ACCEL;
+    currVel.x = currVel.x * AIR_FRICTION + dirX * airAccel;
+    currVel.z = currVel.z * AIR_FRICTION + dirZ * airAccel;
     if (currPos.y < target.y - 2 && currVel.y < 0) break;
   }
   return false;
@@ -253,14 +264,29 @@ export function isJumpPathClear(
 
 /**
  * Compute a velocity vector for a jump toward a target.
+ *
+ * Uses the LCE ballistic model: the initial horizontal velocity needed to
+ * reach the target under LCE airborne physics (gravity=0.08, drag=0.98,
+ * friction=0.91) WITHOUT further air input.  The bot can optionally apply
+ * air steering (seeairAccel` parameter) to extend.
+ *
+ * LCE reference: Mob::jumpFromGround() (Mob.cpp:1329-1343) sets yd=0.42;
+ * gravity and drag decay y velocity each tick until landing.
+ *
+ * @param source - Jump origin (feet position)
+ * @param target - Target landing position
+ * @param angleDeg - Horizontal angle offset from the direct source→target line
+ * @param getSlipperiness - Callback to get block slipperiness at a position
+ * @param getHorizontalSpeed - Callback to get current horizontal speed
+ * @param airAccel - Air acceleration per tick (0 = ballistic, >0 = guided)
  */
 export function getJumpVelocity(
   source: Vec3,
   target: Vec3,
   angleDeg: number,
-  isStrafe: boolean,
   getSlipperiness: (pos: Vec3) => number,
   getHorizontalSpeed: () => number,
+  airAccel = 0,
 ): Vec3 {
   const dx = target.x - source.x;
   const dz = target.z - source.z;
@@ -268,10 +294,8 @@ export function getJumpVelocity(
   const vy = Constants.PHYSICS.JUMP_VELOCITY;
   if (len === 0) return new Vec3(0, vy, 0);
 
-  const St = getSlipperiness(source);
-  const GROUND_MOMENTUM = St * Constants.PHYSICS.MOMENTUM;
-  const AIR_MOMENTUM = Constants.PHYSICS.MOMENTUM;
-
+  // ── Airborne tick count (Mob.cpp:1329-1343) ────────────────────────
+  // Simulate Y decay: vY = (vY - 0.08) * 0.98 each tick until landing.
   let vY = Constants.PHYSICS.JUMP_VELOCITY;
   let airborneTicks = 0;
   let yPos = vY;
@@ -282,39 +306,40 @@ export function getJumpVelocity(
   }
   if (airborneTicks < 1) airborneTicks = 1;
 
+  // ── Horizontal distance covered during airborne ticks ────────────────
+  // Under LCE physics with friction=0.91 and optional air acceleration:
+  //   Each tick: v = v * 0.91 + airAccel; dist += v
+  //   Total distance = vH1 * sum(0.91^k, k=0..N-1) + airAccel * sum(0.91^(N-k-1), k=0..N-1)
+  //   = vH1 * geomSum(0.91, N) + airAccel * geomSum(0.91, N)
+  // Solving for vH1 to cover distance `len`:
+  //   vH1 = (len - airAccel * geomSum) / geomSum
+  const St = getSlipperiness(source);
+  const AIR_FRICTION = Constants.PHYSICS.MOMENTUM; // 0.91
   const geomSum =
-    (1 - Math.pow(AIR_MOMENTUM, airborneTicks)) / (1 - AIR_MOMENTUM);
-  const distMultiplier = 1 + GROUND_MOMENTUM * geomSum;
+    (1 - Math.pow(AIR_FRICTION, airborneTicks)) / (1 - AIR_FRICTION);
 
-  const calibrationFactor = isStrafe
-    ? Constants.PHYSICS.STRAFE_CALIBRATION
-    : Constants.PHYSICS.JUMP_CALIBRATION;
-  const vH1 = (len / distMultiplier) * calibrationFactor;
+  // Ground momentum at takeoff preserves some pre-existing horizontal speed.
+  // LCE: friction at takeoff = block.friction * 0.91 (Mob.cpp:1000-1001).
+  const GROUND_FRICTION = St * AIR_FRICTION;
+  const groundGeomSum =
+    (1 - Math.pow(GROUND_FRICTION, airborneTicks)) / (1 - GROUND_FRICTION);
 
+  // Solve for initial horizontal speed vH1:
+  // len = vH1 * airGeomSum + vH0 * groundGeomSum + airAccel * airGeomSum
+  // where vH0 = getHorizontalSpeed() (pre-existing horizontal speed)
+  const vH0 = getHorizontalSpeed();
+  const calibrationFactor = Constants.PHYSICS.JUMP_CALIBRATION;
+  const vH1 =
+    ((len - airAccel * geomSum - vH0 * groundGeomSum) / geomSum) *
+    calibrationFactor;
+
+  // ── Apply angle rotation ────────────────────────────────────────────
   const rad = (angleDeg * Math.PI) / 180;
   const cosA = Math.cos(rad);
   const sinA = Math.sin(rad);
   const vx = ((dx / len) * cosA - (dz / len) * sinA) * vH1;
   const vz = ((dx / len) * sinA + (dz / len) * cosA) * vH1;
   return new Vec3(vx, vy, vz);
-}
-
-// ---------------------------------------------------------------------------
-// getStrafeYaw
-// ---------------------------------------------------------------------------
-
-/**
- * Computes the Minecraft yaw for strafing perpendicular to a target.
- */
-export function getStrafeYaw(
-  playerPos: Vec3,
-  targetPos: Vec3,
-  direction: number,
-): number {
-  const dx = targetPos.x - playerPos.x;
-  const dz = targetPos.z - playerPos.z;
-  const minecraftYawToTarget = Math.atan2(-dx, dz);
-  return minecraftYawToTarget + direction * (Math.PI / 2);
 }
 
 // ---------------------------------------------------------------------------
@@ -326,29 +351,6 @@ export function getStrafeYaw(
  */
 export function getHorizontalSpeed(entity: { velocity: Vec3 }): number {
   return Math.hypot(entity.velocity.x, entity.velocity.z);
-}
-
-// ---------------------------------------------------------------------------
-// getGroundJumpSpeed
-// ---------------------------------------------------------------------------
-
-/**
- * Get the ground-inertia-adjusted jump speed (pre-drag).
- */
-export function getGroundJumpSpeed(
-  source: Vec3,
-  getSlipperiness: (pos: Vec3) => number,
-  getHorizontalSpeedFn: () => number,
-): number {
-  const St = getSlipperiness(source);
-  const Et = 1.0;
-  const Mt =
-    Constants.PHYSICS.ACCELERATION.SPRINT_MULTIPLIER *
-    Constants.PHYSICS.ACCELERATION.STRAFE_MULTIPLIER;
-  const GROUND_ACCEL = 0.1 * Mt * Et * Math.pow(0.6 / St, 3);
-  const GROUND_MOMENTUM = St * Constants.PHYSICS.MOMENTUM;
-  const vH0 = getHorizontalSpeedFn();
-  return vH0 * GROUND_MOMENTUM + GROUND_ACCEL + Constants.PHYSICS.JUMP_BOOST;
 }
 
 // ---------------------------------------------------------------------------
@@ -511,273 +513,6 @@ export function getSolidBlocks(
 
 export function clearSolidCache(cache: Map<string, SolidCacheEntry>): void {
   cache.clear();
-}
-
-// ---------------------------------------------------------------------------
-// getStrafePoint
-// ---------------------------------------------------------------------------
-
-/**
- * Score a candidate based on its distance to the target.
- * Piecewise-linear gradient:
- *   [0, 1)   → 0
- *   [1, 2)   → dist              (ramp 1→2)
- *   [2, 2.5] → 6 - 2*dist        (ramp 2→1)
- *   (2.5, ∞) → -1
- */
-function scoreDistance(dist: number): number {
-  if (dist < 1.0) return 0;
-  if (dist < 2.0) return dist;
-  if (dist <= 2.5) return 6.0 - 2.0 * dist;
-  return -1;
-}
-
-/**
- * Check if an XZ position falls within any obstacle's XZ footprint expanded by eps.
- * Uses half-open interval so the obstacle footprint matches its grid cell exactly.
- */
-function isInsideObstacleXZ(
-  x: number,
-  z: number,
-  obstacles: AABB[],
-  eps: number,
-): boolean {
-  for (const obs of obstacles) {
-    if (
-      x >= obs.minX - eps &&
-      x <= obs.maxX + eps &&
-      z >= obs.minZ - eps &&
-      z <= obs.maxZ + eps
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
-/**
- * Check if a surface point is inside any obstacle's 3D AABB.
- */
-function isInsideObstacle(point: Vec3, obstacles: AABB[]): boolean {
-  for (const obs of obstacles) {
-    if (
-      point.x >= obs.minX &&
-      point.x <= obs.maxX &&
-      point.y >= obs.minY &&
-      point.y <= obs.maxY &&
-      point.z >= obs.minZ &&
-      point.z <= obs.maxZ
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
-/**
- * Check if an XZ position is a hole (no solid ground at that grid cell).
- * Uses half-open interval [hx, hx+1) x [hz, hz+1) so each hole covers exactly one 1x1 cell.
- */
-function isHole(x: number, z: number, holes: [number, number][]): boolean {
-  const bx = Math.floor(x);
-  const bz = Math.floor(z);
-  for (const [hx, hz] of holes) {
-    if (bx === hx && bz === hz) return true;
-  }
-  return false;
-}
-
-/**
- * Check if the straight-line path from source to point is blocked by any obstacle.
- */
-function isPathBlocked(source: Vec3, point: Vec3, obstacles: AABB[]): boolean {
-  const dx = point.x - source.x;
-  const dy = point.y - source.y;
-  const dz = point.z - source.z;
-  const length = Math.hypot(dx, dy, dz);
-  if (length < 1e-6) return false;
-  const dirX = dx / length;
-  const dirY = dy / length;
-  const dirZ = dz / length;
-
-  const PROXIMITY_EPS = Constants.PHYSICS.PLAYER_OFFSET;
-  for (const obs of obstacles) {
-    const mask = new AABB(
-      obs.minX - PROXIMITY_EPS,
-      obs.minY - PROXIMITY_EPS,
-      obs.minZ - PROXIMITY_EPS,
-      obs.maxX + PROXIMITY_EPS,
-      obs.maxY + PROXIMITY_EPS,
-      obs.maxZ + PROXIMITY_EPS,
-    );
-    const [, tFar] = mask.rayHitTFar(source, new Vec3(dirX, dirY, dirZ));
-    if (tFar < 1.0) return true;
-  }
-  return false;
-}
-
-/**
- * Find a walkable surface point at the given (x, z) by scanning downward
- * from targetY + jumpDistance to targetY - 2.
- */
-export function findWalkableSurface(
-  x: number,
-  z: number,
-  targetY: number,
-  blockAtFn: (pos: Vec3) => any,
-): Vec3 | null {
-  const step = Constants.MOVEMENT.STRAFE_GRID_RESOLUTION;
-  const maxY = targetY + Constants.MOVEMENT.STRAFE_JUMP_DISTANCE;
-  const minY = targetY - 2;
-  const halfWidth = Constants.PHYSICS.PLAYER_OFFSET; // 0.3
-  const height = Constants.PHYSICS.PLAYER_HEIGHT; // 1.8
-  for (let y = maxY; y >= minY; y -= step) {
-    const bx = Math.floor(x);
-    const by = Math.floor(y);
-    const bz = Math.floor(z);
-    const block = blockAtFn(new Vec3(bx, by, bz));
-    if (!block || block.boundingBox === "empty") continue;
-
-    // Compute actual top surface Y from shape
-    const shape = block.shapes[0];
-    const surfaceY = shape ? by + shape[Constants.SHAPE.MAX_Y] : by + 1;
-
-    // Check that the full player AABB above the surface is clear
-    // Player occupies [x-0.3, x+0.3] x [surfaceY, surfaceY+1.8] x [z-0.3, z+0.3]
-    const clearMinX = Math.floor(x - halfWidth);
-    const clearMaxX = Math.floor(x + halfWidth);
-    const clearMinY = Math.floor(surfaceY);
-    const clearMaxY = Math.floor(surfaceY + height);
-    const clearMinZ = Math.floor(z - halfWidth);
-    const clearMaxZ = Math.floor(z + halfWidth);
-
-    let isClear = true;
-    for (let cx = clearMinX; cx <= clearMaxX && isClear; cx++) {
-      for (let cy = clearMinY; cy <= clearMaxY && isClear; cy++) {
-        for (let cz = clearMinZ; cz <= clearMaxZ && isClear; cz++) {
-          const aboveBlock = blockAtFn(new Vec3(cx, cy, cz));
-          if (aboveBlock && aboveBlock.boundingBox !== "empty") {
-            // Check actual shape overlap with the player AABB volume
-            if (aboveBlock.shapes && aboveBlock.shapes.length > 0) {
-              for (const s of aboveBlock.shapes) {
-                if (
-                  x + halfWidth > cx + s[Constants.SHAPE.MIN_X] &&
-                  x - halfWidth < cx + s[Constants.SHAPE.MAX_X] &&
-                  surfaceY + height > cy + s[Constants.SHAPE.MIN_Y] &&
-                  surfaceY < cy + s[Constants.SHAPE.MAX_Y] &&
-                  z + halfWidth > cz + s[Constants.SHAPE.MIN_Z] &&
-                  z - halfWidth < cz + s[Constants.SHAPE.MAX_Z]
-                ) {
-                  isClear = false;
-                  break;
-                }
-              }
-            } else {
-              isClear = false;
-            }
-          }
-        }
-      }
-    }
-
-    if (isClear) {
-      return new Vec3(x, surfaceY, z);
-    }
-  }
-  return null;
-}
-
-/**
- * Find the best strafe point by sampling a dense grid and scoring candidates.
- */
-export function getStrafePoint(
-  source: Vec3,
-  _candidate: Vec3,
-  target: Vec3,
-  blockAtFn: (pos: Vec3) => any,
-  isJumpPathClearFn: (a: Vec3, b: Vec3) => boolean,
-  recentPoints: Vec3[],
-  recentPointsMax: number,
-  _pvpTarget?: Vec3,
-  obstacles?: AABB[],
-  holes?: [number, number][],
-  debugLog?: (msg: string) => void,
-): Vec3 | null {
-  const resolution = Constants.MOVEMENT.STRAFE_GRID_RESOLUTION;
-  const maxDistTarget = Constants.MOVEMENT.STRAFE_RADIUS;
-  const maxDistBot = Constants.MOVEMENT.STRAFE_JUMP_DISTANCE;
-  const minDistBot = Constants.MOVEMENT.STRAFE_MIN_DISTANCE;
-  const minSpacing = Constants.MOVEMENT.STRAFE_MIN_SPACING;
-  const dist2D = (a: Vec3, b: Vec3): number => Math.hypot(a.x - b.x, a.z - b.z);
-
-  const minX = target.x - maxDistTarget;
-  const maxX = target.x + maxDistTarget;
-  const minZ = target.z - maxDistTarget;
-  const maxZ = target.z + maxDistTarget;
-
-  /**
-   * Collect all valid candidates that pass hard filters, AABB clearance,
-   * and jump-path clearance.  Returns an array of { point, score } sorted
-   * by descending score.
-   */
-  const collectCandidates = (): { point: Vec3; score: number }[] => {
-    const candidates: { point: Vec3; score: number }[] = [];
-    for (let x = minX; x <= maxX; x += resolution) {
-      for (let z = minZ; z <= maxZ; z += resolution) {
-        const surface = findWalkableSurface(x, z, target.y, blockAtFn);
-        if (!surface) continue;
-
-        const dTarget = dist2D(surface, target);
-        const dBot = dist2D(surface, source);
-
-        if (dTarget >= maxDistTarget) continue;
-        if (dBot >= maxDistBot) continue;
-        if (dBot < minDistBot) continue;
-        if (dTarget < 0.3) continue;
-
-        if (holes && isHole(surface.x, surface.z, holes)) continue;
-        if (!isPositionClear(surface, blockAtFn)) continue;
-        if (!isJumpPathClearFn(source, surface)) continue;
-
-        const score = scoreDistance(dTarget);
-        candidates.push({ point: surface, score });
-      }
-    }
-    candidates.sort((a, b) => b.score - a.score);
-    return candidates;
-  };
-
-  // ── Pass 1: try with full spacing constraint ──
-  const allCandidates = collectCandidates();
-  const spacingBlocked = allCandidates.filter(({ point }) =>
-    recentPoints.some((rp) => dist2D(point, rp) <= minSpacing),
-  );
-  debugLog?.(
-    `getStrafePoint: candidates=${allCandidates.length} spacingBlocked=${spacingBlocked.length}/${allCandidates.length} recentPts=${recentPoints.length} topScore=${allCandidates[0]?.score.toFixed(1) ?? "n/a"}`,
-  );
-  for (const { point, score } of allCandidates) {
-    if (recentPoints.some((rp) => dist2D(point, rp) <= minSpacing)) continue;
-    recentPoints.push(point);
-    if (recentPoints.length > recentPointsMax) recentPoints.shift();
-    return point;
-  }
-
-  // ── Pass 2: spacing blocked every candidate — clear history and retry ──
-  // When surrounded by obstacles, all candidates may be close to recent
-  // points. Clearing history allows the bot to revisit any point.
-  debugLog?.(
-    `getStrafePoint: Pass 1 exhausted, clearing history and retrying`,
-  );
-  recentPoints.length = 0;
-  for (const { point, score } of allCandidates) {
-    recentPoints.push(point);
-    if (recentPoints.length > recentPointsMax) recentPoints.shift();
-    return point;
-  }
-  debugLog?.(
-    `getStrafePoint: no candidates at all (grid=${resolution}, range=${maxDistTarget})`,
-  );
-  return null;
 }
 
 // ---------------------------------------------------------------------------
