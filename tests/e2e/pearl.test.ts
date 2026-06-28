@@ -96,6 +96,22 @@ async function createBot(): Promise<Bot> {
 describeE2E("E2E Pearl Tests", () => {
   let bot: Bot;
 
+  // ── Helpers ───────────────────────────────────────────────────────
+
+  const getIm = (): any => (bot as any).inventoryManager;
+  const getUtils = (): any => (bot as any).utilsManager;
+
+  /**
+   * Reset bot state between tests: stop pathfinding/PVP, switch to creative.
+   */
+  async function resetBotState(): Promise<void> {
+    bot.clearControlStates();
+    (bot as any).pathfinder?.stop();
+    (bot as any).pvp?.stop();
+    await bot.utilsManager.assertCommandSuccess("gamemode", "creative");
+    await bot.waitForTicks!(2);
+  }
+
   // Set overall suite timeout to 5 minutes (300 seconds)
   jest.setTimeout(TIMEOUT_MS * 5);
 
@@ -106,13 +122,13 @@ describeE2E("E2E Pearl Tests", () => {
       try {
         await bot.waitForChunksToLoad!();
         await bot.waitForTicks!(1);
-        bot.chat!(`/tp ${Object.values(POSITION).join(" ")}`);
+        await bot.utilsManager.assertCommandSuccess("tp", Object.values(POSITION).join(" "));
 
         await bot.waitForChunksToLoad!();
         await bot.waitForTicks!(1);
-        bot.chat!("/gamemode creative"); // Set gamemode to creative
+        await bot.utilsManager.assertCommandSuccess("gamemode", "creative");
       } catch (error) {
-        console.error("beforeAll cleanup failed:", error);
+        logger.error(error, "Combat");
       }
     }
   }, TIMEOUT_MS);
@@ -123,21 +139,13 @@ describeE2E("E2E Pearl Tests", () => {
       try {
         await bot.waitForChunksToLoad!();
         await bot.waitForTicks!(1);
-        bot.chat!(`/tp ${Object.values(POSITION).join(" ")}`);
+        await bot.utilsManager.assertCommandSuccess("tp", Object.values(POSITION).join(" "));
 
         await bot.waitForChunksToLoad!();
         await bot.waitForTicks!(1);
-        bot.clearControlStates();
-
-        if ((bot as any).pathfinder) {
-          (bot as any).pathfinder.stop();
-        }
-
-        if ((bot as any).pvp) {
-          (bot as any).pvp.stop();
-        }
+        await resetBotState();
       } catch (error) {
-        console.error("beforeEach cleanup failed:", error);
+        logger.error(error, "Combat");
       }
     }
   }, TIMEOUT_MS);
@@ -149,7 +157,7 @@ describeE2E("E2E Pearl Tests", () => {
         bot.quit!();
         bot.end!();
       } catch (error) {
-        console.error("afterAll cleanup failed:", error);
+        logger.error(error, "Combat");
       }
     }
     logger.setDebugMode(false);
@@ -171,7 +179,7 @@ describeE2E("E2E Pearl Tests", () => {
     beforeAll(async () => {
       // Inline the comprehensive pearl arc test logic
       const TOLERANCE = 2.0;
-      const utils = (bot as any).utilsManager;
+      const utils = getUtils();
       const eyePos = bot.entity.position.offset(0, bot.entity.height!, 0);
       const targetPos = eyePos.offset(20, 0, 0);
       const { VELOCITY, GRAVITY, DRAG } = Constants.COMBAT.ENDER_PEARL;
@@ -189,7 +197,7 @@ describeE2E("E2E Pearl Tests", () => {
         offset = null;
       }
       if (offset !== null) {
-        await (bot as any).inventoryManager.equipPearlWithOffset(
+        await getIm().equipPearl(
           targetPos,
           offset,
         );
@@ -215,7 +223,7 @@ describeE2E("E2E Pearl Tests", () => {
     });
   });
 
-  describe("comprehensive throws — high arc", () => {
+  describe("comprehensive throws \u2014 high arc", () => {
     const TOLERANCE = 3.0;
     let results: {
       direction: string;
@@ -226,7 +234,7 @@ describeE2E("E2E Pearl Tests", () => {
 
     beforeAll(async () => {
       const TOLERANCE = 3.0;
-      const utils = (bot as any).utilsManager;
+      const utils = getUtils();
       const eyePos = bot.entity.position.offset(0, bot.entity.height!, 0);
       const targetPos = eyePos.offset(20, 0, 0);
       const { VELOCITY, GRAVITY, DRAG } = Constants.COMBAT.ENDER_PEARL;
@@ -244,7 +252,7 @@ describeE2E("E2E Pearl Tests", () => {
         offset = null;
       }
       if (offset !== null) {
-        await (bot as any).inventoryManager.equipPearlWithOffset(
+        await getIm().equipPearl(
           targetPos,
           offset,
         );
@@ -307,7 +315,7 @@ describeE2E("E2E Pearl Tests", () => {
         const botPos = bot.entity.position;
         const targetPos = botPos.offset(10, 0, 0);
 
-        const offset = (bot as any).utilsManager.getProjectileOffset(
+        const offset = getUtils().getProjectileOffset(
           botPos,
           targetPos,
           Constants.COMBAT.ENDER_PEARL.VELOCITY,
@@ -334,7 +342,7 @@ describeE2E("E2E Pearl Tests", () => {
         const botPos = bot.entity.position;
         const targetPos = botPos.offset(15, 2, 0);
 
-        const offset = (bot as any).utilsManager.getProjectileOffset(
+        const offset = getUtils().getProjectileOffset(
           botPos,
           targetPos,
           Constants.COMBAT.ENDER_PEARL.VELOCITY,
@@ -360,7 +368,7 @@ describeE2E("E2E Pearl Tests", () => {
         const targetPos = botPos.offset(1000, 0, 0);
 
         await expect(async () => {
-          (bot as any).utilsManager.getProjectileOffset(
+          getUtils().getProjectileOffset(
             botPos,
             targetPos,
             Constants.COMBAT.ENDER_PEARL.VELOCITY,
@@ -382,7 +390,7 @@ describeE2E("E2E Pearl Tests", () => {
 
         for (const distance of [5, 10, 15, 20]) {
           const targetPos = botPos.offset(distance, 0, 0);
-          const offset = (bot as any).utilsManager.getProjectileOffset(
+          const offset = getUtils().getProjectileOffset(
             botPos,
             targetPos,
             Constants.COMBAT.ENDER_PEARL.VELOCITY,
@@ -416,7 +424,7 @@ describeE2E("E2E Pearl Tests", () => {
         const botPos = bot.entity.position;
         const targetPos = botPos.offset(12, 0, 0);
 
-        const pitches = (bot as any).utilsManager.getProjectilePitch(
+        const pitches = getUtils().getProjectilePitch(
           botPos,
           targetPos,
           Constants.COMBAT.ENDER_PEARL.VELOCITY,
@@ -424,7 +432,7 @@ describeE2E("E2E Pearl Tests", () => {
           Constants.COMBAT.ENDER_PEARL.DRAG,
         );
 
-        const offset = (bot as any).utilsManager.getProjectileOffset(
+        const offset = getUtils().getProjectileOffset(
           botPos,
           targetPos,
           Constants.COMBAT.ENDER_PEARL.VELOCITY,

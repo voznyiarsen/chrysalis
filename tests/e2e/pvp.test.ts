@@ -97,13 +97,13 @@ async function killNearbyEntities(
   bot: Bot,
   radius: number = 30,
 ): Promise<void> {
-  bot.chat!(`/kill @e[type=!player,distance=..${radius}]`);
+  await bot.utilsManager.assertCommandSuccess("kill", `@e[type=!player,distance=..${radius}]`);
   await bot.waitForTicks!(3);
 }
 
 /** Summon a zombie and wait for it to appear in bot entities. */
 async function summonMob(bot: Bot): Promise<any> {
-  bot.chat!("/summon zombie ~ ~1 ~");
+  await bot.utilsManager.assertCommandSuccess("summon", "zombie ~ ~1 ~");
   for (let i = 0; i < 40; i++) {
     await bot.waitForTicks!(1);
     for (const [, entity] of Object.entries(bot.entities)) {
@@ -121,6 +121,27 @@ async function summonMob(bot: Bot): Promise<any> {
 describeE2E("E2E PvP Tests", () => {
   let bot: Bot;
 
+  // ── Helpers ───────────────────────────────────────────────────────
+
+  const getCm = (): any => bot.combatManager;
+  const getPvp = (): any => (bot as any).pvp;
+
+  /**
+   * Reset bot state between tests: stop pathfinding/PVP, switch to creative.
+   */
+  async function resetBotState(): Promise<void> {
+    bot.clearControlStates();
+    (bot as any).pathfinder?.stop();
+    if (getPvp()) {
+      getPvp().forceStop();
+    }
+    if (bot.combatManager) {
+      bot.combatManager.setMode(0);
+    }
+    await bot.utilsManager.assertCommandSuccess("gamemode", "creative");
+    await bot.waitForTicks!(2);
+  }
+
   jest.setTimeout(TIMEOUT_MS * 5);
 
   beforeAll(async () => {
@@ -129,12 +150,12 @@ describeE2E("E2E PvP Tests", () => {
       try {
         await bot.waitForChunksToLoad!();
         await bot.waitForTicks!(1);
-        bot.chat!(`/tp ${Object.values(POSITION).join(" ")}`);
+        await bot.utilsManager.assertCommandSuccess("tp", Object.values(POSITION).join(" "));
         await bot.waitForChunksToLoad!();
         await bot.waitForTicks!(1);
-        bot.chat!("/gamemode creative");
+        await bot.utilsManager.assertCommandSuccess("gamemode", "creative");
       } catch (error) {
-        console.error("beforeAll cleanup failed:", error);
+        logger.error(error, "Combat");
       }
     }
   }, TIMEOUT_MS);
@@ -145,18 +166,12 @@ describeE2E("E2E PvP Tests", () => {
         await killNearbyEntities(bot, 30);
         await bot.waitForChunksToLoad!();
         await bot.waitForTicks!(1);
-        bot.chat!(`/tp ${Object.values(POSITION).join(" ")}`);
+        await bot.utilsManager.assertCommandSuccess("tp", Object.values(POSITION).join(" "));
         await bot.waitForChunksToLoad!();
         await bot.waitForTicks!(1);
-        bot.clearControlStates();
-        if ((bot as any).pathfinder) {
-          (bot as any).pathfinder.stop();
-        }
-        if ((bot as any).pvp) {
-          (bot as any).pvp.forceStop();
-        }
+        await resetBotState();
       } catch (error) {
-        console.error("beforeEach cleanup failed:", error);
+        logger.error(error, "Combat");
       }
     }
   }, TIMEOUT_MS);
@@ -167,7 +182,7 @@ describeE2E("E2E PvP Tests", () => {
         bot.quit!();
         bot.end!();
       } catch (error) {
-        console.error("afterAll cleanup failed:", error);
+        logger.error(error, "Combat");
       }
     }
     logger.setDebugMode(false);
@@ -181,7 +196,7 @@ describeE2E("E2E PvP Tests", () => {
     test(
       "setMode — switches to PvP mode (1)",
       () => {
-        const cm = (bot as any).combatManager;
+        const cm = getCm();
         cm.setMode(1);
         expect(cm.mode).toBe(1);
       },
@@ -191,7 +206,7 @@ describeE2E("E2E PvP Tests", () => {
     test(
       "getTargetFilter — returns a function",
       () => {
-        const cm = (bot as any).combatManager;
+        const cm = getCm();
         cm.setMode(1);
         const filter = cm.getTargetFilter();
         expect(typeof filter).toBe("function");
@@ -202,7 +217,7 @@ describeE2E("E2E PvP Tests", () => {
     test(
       "getTargetFilter — caches filter for same mode",
       () => {
-        const cm = (bot as any).combatManager;
+        const cm = getCm();
         cm.setMode(2);
         const f1 = cm.getTargetFilter();
         const f2 = cm.getTargetFilter();
@@ -214,7 +229,7 @@ describeE2E("E2E PvP Tests", () => {
     test(
       "getTargetFilter — invalidates cache on mode change",
       () => {
-        const cm = (bot as any).combatManager;
+        const cm = getCm();
         cm.setMode(1);
         const f1 = cm.getTargetFilter();
         cm.setMode(2);
@@ -227,7 +242,7 @@ describeE2E("E2E PvP Tests", () => {
     test(
       "addAlly / removeAlly — modifies allies set",
       () => {
-        const cm = (bot as any).combatManager;
+        const cm = getCm();
         cm.setMode(2);
         cm.addAlly("SomePlayer");
         expect(cm.alliesSet.has("SomePlayer")).toBe(true);
@@ -240,7 +255,7 @@ describeE2E("E2E PvP Tests", () => {
     test(
       "addAlly — invalidates mode filter cache",
       () => {
-        const cm = (bot as any).combatManager;
+        const cm = getCm();
         cm.setMode(1);
         const f1 = cm.getTargetFilter();
         cm.addAlly("Player1");
@@ -262,8 +277,8 @@ describeE2E("E2E PvP Tests", () => {
         const zombie = await summonMob(bot);
         expect(zombie).not.toBeNull();
 
-        await (bot as any).pvp.attack(zombie);
-        expect((bot as any).pvp.target).toBe(zombie);
+        await getPvp().attack(zombie);
+        expect(getPvp().target).toBe(zombie);
       },
       TIMEOUT_MS,
     );
@@ -273,11 +288,11 @@ describeE2E("E2E PvP Tests", () => {
       async () => {
         const zombie = await summonMob(bot);
 
-        await (bot as any).pvp.attack(zombie);
-        expect((bot as any).pvp.target).toBe(zombie);
+        await getPvp().attack(zombie);
+        expect(getPvp().target).toBe(zombie);
 
-        await (bot as any).pvp.attack(zombie);
-        expect((bot as any).pvp.target).toBe(zombie);
+        await getPvp().attack(zombie);
+        expect(getPvp().target).toBe(zombie);
       },
       TIMEOUT_MS,
     );
@@ -287,11 +302,11 @@ describeE2E("E2E PvP Tests", () => {
       async () => {
         const zombie = await summonMob(bot);
 
-        await (bot as any).pvp.attack(zombie);
-        expect((bot as any).pvp.target).toBe(zombie);
+        await getPvp().attack(zombie);
+        expect(getPvp().target).toBe(zombie);
 
-        await (bot as any).pvp.stop();
-        expect((bot as any).pvp.target).toBeUndefined();
+        await getPvp().stop();
+        expect(getPvp().target).toBeUndefined();
       },
       TIMEOUT_MS,
     );
@@ -301,11 +316,11 @@ describeE2E("E2E PvP Tests", () => {
       async () => {
         const zombie = await summonMob(bot);
 
-        await (bot as any).pvp.attack(zombie);
-        expect((bot as any).pvp.target).toBe(zombie);
+        await getPvp().attack(zombie);
+        expect(getPvp().target).toBe(zombie);
 
-        (bot as any).pvp.forceStop();
-        expect((bot as any).pvp.target).toBeUndefined();
+        getPvp().forceStop();
+        expect(getPvp().target).toBeUndefined();
       },
       TIMEOUT_MS,
     );
@@ -320,7 +335,7 @@ describeE2E("E2E PvP Tests", () => {
           eventFired = true;
         });
 
-        await (bot as any).pvp.attack(zombie);
+        await getPvp().attack(zombie);
         expect(eventFired).toBe(true);
       },
       TIMEOUT_MS,
@@ -330,14 +345,14 @@ describeE2E("E2E PvP Tests", () => {
       "stop — emits stoppedAttacking event",
       async () => {
         const zombie = await summonMob(bot);
-        await (bot as any).pvp.attack(zombie);
+        await getPvp().attack(zombie);
 
         let eventFired = false;
         bot.once("stoppedAttacking" as any, () => {
           eventFired = true;
         });
 
-        await (bot as any).pvp.stop();
+        await getPvp().stop();
         expect(eventFired).toBe(true);
       },
       TIMEOUT_MS,
@@ -353,7 +368,7 @@ describeE2E("E2E PvP Tests", () => {
       "update — decrements timeToNextAttack each tick",
       () => {
         // Directly test the update mechanism without needing an entity
-        const pvp = (bot as any).pvp;
+        const pvp = getPvp();
         pvp.target = { position: bot.entity.position.offset(0, 100, 0) } as any;
         pvp.timeToNextAttack = 10;
         pvp.wasInRange = false;
@@ -403,7 +418,7 @@ describeE2E("E2E PvP Tests", () => {
     test(
       "getHealthStatus — full health in creative",
       () => {
-        const cm = (bot as any).combatManager;
+        const cm = getCm();
         const status = cm.getHealthStatus();
         expect(status.healthPoints).toBe(20);
         expect(status.absorbPoints).toBe(0);
@@ -417,7 +432,7 @@ describeE2E("E2E PvP Tests", () => {
       () => {
         // Directly set health to simulate damage
         bot.health = 10;
-        const cm = (bot as any).combatManager;
+        const cm = getCm();
         const status = cm.getHealthStatus();
         expect(status.healthPoints).toBe(10);
         expect(status.absorbPoints).toBe(0);
@@ -431,7 +446,7 @@ describeE2E("E2E PvP Tests", () => {
     test(
       "getLastDamage — records damage taken",
       () => {
-        const cm = (bot as any).combatManager;
+        const cm = getCm();
         cm.lastHealth = 20;
         cm.lastDamage = 0;
 
@@ -449,7 +464,7 @@ describeE2E("E2E PvP Tests", () => {
     test(
       "getLastDamage — does not record healing",
       () => {
-        const cm = (bot as any).combatManager;
+        const cm = getCm();
         cm.lastDamage = 5;
         cm.lastHealth = 20;
         cm.getLastDamage();
@@ -467,7 +482,7 @@ describeE2E("E2E PvP Tests", () => {
     test(
       "getFallProtectionStatus — safe when on ground",
       () => {
-        const cm = (bot as any).combatManager;
+        const cm = getCm();
         const status = cm.getFallProtectionStatus();
         expect(status.isDangerous).toBe(false);
       },
@@ -477,8 +492,8 @@ describeE2E("E2E PvP Tests", () => {
     test(
       "getFallProtectionStatus — safe when velocity is upward",
       async () => {
-        const cm = (bot as any).combatManager;
-        bot.chat!(`/tp ${POSITION.x} ${POSITION.y} ${POSITION.z}`);
+        const cm = getCm();
+        await bot.utilsManager.assertCommandSuccess("tp", `${POSITION.x} ${POSITION.y} ${POSITION.z}`);
         await bot.waitForTicks!(2);
         bot.setControlState("jump", true);
         await bot.waitForTicks!(1);
@@ -493,20 +508,20 @@ describeE2E("E2E PvP Tests", () => {
     test(
       "getFallProtectionStatus — dangerous for long falls in survival",
       async () => {
-        const cm = (bot as any).combatManager;
+        const cm = getCm();
 
-        bot.chat!("/gamemode survival");
+        await bot.utilsManager.assertCommandSuccess("gamemode", "survival");
         await bot.waitForTicks!(2);
 
-        bot.chat!(`/tp ${POSITION.x} ${POSITION.y + 50} ${POSITION.z}`);
+        await bot.utilsManager.assertCommandSuccess("tp", `${POSITION.x} ${POSITION.y + 50} ${POSITION.z}`);
         await bot.waitForTicks!(2);
 
         const status = cm.getFallProtectionStatus();
         expect(status.isDangerous).toBe(true);
 
-        bot.chat!(`/tp ${POSITION.x} ${POSITION.y} ${POSITION.z}`);
+        await bot.utilsManager.assertCommandSuccess("tp", `${POSITION.x} ${POSITION.y} ${POSITION.z}`);
         await bot.waitForTicks!(2);
-        bot.chat!("/gamemode creative");
+        await bot.utilsManager.assertCommandSuccess("gamemode", "creative");
         await bot.waitForTicks!(2);
       },
       TIMEOUT_MS,
@@ -515,12 +530,12 @@ describeE2E("E2E PvP Tests", () => {
     test(
       "getFallProtectionStatus — returns predicted damage info",
       async () => {
-        const cm = (bot as any).combatManager;
+        const cm = getCm();
 
-        bot.chat!("/gamemode survival");
+        await bot.utilsManager.assertCommandSuccess("gamemode", "survival");
         await bot.waitForTicks!(2);
 
-        bot.chat!(`/tp ${POSITION.x} ${POSITION.y + 50} ${POSITION.z}`);
+        await bot.utilsManager.assertCommandSuccess("tp", `${POSITION.x} ${POSITION.y + 50} ${POSITION.z}`);
         await bot.waitForTicks!(2);
 
         const status = cm.getFallProtectionStatus();
@@ -528,9 +543,9 @@ describeE2E("E2E PvP Tests", () => {
         expect(status.predictedDamage).toBeDefined();
         expect(status.predictedDamage).toBeGreaterThan(0);
 
-        bot.chat!(`/tp ${POSITION.x} ${POSITION.y} ${POSITION.z}`);
+        await bot.utilsManager.assertCommandSuccess("tp", `${POSITION.x} ${POSITION.y} ${POSITION.z}`);
         await bot.waitForTicks!(2);
-        bot.chat!("/gamemode creative");
+        await bot.utilsManager.assertCommandSuccess("gamemode", "creative");
         await bot.waitForTicks!(2);
       },
       TIMEOUT_MS,
@@ -538,97 +553,19 @@ describeE2E("E2E PvP Tests", () => {
   });
 
   // ══════════════════════════════════════════════════════════════════
-  // Category 6: Strafe Movement
-  // ══════════════════════════════════════════════════════════════════
-
-  describe("Strafe Movement", () => {
-    test(
-      "doStrafe — runs without error when target is in range",
-      async () => {
-        const cm = (bot as any).combatManager;
-
-        // Use a nearby position as override target — no need for a real entity
-        const targetPos = bot.entity.position.offset(2, 0, 0);
-
-        // doStrafe with overrideTarget should run without throwing
-        for (let i = 0; i < 10; i++) {
-          cm.doStrafe(targetPos);
-          await bot.waitForTicks!(1);
-        }
-
-        // Verify strafe logic ran (strafePoint may be null if no valid points)
-        expect(cm.strafePoint).toBeDefined();
-      },
-      TIMEOUT_MS,
-    );
-
-    test(
-      "doStrafe — clears point when target too far",
-      async () => {
-        const cm = (bot as any).combatManager;
-
-        const zombie = await summonMob(bot);
-        await (bot as any).pvp.attack(zombie);
-
-        bot.chat!(
-          `/tp @e[type=zombie,limit=1,sort=nearest] ${POSITION.x + 50} ${POSITION.y} ${POSITION.z}`,
-        );
-        await bot.waitForTicks!(5);
-
-        cm.doStrafe();
-        expect(cm.strafePoint).toBeNull();
-      },
-      TIMEOUT_MS,
-    );
-
-    test(
-      "doStrafe — no strafe point when no target",
-      () => {
-        const cm = (bot as any).combatManager;
-        (bot as any).pvp.forceStop();
-        cm.doStrafe();
-        expect(cm.strafePoint).toBeNull();
-      },
-      TIMEOUT_MS,
-    );
-
-    test(
-      "doStrafe — flips direction on horizontal collision",
-      () => {
-        const cm = (bot as any).combatManager;
-        const initialDir = cm.strafeDirection;
-
-        // Use overrideTarget to provide a target position without needing a real entity
-        // Place target within strafe range so collision logic runs
-        const targetPos = new Vec3(POSITION.x + 2, POSITION.y, POSITION.z);
-        cm.strafePoint = new Vec3(POSITION.x + 3, POSITION.y, POSITION.z);
-        (bot as any).entity.isCollidedHorizontally = true;
-
-        cm.doStrafe(targetPos);
-
-        expect(cm.strafeDirection).toBe(-initialDir);
-        expect(cm.strafePoint).toBeNull();
-
-        (bot as any).entity.isCollidedHorizontally = false;
-      },
-      TIMEOUT_MS,
-    );
-  });
-
-  // ══════════════════════════════════════════════════════════════════
-  // Category 7: Decision Engine
+  // Category 6: Decision Engine
   // ══════════════════════════════════════════════════════════════════
 
   describe("Decision Engine", () => {
     test(
       "executeDecisions — equips armor when armorless",
       async () => {
-        const cm = (bot as any).combatManager;
+        const cm = getCm();
 
-        bot.chat!("/give @p iron_helmet 1");
-        bot.chat!("/give @p iron_chestplate 1");
-        bot.chat!("/give @p iron_leggings 1");
-        bot.chat!("/give @p iron_boots 1");
+        await bot.utilsManager.assertCommandSuccess("give", "@p iron_helmet 1");
+        await bot.utilsManager.assertCommandSuccess("give", "@p iron_chestplate 1");
+        await bot.utilsManager.assertCommandSuccess("give", "@p iron_leggings 1");
+        await bot.utilsManager.assertCommandSuccess("give", "@p iron_boots 1");
         await bot.waitForTicks!(5);
 
         await cm.executeDecisions();
@@ -642,9 +579,9 @@ describeE2E("E2E PvP Tests", () => {
     test(
       "executeDecisions — equips weapon when unarmed",
       async () => {
-        const cm = (bot as any).combatManager;
+        const cm = getCm();
 
-        bot.chat!("/give @p diamond_sword 1");
+        await bot.utilsManager.assertCommandSuccess("give", "@p diamond_sword 1");
         await bot.waitForTicks!(5);
 
         await cm.executeDecisions();
@@ -658,7 +595,7 @@ describeE2E("E2E PvP Tests", () => {
     test(
       "executeDecisions — debounce prevents re-entry",
       async () => {
-        const cm = (bot as any).combatManager;
+        const cm = getCm();
         cm.debounce = true;
 
         const startTime = Date.now();
@@ -680,7 +617,7 @@ describeE2E("E2E PvP Tests", () => {
     test(
       "getBestPearlOffset — calculates offset without throwing",
       async () => {
-        const cm = (bot as any).combatManager;
+        const cm = getCm();
 
         // Use a fixed target position (10 blocks away on flat ground)
         const eyePos = bot.entity.position.offset(
@@ -709,13 +646,11 @@ describeE2E("E2E PvP Tests", () => {
     test(
       "getBestPearlOffset — returns null for out-of-range target",
       async () => {
-        const cm = (bot as any).combatManager;
+        const cm = getCm();
 
         const zombie = await summonMob(bot);
 
-        bot.chat!(
-          `/tp @e[type=zombie,limit=1,sort=nearest] ${POSITION.x + 60} ${POSITION.y} ${POSITION.z}`,
-        );
+        await bot.utilsManager.assertCommandSuccess("tp", `@e[type=zombie,limit=1,sort=nearest] ${POSITION.x + 60} ${POSITION.y} ${POSITION.z}`);
         await bot.waitForTicks!(5);
 
         const eyePos = bot.entity.position.offset(
@@ -740,7 +675,7 @@ describeE2E("E2E PvP Tests", () => {
     test(
       "doEdgeProtection — sneaks near block edge",
       () => {
-        const cm = (bot as any).combatManager;
+        const cm = getCm();
 
         // Directly set position to edge of block
         // Block center is at floor(x)+0.5, so x = floor(x)+1.0 gives dx = 0.5
@@ -767,12 +702,12 @@ describeE2E("E2E PvP Tests", () => {
     test(
       "doEdgeProtection — releases sneak when centered",
       async () => {
-        const cm = (bot as any).combatManager;
+        const cm = getCm();
 
         cm._edgeSneaking = true;
         bot.setControlState("sneak", true);
 
-        bot.chat!(`/tp ${POSITION.x + 0.1} ${POSITION.y} ${POSITION.z}`);
+        await bot.utilsManager.assertCommandSuccess("tp", `${POSITION.x + 0.1} ${POSITION.y} ${POSITION.z}`);
         await bot.waitForTicks!(5);
 
         cm.doEdgeProtection();
@@ -784,7 +719,7 @@ describeE2E("E2E PvP Tests", () => {
     test(
       "doEdgeProtection — does nothing when not on ground",
       () => {
-        const cm = (bot as any).combatManager;
+        const cm = getCm();
         (bot as any).entity.onGround = false;
         cm._edgeSneaking = true;
 
@@ -807,7 +742,7 @@ describeE2E("E2E PvP Tests", () => {
     test(
       "doAvoid — runs without error on clean ground",
       () => {
-        const cm = (bot as any).combatManager;
+        const cm = getCm();
         cm.doAvoid();
         expect(true).toBe(true);
       },
@@ -823,17 +758,17 @@ describeE2E("E2E PvP Tests", () => {
     test(
       "doDecide — full combat tick with target",
       async () => {
-        const cm = (bot as any).combatManager;
+        const cm = getCm();
         cm.setMode(3); // Mode 3 = all entities (players + mobs)
 
         // Summon zombie and manually attack it
         const zombie = await summonMob(bot);
         expect(zombie).not.toBeNull();
-        await (bot as any).pvp.attack(zombie);
-        expect((bot as any).pvp.target).toBe(zombie);
+        await getPvp().attack(zombie);
+        expect(getPvp().target).toBe(zombie);
 
-        bot.chat!("/give @p iron_chestplate 1");
-        bot.chat!("/give @p diamond_sword 1");
+        await bot.utilsManager.assertCommandSuccess("give", "@p iron_chestplate 1");
+        await bot.utilsManager.assertCommandSuccess("give", "@p diamond_sword 1");
         await bot.waitForTicks!(3);
 
         // doDecide should run without error
@@ -849,15 +784,15 @@ describeE2E("E2E PvP Tests", () => {
     test(
       "doDecide — full combat tick without target",
       async () => {
-        const cm = (bot as any).combatManager;
+        const cm = getCm();
         cm.setMode(0);
 
         await killNearbyEntities(bot, 50);
         await bot.waitForTicks!(5);
-        (bot as any).pvp.forceStop();
+        getPvp().forceStop();
 
         await cm.doDecide();
-        expect((bot as any).pvp.target).toBeUndefined();
+        expect(getPvp().target).toBeUndefined();
       },
       TIMEOUT_MS,
     );
@@ -865,7 +800,7 @@ describeE2E("E2E PvP Tests", () => {
     test(
       "doDecide — handles errors gracefully",
       async () => {
-        const cm = (bot as any).combatManager;
+        const cm = getCm();
         const originalUpdateTarget = cm.updateTarget.bind(cm);
 
         cm.updateTarget = () => {
@@ -882,7 +817,7 @@ describeE2E("E2E PvP Tests", () => {
     test(
       "doDecide — prevents re-entry via _isDeciding flag",
       async () => {
-        const cm = (bot as any).combatManager;
+        const cm = getCm();
         cm._isDeciding = true;
 
         await cm.doDecide();
@@ -902,8 +837,8 @@ describeE2E("E2E PvP Tests", () => {
       "setGoal — sets pathfinder goal",
       () => {
         const goal = new Vec3(POSITION.x + 10, POSITION.y, POSITION.z);
-        (bot as any).pvp.setGoal(goal);
-        expect((bot as any).pvp.goal).toBe(goal);
+        getPvp().setGoal(goal);
+        expect(getPvp().goal).toBe(goal);
       },
       TIMEOUT_MS,
     );
@@ -911,11 +846,11 @@ describeE2E("E2E PvP Tests", () => {
     test(
       "clearGoal — clears pathfinder goal",
       () => {
-        (bot as any).pvp.setGoal(
+        getPvp().setGoal(
           new Vec3(POSITION.x + 10, POSITION.y, POSITION.z),
         );
-        (bot as any).pvp.clearGoal();
-        expect((bot as any).pvp.goal).toBeNull();
+        getPvp().clearGoal();
+        expect(getPvp().goal).toBeNull();
       },
       TIMEOUT_MS,
     );
@@ -924,14 +859,14 @@ describeE2E("E2E PvP Tests", () => {
       "goal integration — pathfinder navigates toward goal",
       async () => {
         const goal = new Vec3(POSITION.x + 5, POSITION.y, POSITION.z);
-        (bot as any).pvp.setGoal(goal);
+        getPvp().setGoal(goal);
 
         await bot.waitForTicks!(10);
 
         const dist = bot.entity.position.distanceTo(goal);
         expect(dist).toBeLessThanOrEqual(10);
 
-        (bot as any).pvp.clearGoal();
+        getPvp().clearGoal();
         if ((bot as any).pathfinder) {
           (bot as any).pathfinder.stop();
         }

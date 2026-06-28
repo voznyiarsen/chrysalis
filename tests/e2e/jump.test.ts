@@ -95,6 +95,21 @@ async function createBot(): Promise<Bot> {
 describeE2E("E2E Jump Tests", () => {
   let bot: Bot;
 
+  // ── Helpers ───────────────────────────────────────────────────────
+
+  const getUtils = (): any => (bot as any).utilsManager;
+
+  /**
+   * Reset bot state between tests: stop pathfinding/PVP, switch to creative.
+   */
+  async function resetBotState(): Promise<void> {
+    bot.clearControlStates();
+    (bot as any).pathfinder?.stop();
+    (bot as any).pvp?.stop();
+    await bot.utilsManager.assertCommandSuccess("gamemode", "creative");
+    await bot.waitForTicks!(2);
+  }
+
   // Set overall suite timeout to 5 minutes (300 seconds)
   jest.setTimeout(TIMEOUT_MS * 5);
 
@@ -105,13 +120,13 @@ describeE2E("E2E Jump Tests", () => {
       try {
         await bot.waitForChunksToLoad!();
         await bot.waitForTicks!(1);
-        bot.chat!(`/tp ${Object.values(POSITION).join(" ")}`);
+        await bot.utilsManager.assertCommandSuccess("tp", Object.values(POSITION).join(" "));
 
         await bot.waitForChunksToLoad!();
         await bot.waitForTicks!(1);
-        bot.chat!("/gamemode creative"); // Set gamemode to creative
+        await bot.utilsManager.assertCommandSuccess("gamemode", "creative");
       } catch (error) {
-        console.error("beforeAll cleanup failed:", error);
+        logger.error(error, "Movement");
       }
     }
   }, TIMEOUT_MS);
@@ -122,21 +137,13 @@ describeE2E("E2E Jump Tests", () => {
       try {
         await bot.waitForChunksToLoad!();
         await bot.waitForTicks!(1);
-        bot.chat!(`/tp ${Object.values(POSITION).join(" ")}`);
+        await bot.utilsManager.assertCommandSuccess("tp", Object.values(POSITION).join(" "));
 
         await bot.waitForChunksToLoad!();
         await bot.waitForTicks!(1);
-        bot.clearControlStates();
-
-        if ((bot as any).pathfinder) {
-          (bot as any).pathfinder.stop();
-        }
-
-        if ((bot as any).pvp) {
-          (bot as any).pvp.stop();
-        }
+        await resetBotState();
       } catch (error) {
-        console.error("beforeEach cleanup failed:", error);
+        logger.error(error, "Movement");
       }
     }
   }, TIMEOUT_MS);
@@ -148,7 +155,7 @@ describeE2E("E2E Jump Tests", () => {
         bot.quit!();
         bot.end!();
       } catch (error) {
-        console.error("afterAll cleanup failed:", error);
+        logger.error(error, "Movement");
       }
     }
     logger.setDebugMode(false);
@@ -173,7 +180,7 @@ describeE2E("E2E Jump Tests", () => {
     async () => {
       const source = bot.entity.position;
       const targetPos = source.offset(3, 0, 0);
-      (bot as any).utilsManager.isJumpPathClear(source, targetPos);
+      getUtils().isJumpPathClear(source, targetPos);
     },
     TIMEOUT_MS,
   );
@@ -193,7 +200,7 @@ describeE2E("E2E Jump Tests", () => {
     beforeEach(async () => {
       await bot.waitForChunksToLoad!();
       await bot.waitForTicks!(1);
-      bot.chat!(`/tp ${Object.values(POSITION).join(" ")}`);
+      await bot.utilsManager.assertCommandSuccess("tp", Object.values(POSITION).join(" "));
       await bot.waitForChunksToLoad!();
       await bot.waitForTicks!(1);
     }, TIMEOUT_MS);
@@ -211,8 +218,9 @@ describeE2E("E2E Jump Tests", () => {
               distance,
               result,
             });
-            console.log(
-              `  ${dir.name} ${distance} blocks. Distance to target point remaining: ${result.toFixed(3)}`,
+            logger.info(
+              `${dir.name} ${distance} blocks: ${result.toFixed(3)}b remaining`,
+              "Movement",
             );
           },
           TIMEOUT_MS,
@@ -234,13 +242,10 @@ describeE2E("E2E Jump Tests", () => {
       const distanceValues = [...new Set(results.map((r) => r.distance))];
       expect(distanceValues).toEqual([1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0]);
 
-      // Log summary
-      console.log("Comprehensive jumpViaOffset test results:");
-      results.forEach((r) => {
-        console.log(
-          `  ${r.direction} ${r.distance} blocks: ${r.result.toFixed(3)}`,
-        );
-      });
+      logger.info(
+        `jumpViaOffset comprehensive results: ${results.length} tests completed`,
+        "Movement",
+      );
     });
   });
 
@@ -260,19 +265,19 @@ describeE2E("E2E Jump Tests", () => {
       ];
       const source = new Vec3(3.5, 1, 0.5);
       const targetPos = new Vec3(0.5, 1, 0.5);
-      const utils = (bot as any).utilsManager;
+      const utils = getUtils();
       for (const scenario of scenarios) {
-        bot.chat!(`/tp ${bot.username} 3 1 0`);
+        await bot.utilsManager.assertCommandSuccess("tp", `${bot.username} 3 1 0`);
         await bot.waitForTicks!(3);
         if (scenario.obstacle) {
           const o = scenario.obstacle;
-          bot.chat!(`/setblock ${o.x} ${o.y} ${o.z} dirt`);
+          await bot.utilsManager.assertCommandSuccess("setblock", `${o.x} ${o.y} ${o.z} dirt`);
           await bot.waitForTicks!(3);
         }
         utils.isJumpPathClear(source, targetPos);
         if (scenario.obstacle) {
           const o = scenario.obstacle;
-          bot.chat!(`/setblock ${o.x} ${o.y} ${o.z} air`);
+          await bot.utilsManager.assertCommandSuccess("setblock", `${o.x} ${o.y} ${o.z} air`);
           await bot.waitForTicks!(3);
         }
       }

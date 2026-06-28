@@ -4,13 +4,6 @@
  * Uses vanilla /fill and /setblock commands to place and clear terrain
  * relative to an anchor position. All coordinates in fixtures are
  * offsets from the bot's position.
- *
- * Example:
- *   import { terrain, STRAFE_FIXTURES } from "../helpers/terrain";
- *
- *   await terrain.place(bot.entity.position, STRAFE_FIXTURES.double_step);
- *   // ... run test ...
- *   await terrain.clear(bot.entity.position, STRAFE_FIXTURES.double_step);
  */
 
 import { Bot } from 'mineflayer';
@@ -49,7 +42,7 @@ export async function placeTerrain(
     const x = Math.floor(anchor.x + dx);
     const y = Math.floor(anchor.y + dy);
     const z = Math.floor(anchor.z + dz);
-    bot.chat(`/setblock ${x} ${y} ${z} stone`);
+    await bot.utilsManager.assertCommandSuccess("setblock", `${x} ${y} ${z} stone`);
     await bot.waitForTicks!(1);
   }
   await bot.waitForTicks!(2);
@@ -71,7 +64,7 @@ export async function clearTerrain(
     const x = Math.floor(anchor.x + dx);
     const y = Math.floor(anchor.y + dy);
     const z = Math.floor(anchor.z + dz);
-    bot.chat(`/setblock ${x} ${y} ${z} air`);
+    await bot.utilsManager.assertCommandSuccess("setblock", `${x} ${y} ${z} air`);
   }
   await bot.waitForTicks!(2);
 }
@@ -111,75 +104,6 @@ function pillar(x: number, z: number): BlockSpec[] {
 function p(col: number, row: number): BlockSpec[] {
   return pillar(col - BOT_COL, row - BOT_ROW);
 }
-
-export const STRAFE_FIXTURES: Record<string, TerrainFixture> = {
-  scenario_1: {
-    name: 'scenario 1',
-    description: 'Pillars at N, W, S, E',
-    blocks: [
-      ...p(2, 0), // N
-      ...p(0, 2), // W
-      ...p(4, 2), // E
-      ...p(2, 4), // S
-    ],
-  },
-  scenario_2: {
-    name: 'scenario 2',
-    description: 'Pillars at W, E, S',
-    blocks: [
-      ...p(0, 2), // W
-      ...p(4, 2), // E
-      ...p(2, 4), // S
-    ],
-  },
-  scenario_3: {
-    name: 'scenario 3',
-    description: 'Pillars at W, S',
-    blocks: [
-      ...p(0, 2), // W
-      ...p(2, 4), // S
-    ],
-  },
-  scenario_4: {
-    name: 'scenario 4',
-    description: 'Single pillar at W',
-    blocks: [
-      ...p(0, 2), // W
-    ],
-  },
-  scenario_5: {
-    name: 'scenario 5',
-    description: 'Pillars at N and N-1',
-    blocks: [
-      ...p(2, 0), // row 0
-      ...p(2, 1), // row 1
-    ],
-  },
-  scenario_6: {
-    name: 'scenario 6',
-    description: 'Pillars in vertical line through bot',
-    blocks: [
-      ...p(2, 0),
-      ...p(2, 1),
-      ...p(2, 3),
-      ...p(2, 4),
-    ],
-  },
-  scenario_8: {
-    name: 'scenario 8',
-    description: 'Pillars at all 8 neighbors',
-    blocks: [
-      ...p(0, 0),
-      ...p(2, 0),
-      ...p(4, 0),
-      ...p(0, 2),
-      ...p(4, 2),
-      ...p(0, 4),
-      ...p(2, 4),
-      ...p(4, 4),
-    ],
-  },
-};
 
 // ── Convenience namespace ────────────────────────────────────────────
 

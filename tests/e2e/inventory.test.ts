@@ -90,56 +90,58 @@ async function createBot(): Promise<Bot> {
   return bot;
 }
 
-// ── Helpers ─────────────────────────────────────────────────────────
-
-/**
- * Clear the bot's entire inventory via creative mode.
- * Wraps in try/catch because a previous test failure may leave
- * pending creative operations that cause clearInventory to throw.
- */
-async function clearBotInventory(bot: Bot): Promise<void> {
-  const im = (bot as any).inventoryManager;
-  const creativeName = "creative";
-  const isCreative = (bot.game as any).gameMode === creativeName;
-
-  // Switch to creative mode if not already, so creative API works
-  if (!isCreative) {
-    bot.chat!("/gamemode creative");
-    await bot.waitForTicks!(3);
-  }
-
-  // Unequip armor and off-hand first, since creative clearInventory
-  // does not clear equipment slots
-  try {
-    await im.unequipAllItems();
-    await bot.waitForTicks!(3);
-  } catch {
-    await bot.waitForTicks!(3);
-  }
-
-  // Clear inventory via creative API, then verify by reading back slots.
-  // We explicitly set each main inventory slot (36-44) and hotbar (0-8)
-  // plus armor/equipment slots to null, then wait for confirmation.
-  try {
-    await im.clearInventory();
-    await bot.waitForTicks!(3);
-  } catch {
-    await bot.waitForTicks!(5);
-    await im.clearInventory();
-    await bot.waitForTicks!(3);
-  }
-
-  // Force-invalidate the item cache to prevent stale reads
-  im.invalidateCache();
-
-  // Wait for the server to confirm the cleared state
-  await bot.waitForTicks!(3);
-}
-
 // ── E2E test suite ──────────────────────────────────────────────────
 
 describeE2E("E2E Inventory Tests", () => {
   let bot: Bot;
+
+  // ── Helpers ───────────────────────────────────────────────────────
+
+  const getIm = (): any => (bot as any).inventoryManager;
+
+  /**
+   * Reset bot state between tests: stop pathfinding/PVP, switch to creative.
+   */
+  async function resetBotState(): Promise<void> {
+    bot.clearControlStates();
+    (bot as any).pathfinder?.stop();
+    (bot as any).pvp?.stop();
+    await bot.utilsManager.assertCommandSuccess("gamemode", "creative");
+    await bot.waitForTicks!(3);
+  }
+
+  /**
+   * Clear the bot's entire inventory via creative mode.
+   * Retries once if a previous test left pending creative operations.
+   */
+  async function clearBotInventory(): Promise<void> {
+    const im = getIm();
+
+    if ((bot.game as any).gameMode !== "creative") {
+      await resetBotState();
+    }
+
+    // Unequip armor and off-hand first — creative clearInventory skips equipment slots
+    try {
+      await im.unequipAllItems();
+      await bot.waitForTicks!(3);
+    } catch {
+      await bot.waitForTicks!(3);
+    }
+
+    // Clear inventory via creative API, retrying once on failure
+    try {
+      await im.clearInventory();
+      await bot.waitForTicks!(3);
+    } catch {
+      await bot.waitForTicks!(5);
+      await im.clearInventory();
+      await bot.waitForTicks!(3);
+    }
+
+    im.invalidateCache();
+    await bot.waitForTicks!(3);
+  }
 
   // Set overall suite timeout
   jest.setTimeout(TIMEOUT_MS * 5);
@@ -150,14 +152,13 @@ describeE2E("E2E Inventory Tests", () => {
       try {
         await bot.waitForChunksToLoad!();
         await bot.waitForTicks!(1);
-        bot.chat!(`/tp ${Object.values(POSITION).join(" ")}`);
-
+        await bot.utilsManager.assertCommandSuccess("tp", Object.values(POSITION).join(" "));
         await bot.waitForChunksToLoad!();
         await bot.waitForTicks!(1);
-        bot.chat!("/gamemode creative");
+        await bot.utilsManager.assertCommandSuccess("gamemode", "creative");
         await bot.waitForTicks!(2);
       } catch (error) {
-        console.error("beforeAll setup failed:", error);
+        logger.error(error, "Inventory");
       }
     }
   }, TIMEOUT_MS);
@@ -165,30 +166,10 @@ describeE2E("E2E Inventory Tests", () => {
   beforeEach(async () => {
     if (bot && bot.entity) {
       try {
-        await bot.waitForChunksToLoad!();
-        await bot.waitForTicks!(1);
-        bot.chat!(`/tp ${Object.values(POSITION).join(" ")}`);
-
-        await bot.waitForChunksToLoad!();
-        await bot.waitForTicks!(1);
-        bot.clearControlStates();
-
-        if ((bot as any).pathfinder) {
-          (bot as any).pathfinder.stop();
-        }
-
-        if ((bot as any).pvp) {
-          (bot as any).pvp.stop();
-        }
-
-        // Ensure creative mode for item manipulation
-        bot.chat!("/gamemode creative");
-        await bot.waitForTicks!(2);
-
-        // Clean inventory between tests
-        await clearBotInventory(bot);
+        await resetBotState();
+        await clearBotInventory();
       } catch (error) {
-        console.error("beforeEach cleanup failed:", error);
+        logger.error(error, "Inventory");
       }
     }
   }, TIMEOUT_MS);
@@ -211,7 +192,7 @@ describeE2E("E2E Inventory Tests", () => {
         bot.quit!();
         bot.end!();
       } catch (error) {
-        console.error("afterAll cleanup failed:", error);
+        logger.error(error, "Inventory");
       }
     }
     logger.setDebugMode(false);
@@ -225,8 +206,8 @@ describeE2E("E2E Inventory Tests", () => {
     test(
       "getItemViaCommand — gives ender pearl",
       async () => {
-        const im = (bot as any).inventoryManager;
-        await im.getItemViaCommand("ender_pearl", 16);
+        const im = getIm();
+        await bot.utilsManager.assertCommandSuccess("give", "@p ender_pearl 16");
         const count = im.getItemCount("ender_pearl");
         expect(count).toBeGreaterThanOrEqual(16);
       },
@@ -236,8 +217,8 @@ describeE2E("E2E Inventory Tests", () => {
     test(
       "getItemViaCommand — gives diamond sword",
       async () => {
-        const im = (bot as any).inventoryManager;
-        await im.getItemViaCommand("diamond_sword", 1);
+        const im = getIm();
+        await bot.utilsManager.assertCommandSuccess("give", "@p diamond_sword 1");
         expect(im.hasItem("diamond_sword")).toBe(true);
       },
       TIMEOUT_MS,
@@ -246,8 +227,8 @@ describeE2E("E2E Inventory Tests", () => {
     test(
       "getItemViaCommand — gives stack of golden apples",
       async () => {
-        const im = (bot as any).inventoryManager;
-        await im.getItemViaCommand("golden_apple", 64);
+        const im = getIm();
+        await bot.utilsManager.assertCommandSuccess("give", "@p golden_apple 64");
         const count = im.getItemCount("golden_apple");
         // Server may double stack sizes for some items
         expect(count).toBeGreaterThanOrEqual(64);
@@ -256,7 +237,7 @@ describeE2E("E2E Inventory Tests", () => {
     );
 
     test("createItemInstance — creates valid item", () => {
-      const im = (bot as any).inventoryManager;
+      const im = getIm();
       const item = im.createItemInstance("ender_pearl", 1);
       expect(item).not.toBeNull();
       expect(item.name).toBe("ender_pearl");
@@ -266,8 +247,7 @@ describeE2E("E2E Inventory Tests", () => {
     test(
       "getItemViaCreative — sets slot directly via /give and creative API",
       async () => {
-        // Give an item via /give, then use creative.setInventorySlot to move it
-        const im = (bot as any).inventoryManager;
+        const im = getIm();
         await im.giveItem("ender_pearl", 1);
         await bot.waitForTicks!(2);
 
@@ -296,9 +276,8 @@ describeE2E("E2E Inventory Tests", () => {
     test(
       "getItemCount — counts items after /give",
       async () => {
-        const im = (bot as any).inventoryManager;
+        const im = getIm();
         await im.giveItem("cooked_porkchop", 32);
-        // Allow cache to settle
         await bot.waitForTicks!(2);
         const count = im.getItemCount("cooked_porkchop");
         // Server may double stack sizes for some items
@@ -310,7 +289,7 @@ describeE2E("E2E Inventory Tests", () => {
     test(
       "getItemCount — returns 0 for missing items",
       async () => {
-        const im = (bot as any).inventoryManager;
+        const im = getIm();
         const count = im.getItemCount("diamond_sword");
         expect(count).toBe(0);
       },
@@ -320,7 +299,7 @@ describeE2E("E2E Inventory Tests", () => {
     test(
       "hasItem — true when item present",
       async () => {
-        const im = (bot as any).inventoryManager;
+        const im = getIm();
         await im.giveItem("diamond_sword", 1);
         await bot.waitForTicks!(2);
         expect(im.hasItem("diamond_sword")).toBe(true);
@@ -331,45 +310,36 @@ describeE2E("E2E Inventory Tests", () => {
     test(
       "hasItem — false when item absent",
       async () => {
-        const im = (bot as any).inventoryManager;
+        const im = getIm();
         expect(im.hasItem("diamond_sword")).toBe(false);
       },
       TIMEOUT_MS,
     );
 
     test(
-      "hasItemWithMetadata — matches metadata",
+      "hasItem with metadata — matches metadata",
       async () => {
-        // Use creative API to place an enchanted golden apple (metadata 1)
-        // directly, since /give does not recognize enchanted_golden_apple
-        const im = (bot as any).inventoryManager;
+        const im = getIm();
         const items = bot.inventory.items();
         const gapple = items.find((i: any) => i.name === "golden_apple");
         if (gapple) {
-          // Place a copy with metadata 1 into slot 36 via creative
           await bot.creative.setInventorySlot(36, gapple);
         } else {
-          // Fallback: give a regular golden apple first
-          await bot.chat!("/give @p golden_apple 1");
-          await bot.waitForTicks!(5);
+          await bot.utilsManager.assertCommandSuccess("give", "@p golden_apple 1");
         }
         await bot.waitForTicks!(2);
-        // Check metadata 0 (regular golden apple) is present
-        const has = im.hasItemWithMetadata("golden_apple", 0);
+        const has = im.hasItem("golden_apple", 0);
         expect(has).toBe(true);
       },
       TIMEOUT_MS,
     );
 
     test(
-      "hasItemWithMetadata — rejects wrong metadata",
+      "hasItem with metadata — rejects wrong metadata",
       async () => {
-        // Give regular golden apple (metadata 0)
-        await bot.chat!("/give @p golden_apple 1");
-        await bot.waitForTicks!(5);
-        const im = (bot as any).inventoryManager;
-        // Check for metadata 1 (enchanted) — should be false
-        const has = im.hasItemWithMetadata("golden_apple", 1);
+        await bot.utilsManager.assertCommandSuccess("give", "@p golden_apple 1");
+        const im = getIm();
+        const has = im.hasItem("golden_apple", 1);
         expect(has).toBe(false);
       },
       TIMEOUT_MS,
@@ -378,7 +348,7 @@ describeE2E("E2E Inventory Tests", () => {
     test(
       "hasFood — true when food in inventory",
       async () => {
-        const im = (bot as any).inventoryManager;
+        const im = getIm();
         await im.giveItem("cooked_porkchop", 1);
         await bot.waitForTicks!(2);
         expect(im.hasFood()).toBe(true);
@@ -389,7 +359,7 @@ describeE2E("E2E Inventory Tests", () => {
     test(
       "hasFood — false when no food",
       async () => {
-        const im = (bot as any).inventoryManager;
+        const im = getIm();
         expect(im.hasFood()).toBe(false);
       },
       TIMEOUT_MS,
@@ -404,8 +374,7 @@ describeE2E("E2E Inventory Tests", () => {
     test(
       "equipArmor — equips best armor set",
       async () => {
-        // Give a mix of armor: iron set + diamond chestplate
-        const im = (bot as any).inventoryManager;
+        const im = getIm();
         await im.giveItems([
           { name: "iron_helmet", count: 1 },
           { name: "diamond_chestplate", count: 1 },
@@ -416,16 +385,10 @@ describeE2E("E2E Inventory Tests", () => {
         await im.equipArmor();
         await bot.waitForTicks!(2);
 
-        // Verify each slot has the expected armor
-        const headSlot = bot.getEquipmentDestSlot("head");
-        const torsoSlot = bot.getEquipmentDestSlot("torso");
-        const legsSlot = bot.getEquipmentDestSlot("legs");
-        const feetSlot = bot.getEquipmentDestSlot("feet");
-
-        expect(bot.inventory.slots[headSlot]?.name).toBe("iron_helmet");
-        expect(bot.inventory.slots[torsoSlot]?.name).toBe("diamond_chestplate");
-        expect(bot.inventory.slots[legsSlot]?.name).toBe("iron_leggings");
-        expect(bot.inventory.slots[feetSlot]?.name).toBe("iron_boots");
+        expect(bot.inventory.slots[bot.getEquipmentDestSlot("head")]?.name).toBe("iron_helmet");
+        expect(bot.inventory.slots[bot.getEquipmentDestSlot("torso")]?.name).toBe("diamond_chestplate");
+        expect(bot.inventory.slots[bot.getEquipmentDestSlot("legs")]?.name).toBe("iron_leggings");
+        expect(bot.inventory.slots[bot.getEquipmentDestSlot("feet")]?.name).toBe("iron_boots");
       },
       TIMEOUT_MS,
     );
@@ -433,7 +396,7 @@ describeE2E("E2E Inventory Tests", () => {
     test(
       "equipArmor — skips when already best",
       async () => {
-        const im = (bot as any).inventoryManager;
+        const im = getIm();
         await im.giveItems([
           { name: "diamond_helmet", count: 1 },
           { name: "diamond_chestplate", count: 1 },
@@ -442,7 +405,6 @@ describeE2E("E2E Inventory Tests", () => {
         ]);
         await bot.waitForTicks!(2);
         await im.equipArmor();
-        // Calling again should not throw
         await im.equipArmor();
       },
       TIMEOUT_MS,
@@ -451,8 +413,7 @@ describeE2E("E2E Inventory Tests", () => {
     test(
       "equipArmor — handles empty inventory gracefully",
       async () => {
-        const im = (bot as any).inventoryManager;
-        // Should not throw
+        const im = getIm();
         await im.equipArmor();
       },
       TIMEOUT_MS,
@@ -461,8 +422,7 @@ describeE2E("E2E Inventory Tests", () => {
     test(
       "equipArmor — upgrades lower-tier armor",
       async () => {
-        // First give lower-tier armor
-        const im = (bot as any).inventoryManager;
+        const im = getIm();
         await im.giveItems([
           { name: "iron_helmet", count: 1 },
           { name: "leather_chestplate", count: 1 },
@@ -471,14 +431,12 @@ describeE2E("E2E Inventory Tests", () => {
         await im.equipArmor();
         await bot.waitForTicks!(2);
 
-        // Now give a diamond chestplate and re-equip
         await im.giveItem("diamond_chestplate", 1);
         await bot.waitForTicks!(2);
         await im.equipArmor();
         await bot.waitForTicks!(2);
 
-        const torsoSlot = bot.getEquipmentDestSlot("torso");
-        expect(bot.inventory.slots[torsoSlot]?.name).toBe("diamond_chestplate");
+        expect(bot.inventory.slots[bot.getEquipmentDestSlot("torso")]?.name).toBe("diamond_chestplate");
       },
       TIMEOUT_MS,
     );
@@ -492,7 +450,7 @@ describeE2E("E2E Inventory Tests", () => {
     test(
       "equipWeapon — equips best sword",
       async () => {
-        const im = (bot as any).inventoryManager;
+        const im = getIm();
         await im.giveItems([
           { name: "wooden_sword", count: 1 },
           { name: "diamond_sword", count: 1 },
@@ -500,9 +458,7 @@ describeE2E("E2E Inventory Tests", () => {
         await bot.waitForTicks!(2);
         await im.equipWeapon();
         await bot.waitForTicks!(2);
-
-        const held = bot.heldItem;
-        expect(held?.name).toBe("diamond_sword");
+        expect(bot.heldItem?.name).toBe("diamond_sword");
       },
       TIMEOUT_MS,
     );
@@ -512,8 +468,7 @@ describeE2E("E2E Inventory Tests", () => {
       async () => {
         // iron_sword: damage=6, speed=1.6 => DPS=9.6
         // stone_axe:  damage=9, speed=0.8 => DPS=7.2
-        // iron_sword has higher DPS, so it should be equipped
-        const im = (bot as any).inventoryManager;
+        const im = getIm();
         await im.giveItems([
           { name: "stone_axe", count: 1 },
           { name: "iron_sword", count: 1 },
@@ -521,9 +476,7 @@ describeE2E("E2E Inventory Tests", () => {
         await bot.waitForTicks!(2);
         await im.equipWeapon();
         await bot.waitForTicks!(2);
-
-        const held = bot.heldItem;
-        expect(held?.name).toBe("iron_sword");
+        expect(bot.heldItem?.name).toBe("iron_sword");
       },
       TIMEOUT_MS,
     );
@@ -531,8 +484,7 @@ describeE2E("E2E Inventory Tests", () => {
     test(
       "equipWeapon — no weapons in inventory",
       async () => {
-        const im = (bot as any).inventoryManager;
-        // Should not throw
+        const im = getIm();
         await im.equipWeapon();
       },
       TIMEOUT_MS,
@@ -544,28 +496,22 @@ describeE2E("E2E Inventory Tests", () => {
   // ══════════════════════════════════════════════════════════════════
 
   describe("equipping consumables", () => {
+    const offHandSlot = () => bot.getEquipmentDestSlot("off-hand");
+
     test(
       "equipGapple — equips enchanted golden apple",
       async () => {
-        // Server does not recognize enchanted_golden_apple, so use
-        // creative API to place an enchanted golden apple (metadata 1)
-        await bot.chat!("/give @p golden_apple 1");
+        await bot.utilsManager.assertCommandSuccess("give", "@p golden_apple 1");
         await bot.waitForTicks!(5);
-        const im = (bot as any).inventoryManager;
-        // Use creative setInventorySlot to set metadata 1 on the item
-        const gapple = bot.inventory
-          .items()
-          .find((i: any) => i.name === "golden_apple");
+        const im = getIm();
+        const gapple = bot.inventory.items().find((i: any) => i.name === "golden_apple");
         if (gapple) {
           await bot.creative.setInventorySlot(36, gapple);
           await bot.waitForTicks!(2);
         }
         await im.equipGapple();
         await bot.waitForTicks!(2);
-
-        const offHandSlot = bot.getEquipmentDestSlot("off-hand");
-        const offHandItem = bot.inventory.slots[offHandSlot];
-        expect(offHandItem?.name).toBe("golden_apple");
+        expect(bot.inventory.slots[offHandSlot()]?.name).toBe("golden_apple");
       },
       TIMEOUT_MS,
     );
@@ -573,14 +519,12 @@ describeE2E("E2E Inventory Tests", () => {
     test(
       "equipGapple — equips regular when no enchanted",
       async () => {
-        const im = (bot as any).inventoryManager;
+        const im = getIm();
         await im.giveItem("golden_apple", 1);
         await bot.waitForTicks!(2);
         await im.equipGapple();
         await bot.waitForTicks!(2);
-
-        const offHandSlot = bot.getEquipmentDestSlot("off-hand");
-        expect(bot.inventory.slots[offHandSlot]?.name).toBe("golden_apple");
+        expect(bot.inventory.slots[offHandSlot()]?.name).toBe("golden_apple");
       },
       TIMEOUT_MS,
     );
@@ -588,8 +532,7 @@ describeE2E("E2E Inventory Tests", () => {
     test(
       "equipGapple — no gapples in inventory",
       async () => {
-        const im = (bot as any).inventoryManager;
-        // Should not throw
+        const im = getIm();
         await im.equipGapple();
       },
       TIMEOUT_MS,
@@ -598,20 +541,17 @@ describeE2E("E2E Inventory Tests", () => {
     test(
       "equipFood — equips best food to off-hand",
       async () => {
-        const im = (bot as any).inventoryManager;
+        const im = getIm();
         await im.giveItems([
           { name: "bread", count: 1 },
           { name: "cooked_porkchop", count: 1 },
         ]);
         await bot.waitForTicks!(2);
-        // equipFood equips to off-hand but only activates if food < 20
-        // In creative mode food is 20, so it should just equip without eating
+        // In creative mode food is 20, so equipFood equips without eating
         await im.equipFood();
         await bot.waitForTicks!(2);
-
-        const offHandSlot = bot.getEquipmentDestSlot("off-hand");
         // cooked_porkchop has higher saturation (12.8) than bread (6.0)
-        expect(bot.inventory.slots[offHandSlot]?.name).toBe("cooked_porkchop");
+        expect(bot.inventory.slots[offHandSlot()]?.name).toBe("cooked_porkchop");
       },
       TIMEOUT_MS,
     );
@@ -619,11 +559,9 @@ describeE2E("E2E Inventory Tests", () => {
     test(
       "equipFood — skips when food full in creative",
       async () => {
-        // Food starts at 20 in creative; equipFood checks bot.food >= 20
-        const im = (bot as any).inventoryManager;
+        const im = getIm();
         await im.giveItem("cooked_porkchop", 1);
         await bot.waitForTicks!(2);
-        // Should return early without error
         await im.equipFood();
       },
       TIMEOUT_MS,
@@ -632,15 +570,13 @@ describeE2E("E2E Inventory Tests", () => {
     test(
       "equipTotem — equips totem to off-hand",
       async () => {
-        const im = (bot as any).inventoryManager;
+        const im = getIm();
         await im.giveItem("totem_of_undying", 1);
         await bot.waitForTicks!(2);
         const result = await im.equipTotem();
         await bot.waitForTicks!(2);
-
         expect(result).toBe(true);
-        const offHandSlot = bot.getEquipmentDestSlot("off-hand");
-        expect(bot.inventory.slots[offHandSlot]?.name).toBe("totem_of_undying");
+        expect(bot.inventory.slots[offHandSlot()]?.name).toBe("totem_of_undying");
       },
       TIMEOUT_MS,
     );
@@ -648,7 +584,7 @@ describeE2E("E2E Inventory Tests", () => {
     test(
       "equipTotem — fails without totem",
       async () => {
-        const im = (bot as any).inventoryManager;
+        const im = getIm();
         const result = await im.equipTotem();
         expect(result).toBe(false);
       },
@@ -664,7 +600,7 @@ describeE2E("E2E Inventory Tests", () => {
     test(
       "tossAllItems — tosses everything",
       async () => {
-        const im = (bot as any).inventoryManager;
+        const im = getIm();
         await im.giveItems([
           { name: "dirt", count: 64 },
           { name: "cobblestone", count: 32 },
@@ -673,10 +609,7 @@ describeE2E("E2E Inventory Tests", () => {
         await bot.waitForTicks!(2);
         await im.tossAllItems();
         await bot.waitForTicks!(5);
-
-        // After tossing, inventory should be empty
-        const items = bot.inventory.items();
-        expect(items.length).toBe(0);
+        expect(bot.inventory.items().length).toBe(0);
       },
       TIMEOUT_MS,
     );
@@ -684,7 +617,7 @@ describeE2E("E2E Inventory Tests", () => {
     test(
       "unequipAllItems — removes equipped armor",
       async () => {
-        const im = (bot as any).inventoryManager;
+        const im = getIm();
         await im.giveItems([
           { name: "iron_helmet", count: 1 },
           { name: "iron_chestplate", count: 1 },
@@ -694,20 +627,13 @@ describeE2E("E2E Inventory Tests", () => {
         await bot.waitForTicks!(2);
         await im.equipArmor();
         await bot.waitForTicks!(2);
+        expect(bot.inventory.slots[bot.getEquipmentDestSlot("head")]).not.toBeNull();
 
-        // Verify armor is equipped
-        const headSlot = bot.getEquipmentDestSlot("head");
-        expect(bot.inventory.slots[headSlot]).not.toBeNull();
-
-        // Now unequip all
         await im.unequipAllItems();
         await bot.waitForTicks!(2);
 
-        // Verify all armor slots are empty
-        const destSlots = ["head", "torso", "legs", "feet", "off-hand"];
-        for (const dest of destSlots) {
-          const slot = bot.getEquipmentDestSlot(dest);
-          expect(bot.inventory.slots[slot]).toBeNull();
+        for (const dest of ["head", "torso", "legs", "feet", "off-hand"]) {
+          expect(bot.inventory.slots[bot.getEquipmentDestSlot(dest)]).toBeNull();
         }
       },
       TIMEOUT_MS,
@@ -716,7 +642,7 @@ describeE2E("E2E Inventory Tests", () => {
     test(
       "clearInventory — clears via creative API",
       async () => {
-        const im = (bot as any).inventoryManager;
+        const im = getIm();
         await im.giveItems([
           { name: "dirt", count: 64 },
           { name: "diamond", count: 10 },
@@ -724,9 +650,7 @@ describeE2E("E2E Inventory Tests", () => {
         await bot.waitForTicks!(2);
         await im.clearInventory();
         await bot.waitForTicks!(2);
-
-        const items = bot.inventory.items();
-        expect(items.length).toBe(0);
+        expect(bot.inventory.items().length).toBe(0);
       },
       TIMEOUT_MS,
     );
@@ -734,17 +658,15 @@ describeE2E("E2E Inventory Tests", () => {
     test(
       "clearInventory — throws in survival mode",
       async () => {
-        // Switch to survival
-        await bot.chat!("/gamemode survival");
+        await bot.utilsManager.assertCommandSuccess("gamemode", "survival");
         await bot.waitForTicks!(5);
 
-        const im = (bot as any).inventoryManager;
+        const im = getIm();
         await expect(async () => {
           await im.clearInventory();
         }).rejects.toThrow("clearInventory requires creative mode");
 
-        // Switch back to creative for other tests
-        await bot.chat!("/gamemode creative");
+        await bot.utilsManager.assertCommandSuccess("gamemode", "creative");
         await bot.waitForTicks!(2);
       },
       TIMEOUT_MS,
@@ -759,7 +681,7 @@ describeE2E("E2E Inventory Tests", () => {
     test(
       "recordInventory — writes JSON file",
       async () => {
-        const im = (bot as any).inventoryManager;
+        const im = getIm();
         await im.giveItems([
           { name: "diamond_sword", count: 1 },
           { name: "golden_apple", count: 16 },
@@ -767,16 +689,13 @@ describeE2E("E2E Inventory Tests", () => {
         await bot.waitForTicks!(2);
         await im.recordInventory(99);
 
-        // recordInventory uses fs.writeFile (async), so wait a moment
         await new Promise((resolve) => setTimeout(resolve, 500));
 
         expect(fs.existsSync("./recording-99.json")).toBe(true);
-        const raw = fs.readFileSync("./recording-99.json", "utf8");
-        const data = JSON.parse(raw);
+        const data = JSON.parse(fs.readFileSync("./recording-99.json", "utf8"));
         expect(Array.isArray(data)).toBe(true);
         expect(data.length).toBeGreaterThan(0);
 
-        // Verify the recorded data contains our items
         const names = data.map((d: any) => d.name);
         expect(names).toContain("diamond_sword");
         expect(names).toContain("golden_apple");
@@ -787,26 +706,22 @@ describeE2E("E2E Inventory Tests", () => {
     test(
       "record + restore round-trip preserves item counts",
       async () => {
-        const im = (bot as any).inventoryManager;
+        const im = getIm();
         await im.giveItems([
           { name: "ender_pearl", count: 16 },
           { name: "obsidian", count: 64 },
         ]);
         await bot.waitForTicks!(2);
 
-        // Record
         await im.recordInventory(97);
         await new Promise((resolve) => setTimeout(resolve, 500));
 
-        // Clear
-        await clearBotInventory(bot);
+        await clearBotInventory();
         await bot.waitForTicks!(2);
 
-        // Restore
         await im.restoreInventory(97);
         await bot.waitForTicks!(5);
 
-        // Verify counts
         expect(im.getItemCount("ender_pearl")).toBe(16);
         expect(im.getItemCount("obsidian")).toBe(64);
       },
@@ -822,22 +737,17 @@ describeE2E("E2E Inventory Tests", () => {
     test(
       "invalidateCache — forces fresh count",
       async () => {
-        const im = (bot as any).inventoryManager;
+        const im = getIm();
         await im.giveItem("dirt", 16);
         await bot.waitForTicks!(2);
 
-        // First call populates cache
         const count1 = im.getItemCount("dirt");
         expect(count1).toBe(16);
 
-        // Give more items (triggers windowUpdate which auto-clears cache)
         await im.giveItem("dirt", 16);
         await bot.waitForTicks!(2);
-
-        // Invalidate cache explicitly
         im.invalidateCache();
 
-        // Count should now reflect the new total
         const count2 = im.getItemCount("dirt");
         expect(count2).toBeGreaterThan(count1);
       },
@@ -853,7 +763,7 @@ describeE2E("E2E Inventory Tests", () => {
     test(
       "_equipItem — returns false for missing item",
       async () => {
-        const im = (bot as any).inventoryManager;
+        const im = getIm();
         const result = await im._equipItem("nonexistent_item_xyz", "hand");
         expect(result).toBe(false);
       },
@@ -863,8 +773,7 @@ describeE2E("E2E Inventory Tests", () => {
     test(
       "getItemViaCommand — throws when item not found after /give",
       async () => {
-        const im = (bot as any).inventoryManager;
-        // Use an item name that does not exist in the game
+        const im = getIm();
         await expect(async () => {
           await im.getItemViaCommand("totally_invalid_item_name_xyz", 1);
         }).rejects.toThrow();
