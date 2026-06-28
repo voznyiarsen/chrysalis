@@ -267,7 +267,7 @@ class CombatDecision {
 }
 
 /**
- * Manages combat state, targeting, movement (strafing), and automated inventory decisions
+ * Manages combat state, targeting, movement, and automated inventory decisions
  */
 class CombatManager {
   public readonly bot: Bot;
@@ -276,8 +276,6 @@ class CombatManager {
   debounce: boolean;
   lastDamage: number;
   lastHealth: number;
-  strafeDirection: number;
-  strafePoint: Vec3 | null;
   lastDist: number | null;
   _edgeSneaking: boolean;
   mode: number;
@@ -297,8 +295,6 @@ class CombatManager {
     this.debounce = false;
     this.lastDamage = 0;
     this.lastHealth = 20;
-    this.strafeDirection = 1;
-    this.strafePoint = null;
     this.lastDist = null;
     this._edgeSneaking = false;
     this.mode = 2;
@@ -336,13 +332,13 @@ class CombatManager {
             await inv().equipTotem();
           } else if (
             canEatEGapple &&
-            inv().hasItemWithMetadata("golden_apple", 1)
+            inv().hasItem("golden_apple", 1)
           ) {
             this.logger.combat("Fall: Mitigating with Enchanted Golden Apple");
             await inv().equipGapple();
           } else if (
             canEatGapple &&
-            inv().hasItemWithMetadata("golden_apple", 0)
+            inv().hasItem("golden_apple", 0)
           ) {
             this.logger.combat("Fall: Mitigating with Golden Apple");
             await inv().equipGapple();
@@ -424,16 +420,17 @@ class CombatManager {
 
           const result = this.getBestPearlOffset(eyePos, targetPos, "low");
           if (!result) {
-            this.logger.combat(
-              `Cannot throw pearl at ${target.username}: unreachable`,
+            this.logger.debug(
+              `Pearl: cannot throw at ${target.username}. Target unreachable`,
+              "Combat",
             );
             return;
           }
 
           this.logger.combat(
-            `Throwing ${result.arc} arc pearl at ${target.username} with offset ${result.offset.toFixed(2)}`,
+            `Throwing ${result.arc}-arc pearl at ${target.username}. Vertical offset: ${result.offset.toFixed(2)}b`,
           );
-          await inv().equipPearlWithOffset(targetPos, result.offset);
+          await inv().equipPearl(targetPos, result.offset);
 
           this.lastPearlTime = Date.now();
         },
@@ -538,7 +535,8 @@ class CombatManager {
     if (result) {
       if (result.arc === "high") {
         this.logger.debug(
-          "Low arc blocked, evaluating high arc via tolerance sampling...",
+          "Pearl: low arc blocked, evaluating high arc via tolerance sampling",
+          "Combat",
         );
       }
       return { pitch: result.pitch, arc: result.arc };
@@ -578,7 +576,8 @@ class CombatManager {
       return { offset, arc: arcType };
     } catch (error) {
       this.logger.debug(
-        `Cannot calculate offset for ${arcType} arc: ${error.message}`,
+        `Pearl: cannot calculate offset for ${arcType} arc. Reason: ${error.message}`,
+        "Combat",
       );
 
       // Try the other arc type if the first one fails
@@ -595,7 +594,8 @@ class CombatManager {
           return { offset, arc: "high" };
         } catch (error) {
           this.logger.debug(
-            `Cannot calculate offset for high arc either: ${error.message}`,
+            `Pearl: cannot calculate offset for high arc either. Reason: ${error.message}`,
+            "Combat",
           );
           return null;
         }
@@ -800,12 +800,8 @@ class CombatManager {
     const ticksToImpact = Math.abs(fallDistance / (velY || -0.01));
     const hasTimeToEat = ticksToImpact > EAT_TICKS_WITH_TOLERANCE;
 
-    const isDangerous = predictedDamage >= totalHealth - DANGER_HP; // Dangerous if it leaves us with < DANGER_HP HP
+    const isDangerous = predictedDamage >= totalHealth - DANGER_HP;
     if (!isDangerous) {
-      this.logger.debug(
-        `Fall: not dangerous (predictedDmg=${predictedDamage.toFixed(1)} totalHP=${totalHealth.toFixed(1)} fallDist=${fallDistance.toFixed(1)})`,
-        "Combat",
-      );
       return { isDangerous: false };
     }
 
@@ -820,7 +816,7 @@ class CombatManager {
     const needsTotem = !canEatGapple && !canEatEGapple;
 
     this.logger.debug(
-      `Fall: DANGEROUS predictedDmg=${predictedDamage.toFixed(1)} totalHP=${totalHealth.toFixed(1)} ticksToImpact=${ticksToImpact.toFixed(0)} canGapple=${canEatGapple} canEGapple=${canEatEGapple} needsTotem=${needsTotem}`,
+      `Fall: DANGEROUS. Predicted damage: ${predictedDamage.toFixed(1)} HP, total health: ${totalHealth.toFixed(1)} HP, ticks to impact: ${ticksToImpact.toFixed(0)}. Can eat gapple: ${canEatGapple}, can eat enchanted gapple: ${canEatEGapple}, needs totem: ${needsTotem}`,
       "Combat",
     );
 
@@ -846,10 +842,6 @@ class CombatManager {
       this.updateTarget();
       this.doAvoid();
       this.doEdgeProtection();
-      const hasTarget = !!(this.bot as any).pvp.target;
-      if (hasTarget) {
-        this.doStrafe();
-      }
       await this.executeDecisions();
     } catch (error: unknown) {
       const err = error as Error;
@@ -865,16 +857,13 @@ class CombatManager {
    * Decide whether to toss junk items from inventory.
    */
   async decideIfToss(): Promise<void> {
-    const junk = ["compass", "knowledge_book", "glass_bottle"].map(
-      (name) => (this.bot as any).registry.itemsByName[name]?.id,
-    );
-    for (const id of junk) {
-      if (!id) continue;
-      const item = (this.bot as any).inventory.findInventoryItem(id, null);
-      if (item) {
-        this.logger.debug(
+    const junk = ["compass", "knowledge_book", "glass_bottle"];
+    for (const name of junk) {
+      const items = (this.bot as any).inventoryManager.findItem(name);
+      if (items.length > 0) {
+        const item = items[0];
+        this.logger.inventory(
           `Tossing junk item: ${item.name} (count: ${item.count})`,
-          "Inventory",
         );
         await this.bot.toss!(item.type, item.metadata, item.count);
         await this.bot.waitForTicks!(Constants.TIMING.EQUIP_TICKS);
@@ -891,10 +880,6 @@ class CombatManager {
       this.bot.entity!.position,
     );
     if (unwanted) {
-      this.logger.debug(
-        `Avoid: in unwanted block, applying escape impulse`,
-        "Combat",
-      );
       const impulse = (this.bot as any).utilsManager.getFlatVelocity(
         this.bot.entity!.position,
         unwanted,
@@ -929,7 +914,6 @@ class CombatManager {
       if (this._edgeSneaking) {
         bot.setControlState("sneak", false);
         this._edgeSneaking = false;
-        this.logger.debug(`Edge: released sneak (centered)`, "Combat");
       }
       return;
     }
@@ -937,7 +921,7 @@ class CombatManager {
     // Edge detected — sneak and nudge toward center
     if (!this._edgeSneaking) {
       this.logger.debug(
-        `Edge: near block boundary. Offset from center: dx=${dx.toFixed(2)}b, dz=${dz.toFixed(2)}b. Engaging sneak`,
+        `Edge: near block boundary at dx=${dx.toFixed(2)}b, dz=${dz.toFixed(2)}b, engaging sneak`,
         "Combat",
       );
     }
@@ -949,180 +933,6 @@ class CombatManager {
 
     if (nudgeX !== 0 || nudgeZ !== 0) {
       bot.entity.velocity.add(new Vec3(nudgeX, 0, nudgeZ));
-    }
-  }
-
-  /**
-   * Performs strafe movement around a target using validated strafe points.
-   *
-   * **Ground:** Computes an orbital direction (perpendicular to the target)
-   * using `getStrafeYaw()`, picks a solid-surface point in that direction,
-   * validates its trajectory with `isJumpPathClear()`, and jumps toward it.
-   * **Air:** Steers the current velocity toward the strafe point.
-   *
-   * The strafe point is cached (`strafePoint`) but re-validated only when
-   * on ground to avoid false "blocked" reports from velocity mismatches mid-air.
-   *
-   * @param overrideTarget - Optional fixed point to strafe around
-   */
-  doStrafe(overrideTarget?: Vec3): void {
-    const source = this.bot.entity!.position;
-    const target = overrideTarget || (this.bot as any).pvp?.target?.position;
-    if (!source || !target) {
-      this.strafePoint = null;
-      return;
-    }
-
-    const utils = (this.bot as any).utilsManager;
-    utils.updateObstacles();
-    const dist2D = (a: Vec3, b: Vec3) => Math.hypot(a.x - b.x, a.z - b.z);
-    const distToTarget = source.distanceTo(target);
-
-    const strafeRange =
-      (this.bot as any).runtimeConfig?.get("MOVEMENT", "STRAFE_RADIUS") ??
-      Constants.MOVEMENT.STRAFE_RADIUS;
-
-    if (distToTarget > strafeRange) {
-      this.logger.debug(
-        `Strafe: target out of range. Distance to target: ${distToTarget.toFixed(1)}b, strafe range: ${strafeRange.toFixed(1)}b`,
-        "Combat",
-      );
-      this.strafePoint = null;
-      return;
-    }
-
-    // Flip direction on horizontal collision
-    if ((this.bot as any).entity.isCollidedHorizontally) {
-      this.logger.debug(
-        `Strafe: horizontal collision detected. Flipping direction from ${this.strafeDirection} to ${-this.strafeDirection}`,
-        "Combat",
-      );
-      this.strafeDirection = -this.strafeDirection;
-      this.strafePoint = null;
-    }
-
-    if ((this.bot as any).entity.onGround) {
-      if (this.strafePoint) {
-        const distToPoint = dist2D(source, this.strafePoint);
-        if (distToPoint > strafeRange + 1) {
-          this.logger.debug(
-            `Strafe: point out of range. Distance to point: ${distToPoint.toFixed(1)}b, maximum allowed: ${strafeRange + 1}b`,
-            "Combat",
-          );
-          this.strafePoint = null;
-        } else {
-          const isBlocked = !utils.isJumpPathClear(source, this.strafePoint);
-          if (isBlocked) {
-            this.logger.debug(
-              `Strafe: path blocked to point (${this.strafePoint.x.toFixed(1)}, ${this.strafePoint.z.toFixed(1)}). Clearing strafe point`,
-              "Combat",
-            );
-            this.strafePoint = null;
-          } else if (distToPoint < 0.2) {
-            this.logger.debug(
-              `Strafe: reached strafe point. Distance remaining: ${distToPoint.toFixed(2)}b. Clearing`,
-              "Combat",
-            );
-            this.strafePoint = null;
-          }
-        }
-      }
-
-      if (!this.strafePoint && distToTarget <= strafeRange) {
-        // Try all 4 cardinal directions relative to the target to find a
-        // valid strafe point.  The directions are ordered by preference:
-        // perpendicular (orbital), then forward/backward (radial).
-        const strafeDist = Constants.MOVEMENT.STRAFE_JUMP_DISTANCE;
-        const directions: { dir: number; label: string }[] = [
-          { dir: this.strafeDirection, label: "strafe" },
-          { dir: -this.strafeDirection, label: "opposite" },
-          { dir: 0, label: "forward" },
-          { dir: 2, label: "backward" }, // 2 = PI rad = 180°
-        ];
-
-        for (const { dir, label } of directions) {
-          const yaw = utils.getStrafeYaw(source, target, dir);
-          const candidate = source.offset(
-            -Math.sin(yaw) * strafeDist,
-            0,
-            Math.cos(yaw) * strafeDist,
-          );
-          this.strafePoint = utils.getStrafePoint(
-            source,
-            candidate,
-            target,
-            (msg: string) => this.logger.debug(`Strafe: ${msg}`, "Combat"),
-          );
-          if (this.strafePoint) {
-            const distToNewPoint = dist2D(source, this.strafePoint);
-            if (dir !== this.strafeDirection) {
-              this.logger.debug(
-                `Strafe: direction changed from ${this.strafeDirection} to ${dir} (${label})`,
-                "Combat",
-              );
-              this.strafeDirection = dir;
-            }
-            this.logger.debug(
-              `Strafe: point selected via ${label}. Position: (${this.strafePoint.x.toFixed(1)}, ${this.strafePoint.z.toFixed(1)}). Distance to bot: ${distToNewPoint.toFixed(1)}b, distance to target: ${dist2D(this.strafePoint, target).toFixed(1)}b. Recent candidates: ${utils.recentPoints.length}`,
-              "Combat",
-            );
-            break;
-          }
-        }
-
-        if (!this.strafePoint) {
-          this.logger.debug(
-            `Strafe: no valid point found. Distance to target: ${distToTarget.toFixed(1)}b. Obstacles: ${utils._obstacles.length}, holes: ${utils._holes.length}`,
-            "Combat",
-          );
-        }
-      }
-
-      if (this.strafePoint) {
-        // Enable sprint so prismarine-physics uses sprint ground acceleration
-        // (otherwise it would use walking acceleration and slow us down).
-        // The sprint-jump boost from prismarine-physics gets overwritten
-        // by our impulse below, so we include it in getJumpVelocity instead.
-        (this.bot as any).setControlState("sprint", true);
-
-        const impulse = utils.getJumpVelocity(source, this.strafePoint);
-        if (impulse) {
-          const impulseMag = Math.hypot(impulse.x, impulse.z);
-          this.logger.debug(
-            `Strafe: applying jump impulse. Velocity: (${impulse.x.toFixed(2)}, ${impulse.y.toFixed(2)}, ${impulse.z.toFixed(2)}). Magnitude: ${impulseMag.toFixed(2)}`,
-            "Combat",
-          );
-          this.logger.debug(
-            `Strafe: jump to (${this.strafePoint.x.toFixed(1)}, ${this.strafePoint.z.toFixed(1)}). Distance to target: ${distToTarget.toFixed(1)}b, direction: ${this.strafeDirection}`,
-            "Combat",
-          );
-          utils.applyImpulse(impulse, "set", true);
-        }
-      }
-    } else if (this.strafePoint) {
-      const currentSpeed = utils.getHorizontalSpeed();
-      if (currentSpeed > 0.001) {
-        // Steer velocity toward the strafe point using the air acceleration
-        const airAccel =
-          Constants.PHYSICS.ACCELERATION.AIR *
-          Constants.PHYSICS.ACCELERATION.SPRINT_MULTIPLIER;
-
-        const dx = this.strafePoint.x - source.x;
-        const dz = this.strafePoint.z - source.z;
-        const len = Math.hypot(dx, dz) || 1e-6;
-
-        // Add air acceleration in the direction of the strafe point
-        const impulse = new Vec3(
-          (dx / len) * airAccel,
-          0,
-          (dz / len) * airAccel,
-        );
-        this.logger.debug(
-          `Strafe: air steer. Horizontal speed: ${currentSpeed.toFixed(2)}, distance to point: ${len.toFixed(1)}b, air acceleration: ${airAccel.toFixed(3)}`,
-          "Combat",
-        );
-        utils.applyImpulse(impulse, "add");
-      }
     }
   }
 
@@ -1189,41 +999,6 @@ class CombatManager {
   // ---------------------------------------------------------------------------
 
   /**
-   * Execute a single strafe toward targetPos and measure accuracy.
-   * Waits for the bot to settle before and after strafing.
-   * @returns Distance from achieved position to strafe point (or target).
-   */
-  async executeStrafe(targetPos: Vec3): Promise<number> {
-    await this._waitUntilSettled();
-    this.strafePoint = null;
-    this.doStrafe(targetPos);
-    await this.bot.waitForTicks!(1);
-    await this._waitUntilSettled();
-    const finalPos = this.bot.entity.position;
-    const strafePoint = this.strafePoint;
-    if (strafePoint) {
-      return Math.hypot(strafePoint.x - finalPos.x, strafePoint.z - finalPos.z);
-    }
-    return Math.hypot(targetPos.x - finalPos.x, targetPos.z - finalPos.z);
-  }
-
-  /**
-   * Execute multiple strafes toward targetPos and measure each result.
-   * @returns Array of distances after each strafe.
-   */
-  async executeStrafeLoop(
-    targetPos: Vec3,
-    iterations: number = 3,
-  ): Promise<number[]> {
-    const distances: number[] = [];
-    for (let i = 0; i < iterations; i++) {
-      const dist = await this.executeStrafe(targetPos);
-      distances.push(dist);
-    }
-    return distances;
-  }
-
-  /**
    * Throw an ender pearl at a target position using the specified arc type.
    * Calculates eye position, determines best offset, equips and throws.
    */
@@ -1239,10 +1014,10 @@ class CombatManager {
     const resolvedArc: "low" | "high" = arcType === "auto" ? "low" : arcType;
     const result = this.getBestPearlOffset(eyePos, targetPos, resolvedArc);
     if (!result) {
-      this.logger.combat("Cannot reach target with pearl");
+      this.logger.debug("Pearl: cannot reach target with any arc", "Combat");
       return;
     }
-    await (this.bot as any).inventoryManager.equipPearlWithOffset(
+    await (this.bot as any).inventoryManager.equipPearl(
       targetPos,
       result.offset,
     );
