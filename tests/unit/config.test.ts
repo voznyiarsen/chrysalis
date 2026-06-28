@@ -69,20 +69,20 @@ describe("RuntimeConfig", () => {
 
     test("returns all active overrides", () => {
       config.set("COMBAT", "ATTACK_RANGE", 4.0);
-      config.set("MOVEMENT", "STRAFE_RADIUS", 5.0);
+      config.set("MOVEMENT", "AIR_SPEED", 0.05);
       const overrides = config.getAllOverrides();
       expect(overrides).toEqual({
         "COMBAT.ATTACK_RANGE": 4.0,
-        "MOVEMENT.STRAFE_RADIUS": 5.0,
+        "MOVEMENT.AIR_SPEED": 0.05,
       });
     });
 
     test("does not include reset overrides", () => {
       config.set("COMBAT", "ATTACK_RANGE", 4.0);
-      config.set("MOVEMENT", "STRAFE_RADIUS", 5.0);
+      config.set("MOVEMENT", "AIR_SPEED", 0.05);
       config.reset("COMBAT", "ATTACK_RANGE");
       expect(config.getAllOverrides()).toEqual({
-        "MOVEMENT.STRAFE_RADIUS": 5.0,
+        "MOVEMENT.AIR_SPEED": 0.05,
       });
     });
   });

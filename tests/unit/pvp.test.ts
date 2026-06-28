@@ -81,7 +81,17 @@ describe("CombatManager - Health Status", () => {
         items: () => [],
         slots: [],
       },
-      registry: { itemsByName: {} },
+      registry: {
+        itemsByName: {},
+        foodsByName: {},
+        effectsByName: {
+          Strength: { id: 5, name: "Strength" },
+          Speed: { id: 1, name: "Speed" },
+          Regeneration: { id: 10, name: "Regeneration" },
+          InstantHealth: { id: 6, name: "InstantHealth" },
+          InstantDamage: { id: 7, name: "InstantDamage" },
+        },
+      },
       time: { age: 0 },
       blockAt: () => null,
       player: { gamemode: 0 },
@@ -111,7 +121,6 @@ describe("CombatManager - Health Status", () => {
       },
       inventoryManager: {
         hasItem: () => false,
-        hasItemWithMetadata: () => false,
         hasFood: () => false,
         equipTotem: async () => {},
         equipGapple: async () => {},
@@ -134,12 +143,10 @@ describe("CombatManager - Health Status", () => {
           return Math.floor(d - 3);
         },
         isJumpPathClear: () => true,
-        getStrafePoint: () => null,
-        getStrafeYaw: () => 0,
         getJumpVelocity: () => ({ x: 0, y: 0.42, z: 0 }),
       },
       runtimeConfig: {
-        get: () => Constants.MOVEMENT.STRAFE_RADIUS,
+        get: () => Constants.MOVEMENT.AIR_SPEED,
       },
       pathfinder: { stop: async () => {} },
       __logger: {
