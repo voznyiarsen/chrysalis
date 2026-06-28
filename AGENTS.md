@@ -272,7 +272,7 @@ logger.setDebugMode(false); // suppress DEBUG output
 
 Commands are categorized based on how they are executed and registered:
 
-- **Server-only commands**: Start with `/`. They are executed via `bot.chat()` and are registered by the Minecraft server itself.
+- **Server-only commands**: Start with `/`. In production code and tests, they should be executed via `bot.utilsManager.assertCommandSuccess(command, args)` (defined in `src/utils.ts`), which sends the command and waits for the server's success message before resolving. The `bot.chat()` method should only be used inside `assertCommandSuccess` itself or for the `autosend` fallback in `src/commands.ts`.
 - **Client-only commands**: Do not have a prefix. They are executed using internal bot logic and must **never** be sent via `bot.chat()`. They are registered by modules such as `src/commands.ts`.
 
 ### Command System Architecture
@@ -475,6 +475,7 @@ When an entity's velocity vector projects its AABB _into_ a solid block's AABB (
 
 - **Don't call `ui.log()` or `console.log/error` directly** from any module other than `src/tui.ts` or `src/logger.ts`. Use the `logger` facade.
 - **Don't send client-only commands via `bot.chat()`**. Client-only commands (no `/` prefix) are handled by internal bot logic and will fail or cause errors if sent as chat.
+- **Don't use `bot.chat()` for server commands** in production code or tests. Use `bot.utilsManager.assertCommandSuccess(command, args)` instead. This ensures the command was successfully executed by waiting for the server's success message. The only exceptions are inside `assertCommandSuccess` itself and the `autosend` fallback in `src/commands.ts`.
 - **Don't add new top-level files** when an existing module can be extended. Prefer enhancing existing modules.
 - **Don't modify `.expect()` values in tests** to force a pass. Always fix the underlying issue.
 - **Don't assume the server is at fault.** If issues arise, the cause is in the codebase.
