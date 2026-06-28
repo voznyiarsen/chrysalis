@@ -123,6 +123,7 @@ function createTerminalUI(): UIBackend {
   logBox.add("└─────────────────────────────────────┘");
 
   const inputCallbacks: ((text: string) => void)[] = [];
+  let cursorPos = 0;
   inputBox.on("submit", (text: string) => {
     const timestamp = new Date().toISOString().substring(11, 19);
     logBox.add(`{cyan-fg}[${timestamp}]{/} ${text}`);
@@ -141,6 +142,7 @@ function createTerminalUI(): UIBackend {
 
     historyIndex = -1;
     currentInput = "";
+    cursorPos = 0;
 
     inputCallbacks.forEach((cb) => {
       try {
@@ -170,9 +172,10 @@ function createTerminalUI(): UIBackend {
 
     if (historyIndex < commandHistory.length - 1) {
       historyIndex++;
-      inputBox.setValue(
-        commandHistory[commandHistory.length - 1 - historyIndex],
-      );
+      const value =
+        commandHistory[commandHistory.length - 1 - historyIndex];
+      inputBox.setValue(value);
+      cursorPos = value.length;
       screen.render();
     }
   });
@@ -182,30 +185,29 @@ function createTerminalUI(): UIBackend {
 
     if (historyIndex > 0) {
       historyIndex--;
-      inputBox.setValue(
-        commandHistory[commandHistory.length - 1 - historyIndex],
-      );
+      const value =
+        commandHistory[commandHistory.length - 1 - historyIndex];
+      inputBox.setValue(value);
+      cursorPos = value.length;
     } else {
       historyIndex = -1;
       inputBox.setValue(currentInput);
+      cursorPos = currentInput.length;
     }
     screen.render();
   });
 
   inputBox.key("left", () => {
-    const currentValue = inputBox.getValue();
-    const cursorPos = inputBox.getCursorPos();
     if (cursorPos > 0) {
-      inputBox.setCursorPos(cursorPos - 1);
+      cursorPos--;
     }
     screen.render();
   });
 
   inputBox.key("right", () => {
     const currentValue = inputBox.getValue();
-    const cursorPos = inputBox.getCursorPos();
     if (cursorPos < currentValue.length) {
-      inputBox.setCursorPos(cursorPos + 1);
+      cursorPos++;
     }
     screen.render();
   });
@@ -244,7 +246,9 @@ function createTerminalUI(): UIBackend {
       if (full) {
         // Replace last token with its full form
         const prefix = text.slice(0, text.lastIndexOf(partial));
-        inputBox.setValue(prefix + full);
+        const newValue = prefix + full;
+        inputBox.setValue(newValue);
+        cursorPos = newValue.length;
         screen.render();
       } else {
         // Show possible completions

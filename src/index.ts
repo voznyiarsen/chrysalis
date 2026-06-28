@@ -139,7 +139,7 @@ async function start(): Promise<void> {
       await registry.createBot(def.number);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      logger.error(`Failed to create bot ${def.number}: ${msg}`);
+      logger.error(`Failed to create bot ${def.number}: ${msg}`, "Client");
       if (HEADLESS) process.exit(1);
     }
   }
@@ -148,7 +148,7 @@ async function start(): Promise<void> {
 
   // In headless mode, if no bots were created, exit
   if (HEADLESS && registry.bots.size === 0) {
-    logger.error("No bots created. Exiting.");
+    logger.error("No bots created. Exiting.", "Client");
     process.exit(1);
   }
 }
@@ -180,7 +180,7 @@ tui.onInput((text: string) => {
         } catch (error: unknown) {
           const err = error as Error;
           err.message = `Command execution on bot ${botNum} failed: ${err.message}`;
-          registry.getLogger(botNum).error(err);
+          registry.getLogger(botNum).error(err, "Command");
         }
       }
     }
@@ -198,7 +198,7 @@ tui.onInput((text: string) => {
         } catch (error: unknown) {
           const err = error as Error;
           err.message = `Command execution on bot ${botNum} failed: ${err.message}`;
-          registry.getLogger(botNum).error(err);
+          registry.getLogger(botNum).error(err, "Command");
         }
       }
     }
@@ -244,6 +244,6 @@ process.on("SIGINT", () => {
 
 start().catch((err: Error) => {
   err.message = `Bot startup failed: ${err.message}`;
-  logger.error(err);
+  logger.error(err, "Client");
   if (HEADLESS) process.exit(1);
 });
