@@ -131,7 +131,10 @@ export class BotRegistry {
         bot.pvp = new PVPManager(bot);
         botLog.client("  ✓ Standard plugins loaded (pathfinder, pvp)");
       } catch (e: unknown) {
-        botLog.error(`  ✗ Standard plugins failed: ${(e as Error).message}`, "Client");
+        botLog.error(
+          `  ✗ Standard plugins failed: ${(e as Error).message}`,
+          "Client",
+        );
       }
 
       // Load Pupa managers
@@ -158,7 +161,10 @@ export class BotRegistry {
         botLog.client(`  ✓ Loaded: ${loaded.join(", ")}`);
       }
       if (failed.length > 0) {
-        botLog.error(`  ✗ Failed: ${failed.map((f) => f.name).join(", ")}`, "Client");
+        botLog.error(
+          `  ✗ Failed: ${failed.map((f) => f.name).join(", ")}`,
+          "Client",
+        );
       }
 
       botLog.client(
@@ -254,7 +260,10 @@ export class BotRegistry {
           setTimeout(() => {
             botLog.client(`Reconnect attempt ${attempt}...`);
             this.createBot(botNumber).catch((err: unknown) => {
-              botLog.error(`Reconnect failed: ${(err as Error).message}`, "Client");
+              botLog.error(
+                `Reconnect failed: ${(err as Error).message}`,
+                "Client",
+              );
               attemptReconnect(attempt + 1);
             });
           }, delay);
@@ -537,7 +546,7 @@ export class BotRegistry {
       "commands.worldborder.warning.time.success",
       "commands.xp.success",
       "commands.xp.success.levels",
-      "commands.xp.success.negative.levels"
+      "commands.xp.success.negative.levels",
     ]);
 
     lm.on(bot, "message", (jsonMsg: any) => {

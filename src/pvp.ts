@@ -330,16 +330,10 @@ class CombatManager {
               "Fall: Survival impossible with Gapples, equipping Totem",
             );
             await inv().equipTotem();
-          } else if (
-            canEatEGapple &&
-            inv().hasItem("golden_apple", 1)
-          ) {
+          } else if (canEatEGapple && inv().hasItem("golden_apple", 1)) {
             this.logger.combat("Fall: Mitigating with Enchanted Golden Apple");
             await inv().equipGapple();
-          } else if (
-            canEatGapple &&
-            inv().hasItem("golden_apple", 0)
-          ) {
+          } else if (canEatGapple && inv().hasItem("golden_apple", 0)) {
             this.logger.combat("Fall: Mitigating with Golden Apple");
             await inv().equipGapple();
           } else {

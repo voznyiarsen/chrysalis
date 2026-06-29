@@ -122,7 +122,10 @@ describeE2E("E2E Pearl Tests", () => {
       try {
         await bot.waitForChunksToLoad!();
         await bot.waitForTicks!(1);
-        await bot.utilsManager.assertCommandSuccess("tp", Object.values(POSITION).join(" "));
+        await bot.utilsManager.assertCommandSuccess(
+          "tp",
+          Object.values(POSITION).join(" "),
+        );
 
         await bot.waitForChunksToLoad!();
         await bot.waitForTicks!(1);
@@ -139,7 +142,10 @@ describeE2E("E2E Pearl Tests", () => {
       try {
         await bot.waitForChunksToLoad!();
         await bot.waitForTicks!(1);
-        await bot.utilsManager.assertCommandSuccess("tp", Object.values(POSITION).join(" "));
+        await bot.utilsManager.assertCommandSuccess(
+          "tp",
+          Object.values(POSITION).join(" "),
+        );
 
         await bot.waitForChunksToLoad!();
         await bot.waitForTicks!(1);
@@ -197,10 +203,7 @@ describeE2E("E2E Pearl Tests", () => {
         offset = null;
       }
       if (offset !== null) {
-        await getIm().equipPearl(
-          targetPos,
-          offset,
-        );
+        await getIm().equipPearl(targetPos, offset);
       }
       results = [
         {
@@ -252,10 +255,7 @@ describeE2E("E2E Pearl Tests", () => {
         offset = null;
       }
       if (offset !== null) {
-        await getIm().equipPearl(
-          targetPos,
-          offset,
-        );
+        await getIm().equipPearl(targetPos, offset);
       }
       results = [
         {

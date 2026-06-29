@@ -6,8 +6,8 @@
  * offsets from the bot's position.
  */
 
-import { Bot } from 'mineflayer';
-import { Vec3 } from 'vec3';
+import { Bot } from "mineflayer";
+import { Vec3 } from "vec3";
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -42,7 +42,10 @@ export async function placeTerrain(
     const x = Math.floor(anchor.x + dx);
     const y = Math.floor(anchor.y + dy);
     const z = Math.floor(anchor.z + dz);
-    await bot.utilsManager.assertCommandSuccess("setblock", `${x} ${y} ${z} stone`);
+    await bot.utilsManager.assertCommandSuccess(
+      "setblock",
+      `${x} ${y} ${z} stone`,
+    );
     await bot.waitForTicks!(1);
   }
   await bot.waitForTicks!(2);
@@ -64,7 +67,10 @@ export async function clearTerrain(
     const x = Math.floor(anchor.x + dx);
     const y = Math.floor(anchor.y + dy);
     const z = Math.floor(anchor.z + dz);
-    await bot.utilsManager.assertCommandSuccess("setblock", `${x} ${y} ${z} air`);
+    await bot.utilsManager.assertCommandSuccess(
+      "setblock",
+      `${x} ${y} ${z} air`,
+    );
   }
   await bot.waitForTicks!(2);
 }
@@ -96,8 +102,8 @@ const BOT_ROW = 2;
 
 function pillar(x: number, z: number): BlockSpec[] {
   return [
-    { pos: [x, 0, z], type: 'stone' },
-    { pos: [x, 1, z], type: 'stone' },
+    { pos: [x, 0, z], type: "stone" },
+    { pos: [x, 1, z], type: "stone" },
   ];
 }
 

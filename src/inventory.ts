@@ -79,7 +79,11 @@ class InventoryManager {
     if (equipment) {
       for (let i = 2; i < equipment.length; i++) {
         const item = equipment[i];
-        if (item && matches(item) && (!notFull || item.count < item.stackSize)) {
+        if (
+          item &&
+          matches(item) &&
+          (!notFull || item.count < item.stackSize)
+        ) {
           results.push(item);
         }
       }
@@ -271,7 +275,10 @@ class InventoryManager {
     targetSlot: string = "hand",
   ): Promise<void> {
     await this.clearInventory();
-    await this.bot.utilsManager.assertCommandSuccess("give", `@p ${itemName} ${count}`);
+    await this.bot.utilsManager.assertCommandSuccess(
+      "give",
+      `@p ${itemName} ${count}`,
+    );
     await this.bot.waitForTicks!(Constants.TIMING.EQUIP_TICKS);
 
     for (let attempt = 0; attempt < 10; attempt++) {
@@ -493,7 +500,9 @@ class InventoryManager {
       }
     }
 
-    this.logger.inventory(`Restored ${restored}/${data.length} items from slot ${slot}`);
+    this.logger.inventory(
+      `Restored ${restored}/${data.length} items from slot ${slot}`,
+    );
     await this.setGamemode(0);
   }
 
@@ -512,7 +521,10 @@ class InventoryManager {
       this.logger.status(
         `Setting gamemode from ${(this.bot.game as any).gameMode} to ${modeName}`,
       );
-      await this.bot.utilsManager.assertCommandSuccess("gamemode", String(mode));
+      await this.bot.utilsManager.assertCommandSuccess(
+        "gamemode",
+        String(mode),
+      );
       while ((this.bot.game as any).gameMode !== modeName) {
         if (Date.now() - t0 > timeout) {
           this.logger.warning(
@@ -841,7 +853,10 @@ class InventoryManager {
     const effectsByName = (this.bot as any).registry?.effectsByName ?? {};
     const effect = effectsByName[effectName];
     if (!effect) {
-      this.logger.debug(`Buff: unknown effect ${effectName}, skipping`, "Inventory");
+      this.logger.debug(
+        `Buff: unknown effect ${effectName}, skipping`,
+        "Inventory",
+      );
       return;
     }
     const effectId = String(effect.id);
@@ -854,13 +869,19 @@ class InventoryManager {
       return;
     }
 
-    await this._useItem(potion.name, "off-hand", () => {
-      this.bot.activateItem(true);
-    }, () => {
-      return !this.bot.entity.effects[effectId as any];
-    }, () => {
-      this.bot.deactivateItem();
-    });
+    await this._useItem(
+      potion.name,
+      "off-hand",
+      () => {
+        this.bot.activateItem(true);
+      },
+      () => {
+        return !this.bot.entity.effects[effectId as any];
+      },
+      () => {
+        this.bot.deactivateItem();
+      },
+    );
   }
 
   /**

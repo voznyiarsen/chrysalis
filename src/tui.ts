@@ -172,8 +172,7 @@ function createTerminalUI(): UIBackend {
 
     if (historyIndex < commandHistory.length - 1) {
       historyIndex++;
-      const value =
-        commandHistory[commandHistory.length - 1 - historyIndex];
+      const value = commandHistory[commandHistory.length - 1 - historyIndex];
       inputBox.setValue(value);
       cursorPos = value.length;
       screen.render();
@@ -185,8 +184,7 @@ function createTerminalUI(): UIBackend {
 
     if (historyIndex > 0) {
       historyIndex--;
-      const value =
-        commandHistory[commandHistory.length - 1 - historyIndex];
+      const value = commandHistory[commandHistory.length - 1 - historyIndex];
       inputBox.setValue(value);
       cursorPos = value.length;
     } else {

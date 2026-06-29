@@ -152,7 +152,10 @@ describeE2E("E2E Inventory Tests", () => {
       try {
         await bot.waitForChunksToLoad!();
         await bot.waitForTicks!(1);
-        await bot.utilsManager.assertCommandSuccess("tp", Object.values(POSITION).join(" "));
+        await bot.utilsManager.assertCommandSuccess(
+          "tp",
+          Object.values(POSITION).join(" "),
+        );
         await bot.waitForChunksToLoad!();
         await bot.waitForTicks!(1);
         await bot.utilsManager.assertCommandSuccess("gamemode", "creative");
@@ -207,7 +210,10 @@ describeE2E("E2E Inventory Tests", () => {
       "getItemViaCommand — gives ender pearl",
       async () => {
         const im = getIm();
-        await bot.utilsManager.assertCommandSuccess("give", "@p ender_pearl 16");
+        await bot.utilsManager.assertCommandSuccess(
+          "give",
+          "@p ender_pearl 16",
+        );
         const count = im.getItemCount("ender_pearl");
         expect(count).toBeGreaterThanOrEqual(16);
       },
@@ -218,7 +224,10 @@ describeE2E("E2E Inventory Tests", () => {
       "getItemViaCommand — gives diamond sword",
       async () => {
         const im = getIm();
-        await bot.utilsManager.assertCommandSuccess("give", "@p diamond_sword 1");
+        await bot.utilsManager.assertCommandSuccess(
+          "give",
+          "@p diamond_sword 1",
+        );
         expect(im.hasItem("diamond_sword")).toBe(true);
       },
       TIMEOUT_MS,
@@ -228,7 +237,10 @@ describeE2E("E2E Inventory Tests", () => {
       "getItemViaCommand — gives stack of golden apples",
       async () => {
         const im = getIm();
-        await bot.utilsManager.assertCommandSuccess("give", "@p golden_apple 64");
+        await bot.utilsManager.assertCommandSuccess(
+          "give",
+          "@p golden_apple 64",
+        );
         const count = im.getItemCount("golden_apple");
         // Server may double stack sizes for some items
         expect(count).toBeGreaterThanOrEqual(64);
@@ -325,7 +337,10 @@ describeE2E("E2E Inventory Tests", () => {
         if (gapple) {
           await bot.creative.setInventorySlot(36, gapple);
         } else {
-          await bot.utilsManager.assertCommandSuccess("give", "@p golden_apple 1");
+          await bot.utilsManager.assertCommandSuccess(
+            "give",
+            "@p golden_apple 1",
+          );
         }
         await bot.waitForTicks!(2);
         const has = im.hasItem("golden_apple", 0);
@@ -337,7 +352,10 @@ describeE2E("E2E Inventory Tests", () => {
     test(
       "hasItem with metadata — rejects wrong metadata",
       async () => {
-        await bot.utilsManager.assertCommandSuccess("give", "@p golden_apple 1");
+        await bot.utilsManager.assertCommandSuccess(
+          "give",
+          "@p golden_apple 1",
+        );
         const im = getIm();
         const has = im.hasItem("golden_apple", 1);
         expect(has).toBe(false);
@@ -385,10 +403,18 @@ describeE2E("E2E Inventory Tests", () => {
         await im.equipArmor();
         await bot.waitForTicks!(2);
 
-        expect(bot.inventory.slots[bot.getEquipmentDestSlot("head")]?.name).toBe("iron_helmet");
-        expect(bot.inventory.slots[bot.getEquipmentDestSlot("torso")]?.name).toBe("diamond_chestplate");
-        expect(bot.inventory.slots[bot.getEquipmentDestSlot("legs")]?.name).toBe("iron_leggings");
-        expect(bot.inventory.slots[bot.getEquipmentDestSlot("feet")]?.name).toBe("iron_boots");
+        expect(
+          bot.inventory.slots[bot.getEquipmentDestSlot("head")]?.name,
+        ).toBe("iron_helmet");
+        expect(
+          bot.inventory.slots[bot.getEquipmentDestSlot("torso")]?.name,
+        ).toBe("diamond_chestplate");
+        expect(
+          bot.inventory.slots[bot.getEquipmentDestSlot("legs")]?.name,
+        ).toBe("iron_leggings");
+        expect(
+          bot.inventory.slots[bot.getEquipmentDestSlot("feet")]?.name,
+        ).toBe("iron_boots");
       },
       TIMEOUT_MS,
     );
@@ -436,7 +462,9 @@ describeE2E("E2E Inventory Tests", () => {
         await im.equipArmor();
         await bot.waitForTicks!(2);
 
-        expect(bot.inventory.slots[bot.getEquipmentDestSlot("torso")]?.name).toBe("diamond_chestplate");
+        expect(
+          bot.inventory.slots[bot.getEquipmentDestSlot("torso")]?.name,
+        ).toBe("diamond_chestplate");
       },
       TIMEOUT_MS,
     );
@@ -501,10 +529,15 @@ describeE2E("E2E Inventory Tests", () => {
     test(
       "equipGapple — equips enchanted golden apple",
       async () => {
-        await bot.utilsManager.assertCommandSuccess("give", "@p golden_apple 1");
+        await bot.utilsManager.assertCommandSuccess(
+          "give",
+          "@p golden_apple 1",
+        );
         await bot.waitForTicks!(5);
         const im = getIm();
-        const gapple = bot.inventory.items().find((i: any) => i.name === "golden_apple");
+        const gapple = bot.inventory
+          .items()
+          .find((i: any) => i.name === "golden_apple");
         if (gapple) {
           await bot.creative.setInventorySlot(36, gapple);
           await bot.waitForTicks!(2);
@@ -551,7 +584,9 @@ describeE2E("E2E Inventory Tests", () => {
         await im.equipFood();
         await bot.waitForTicks!(2);
         // cooked_porkchop has higher saturation (12.8) than bread (6.0)
-        expect(bot.inventory.slots[offHandSlot()]?.name).toBe("cooked_porkchop");
+        expect(bot.inventory.slots[offHandSlot()]?.name).toBe(
+          "cooked_porkchop",
+        );
       },
       TIMEOUT_MS,
     );
@@ -576,7 +611,9 @@ describeE2E("E2E Inventory Tests", () => {
         const result = await im.equipTotem();
         await bot.waitForTicks!(2);
         expect(result).toBe(true);
-        expect(bot.inventory.slots[offHandSlot()]?.name).toBe("totem_of_undying");
+        expect(bot.inventory.slots[offHandSlot()]?.name).toBe(
+          "totem_of_undying",
+        );
       },
       TIMEOUT_MS,
     );
@@ -627,13 +664,17 @@ describeE2E("E2E Inventory Tests", () => {
         await bot.waitForTicks!(2);
         await im.equipArmor();
         await bot.waitForTicks!(2);
-        expect(bot.inventory.slots[bot.getEquipmentDestSlot("head")]).not.toBeNull();
+        expect(
+          bot.inventory.slots[bot.getEquipmentDestSlot("head")],
+        ).not.toBeNull();
 
         await im.unequipAllItems();
         await bot.waitForTicks!(2);
 
         for (const dest of ["head", "torso", "legs", "feet", "off-hand"]) {
-          expect(bot.inventory.slots[bot.getEquipmentDestSlot(dest)]).toBeNull();
+          expect(
+            bot.inventory.slots[bot.getEquipmentDestSlot(dest)],
+          ).toBeNull();
         }
       },
       TIMEOUT_MS,

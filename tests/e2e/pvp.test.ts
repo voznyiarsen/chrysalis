@@ -97,7 +97,10 @@ async function killNearbyEntities(
   bot: Bot,
   radius: number = 30,
 ): Promise<void> {
-  await bot.utilsManager.assertCommandSuccess("kill", `@e[type=!player,distance=..${radius}]`);
+  await bot.utilsManager.assertCommandSuccess(
+    "kill",
+    `@e[type=!player,distance=..${radius}]`,
+  );
   await bot.waitForTicks!(3);
 }
 
@@ -150,7 +153,10 @@ describeE2E("E2E PvP Tests", () => {
       try {
         await bot.waitForChunksToLoad!();
         await bot.waitForTicks!(1);
-        await bot.utilsManager.assertCommandSuccess("tp", Object.values(POSITION).join(" "));
+        await bot.utilsManager.assertCommandSuccess(
+          "tp",
+          Object.values(POSITION).join(" "),
+        );
         await bot.waitForChunksToLoad!();
         await bot.waitForTicks!(1);
         await bot.utilsManager.assertCommandSuccess("gamemode", "creative");
@@ -166,7 +172,10 @@ describeE2E("E2E PvP Tests", () => {
         await killNearbyEntities(bot, 30);
         await bot.waitForChunksToLoad!();
         await bot.waitForTicks!(1);
-        await bot.utilsManager.assertCommandSuccess("tp", Object.values(POSITION).join(" "));
+        await bot.utilsManager.assertCommandSuccess(
+          "tp",
+          Object.values(POSITION).join(" "),
+        );
         await bot.waitForChunksToLoad!();
         await bot.waitForTicks!(1);
         await resetBotState();
@@ -493,7 +502,10 @@ describeE2E("E2E PvP Tests", () => {
       "getFallProtectionStatus — safe when velocity is upward",
       async () => {
         const cm = getCm();
-        await bot.utilsManager.assertCommandSuccess("tp", `${POSITION.x} ${POSITION.y} ${POSITION.z}`);
+        await bot.utilsManager.assertCommandSuccess(
+          "tp",
+          `${POSITION.x} ${POSITION.y} ${POSITION.z}`,
+        );
         await bot.waitForTicks!(2);
         bot.setControlState("jump", true);
         await bot.waitForTicks!(1);
@@ -513,13 +525,19 @@ describeE2E("E2E PvP Tests", () => {
         await bot.utilsManager.assertCommandSuccess("gamemode", "survival");
         await bot.waitForTicks!(2);
 
-        await bot.utilsManager.assertCommandSuccess("tp", `${POSITION.x} ${POSITION.y + 50} ${POSITION.z}`);
+        await bot.utilsManager.assertCommandSuccess(
+          "tp",
+          `${POSITION.x} ${POSITION.y + 50} ${POSITION.z}`,
+        );
         await bot.waitForTicks!(2);
 
         const status = cm.getFallProtectionStatus();
         expect(status.isDangerous).toBe(true);
 
-        await bot.utilsManager.assertCommandSuccess("tp", `${POSITION.x} ${POSITION.y} ${POSITION.z}`);
+        await bot.utilsManager.assertCommandSuccess(
+          "tp",
+          `${POSITION.x} ${POSITION.y} ${POSITION.z}`,
+        );
         await bot.waitForTicks!(2);
         await bot.utilsManager.assertCommandSuccess("gamemode", "creative");
         await bot.waitForTicks!(2);
@@ -535,7 +553,10 @@ describeE2E("E2E PvP Tests", () => {
         await bot.utilsManager.assertCommandSuccess("gamemode", "survival");
         await bot.waitForTicks!(2);
 
-        await bot.utilsManager.assertCommandSuccess("tp", `${POSITION.x} ${POSITION.y + 50} ${POSITION.z}`);
+        await bot.utilsManager.assertCommandSuccess(
+          "tp",
+          `${POSITION.x} ${POSITION.y + 50} ${POSITION.z}`,
+        );
         await bot.waitForTicks!(2);
 
         const status = cm.getFallProtectionStatus();
@@ -543,7 +564,10 @@ describeE2E("E2E PvP Tests", () => {
         expect(status.predictedDamage).toBeDefined();
         expect(status.predictedDamage).toBeGreaterThan(0);
 
-        await bot.utilsManager.assertCommandSuccess("tp", `${POSITION.x} ${POSITION.y} ${POSITION.z}`);
+        await bot.utilsManager.assertCommandSuccess(
+          "tp",
+          `${POSITION.x} ${POSITION.y} ${POSITION.z}`,
+        );
         await bot.waitForTicks!(2);
         await bot.utilsManager.assertCommandSuccess("gamemode", "creative");
         await bot.waitForTicks!(2);
@@ -563,8 +587,14 @@ describeE2E("E2E PvP Tests", () => {
         const cm = getCm();
 
         await bot.utilsManager.assertCommandSuccess("give", "@p iron_helmet 1");
-        await bot.utilsManager.assertCommandSuccess("give", "@p iron_chestplate 1");
-        await bot.utilsManager.assertCommandSuccess("give", "@p iron_leggings 1");
+        await bot.utilsManager.assertCommandSuccess(
+          "give",
+          "@p iron_chestplate 1",
+        );
+        await bot.utilsManager.assertCommandSuccess(
+          "give",
+          "@p iron_leggings 1",
+        );
         await bot.utilsManager.assertCommandSuccess("give", "@p iron_boots 1");
         await bot.waitForTicks!(5);
 
@@ -581,7 +611,10 @@ describeE2E("E2E PvP Tests", () => {
       async () => {
         const cm = getCm();
 
-        await bot.utilsManager.assertCommandSuccess("give", "@p diamond_sword 1");
+        await bot.utilsManager.assertCommandSuccess(
+          "give",
+          "@p diamond_sword 1",
+        );
         await bot.waitForTicks!(5);
 
         await cm.executeDecisions();
@@ -650,7 +683,10 @@ describeE2E("E2E PvP Tests", () => {
 
         const zombie = await summonMob(bot);
 
-        await bot.utilsManager.assertCommandSuccess("tp", `@e[type=zombie,limit=1,sort=nearest] ${POSITION.x + 60} ${POSITION.y} ${POSITION.z}`);
+        await bot.utilsManager.assertCommandSuccess(
+          "tp",
+          `@e[type=zombie,limit=1,sort=nearest] ${POSITION.x + 60} ${POSITION.y} ${POSITION.z}`,
+        );
         await bot.waitForTicks!(5);
 
         const eyePos = bot.entity.position.offset(
@@ -707,7 +743,10 @@ describeE2E("E2E PvP Tests", () => {
         cm._edgeSneaking = true;
         bot.setControlState("sneak", true);
 
-        await bot.utilsManager.assertCommandSuccess("tp", `${POSITION.x + 0.1} ${POSITION.y} ${POSITION.z}`);
+        await bot.utilsManager.assertCommandSuccess(
+          "tp",
+          `${POSITION.x + 0.1} ${POSITION.y} ${POSITION.z}`,
+        );
         await bot.waitForTicks!(5);
 
         cm.doEdgeProtection();
@@ -767,8 +806,14 @@ describeE2E("E2E PvP Tests", () => {
         await getPvp().attack(zombie);
         expect(getPvp().target).toBe(zombie);
 
-        await bot.utilsManager.assertCommandSuccess("give", "@p iron_chestplate 1");
-        await bot.utilsManager.assertCommandSuccess("give", "@p diamond_sword 1");
+        await bot.utilsManager.assertCommandSuccess(
+          "give",
+          "@p iron_chestplate 1",
+        );
+        await bot.utilsManager.assertCommandSuccess(
+          "give",
+          "@p diamond_sword 1",
+        );
         await bot.waitForTicks!(3);
 
         // doDecide should run without error
@@ -846,9 +891,7 @@ describeE2E("E2E PvP Tests", () => {
     test(
       "clearGoal — clears pathfinder goal",
       () => {
-        getPvp().setGoal(
-          new Vec3(POSITION.x + 10, POSITION.y, POSITION.z),
-        );
+        getPvp().setGoal(new Vec3(POSITION.x + 10, POSITION.y, POSITION.z));
         getPvp().clearGoal();
         expect(getPvp().goal).toBeNull();
       },
