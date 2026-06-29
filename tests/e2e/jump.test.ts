@@ -120,7 +120,10 @@ describeE2E("E2E Jump Tests", () => {
       try {
         await bot.waitForChunksToLoad!();
         await bot.waitForTicks!(1);
-        await bot.utilsManager.assertCommandSuccess("tp", Object.values(POSITION).join(" "));
+        await bot.utilsManager.assertCommandSuccess(
+          "tp",
+          Object.values(POSITION).join(" "),
+        );
 
         await bot.waitForChunksToLoad!();
         await bot.waitForTicks!(1);
@@ -137,7 +140,10 @@ describeE2E("E2E Jump Tests", () => {
       try {
         await bot.waitForChunksToLoad!();
         await bot.waitForTicks!(1);
-        await bot.utilsManager.assertCommandSuccess("tp", Object.values(POSITION).join(" "));
+        await bot.utilsManager.assertCommandSuccess(
+          "tp",
+          Object.values(POSITION).join(" "),
+        );
 
         await bot.waitForChunksToLoad!();
         await bot.waitForTicks!(1);
@@ -200,7 +206,10 @@ describeE2E("E2E Jump Tests", () => {
     beforeEach(async () => {
       await bot.waitForChunksToLoad!();
       await bot.waitForTicks!(1);
-      await bot.utilsManager.assertCommandSuccess("tp", Object.values(POSITION).join(" "));
+      await bot.utilsManager.assertCommandSuccess(
+        "tp",
+        Object.values(POSITION).join(" "),
+      );
       await bot.waitForChunksToLoad!();
       await bot.waitForTicks!(1);
     }, TIMEOUT_MS);
@@ -222,6 +231,8 @@ describeE2E("E2E Jump Tests", () => {
               `${dir.name} ${distance} blocks: ${result.toFixed(3)}b remaining`,
               "Movement",
             );
+            // Assert jump accuracy: remaining distance must be <= 0.3 blocks
+            expect(result).toBeLessThanOrEqual(0.3);
           },
           TIMEOUT_MS,
         );
@@ -249,6 +260,84 @@ describeE2E("E2E Jump Tests", () => {
     });
   });
 
+  describe("jumpViaOffset diagonal", () => {
+    const directions = [
+      { name: "North-East", offset: new Vec3(1, 0, -1) },
+      { name: "North-West", offset: new Vec3(-1, 0, -1) },
+      { name: "South-East", offset: new Vec3(1, 0, 1) },
+      { name: "South-West", offset: new Vec3(-1, 0, 1) },
+    ];
+    const distances = [1.0, 1.5, 2.0, 2.5, 3.0];
+
+    const results: { direction: string; distance: number; result: number }[] =
+      [];
+
+    beforeEach(async () => {
+      await bot.waitForChunksToLoad!();
+      await bot.waitForTicks!(1);
+      await bot.utilsManager.assertCommandSuccess(
+        "tp",
+        Object.values(POSITION).join(" "),
+      );
+      await bot.waitForChunksToLoad!();
+      await bot.waitForTicks!(1);
+    }, TIMEOUT_MS);
+
+    for (const dir of directions) {
+      for (const distance of distances) {
+        test(
+          `${dir.name} ${distance} blocks`,
+          async () => {
+            const result = await bot.utilsManager.jumpViaOffset(
+              new Vec3(
+                dir.offset.x * distance,
+                0,
+                dir.offset.z * distance,
+              ),
+            );
+            results.push({
+              direction: dir.name,
+              distance,
+              result,
+            });
+            logger.info(
+              `${dir.name} ${distance} blocks: ${result.toFixed(3)}b remaining`,
+              "Movement",
+            );
+            // Assert jump accuracy: remaining distance must be <= 0.3 blocks
+            expect(result).toBeLessThanOrEqual(0.3);
+          },
+          TIMEOUT_MS,
+        );
+      }
+    }
+
+    afterAll(() => {
+      // Should have 4 directions × 5 distances = 20 total tests
+      expect(results.length).toBe(20);
+
+      // Check that we have all 4 diagonal directions
+      const directionNames = [...new Set(results.map((r) => r.direction))];
+      expect(directionNames).toEqual(
+        expect.arrayContaining([
+          "North-East",
+          "North-West",
+          "South-East",
+          "South-West",
+        ]),
+      );
+
+      // Check that we have all 5 distances
+      const distanceValues = [...new Set(results.map((r) => r.distance))];
+      expect(distanceValues).toEqual([1.0, 1.5, 2.0, 2.5, 3.0]);
+
+      logger.info(
+        `jumpViaOffset diagonal results: ${results.length} tests completed`,
+        "Movement",
+      );
+    });
+  });
+
   test(
     "collisionStress — runs all 9 obstacle scenarios",
     async () => {
@@ -267,17 +356,26 @@ describeE2E("E2E Jump Tests", () => {
       const targetPos = new Vec3(0.5, 1, 0.5);
       const utils = getUtils();
       for (const scenario of scenarios) {
-        await bot.utilsManager.assertCommandSuccess("tp", `${bot.username} 3 1 0`);
+        await bot.utilsManager.assertCommandSuccess(
+          "tp",
+          `${bot.username} 3 1 0`,
+        );
         await bot.waitForTicks!(3);
         if (scenario.obstacle) {
           const o = scenario.obstacle;
-          await bot.utilsManager.assertCommandSuccess("setblock", `${o.x} ${o.y} ${o.z} dirt`);
+          await bot.utilsManager.assertCommandSuccess(
+            "setblock",
+            `${o.x} ${o.y} ${o.z} dirt`,
+          );
           await bot.waitForTicks!(3);
         }
         utils.isJumpPathClear(source, targetPos);
         if (scenario.obstacle) {
           const o = scenario.obstacle;
-          await bot.utilsManager.assertCommandSuccess("setblock", `${o.x} ${o.y} ${o.z} air`);
+          await bot.utilsManager.assertCommandSuccess(
+            "setblock",
+            `${o.x} ${o.y} ${o.z} air`,
+          );
           await bot.waitForTicks!(3);
         }
       }
