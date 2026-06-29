@@ -35,8 +35,13 @@ export const Constants = {
     JUMP_VELOCITY: 0.42,
     /** Horizontal velocity boost applied during a sprint-jump takeoff */
     JUMP_BOOST: 0.2,
-    /** Empirical calibration factor for jump velocity to account for model inaccuracies */
-    JUMP_CALIBRATION: 0.85,
+    /**
+     * Correction factor to account for differences between LCE physics model
+     * and actual server physics. The server applies ~21% more effective friction
+     * than the LCE model predicts, so computed velocities must be scaled down.
+     * Determined empirically by measuring jump distance vs target distance.
+     */
+    JUMP_CORRECTION: 0.825,
     /** Momentum thresholds for stopping movement */
     MOMENTUM_THRESHOLD_1_8: 0.005,
     /** Momentum thresholds for stopping movement (1.9+) */
@@ -324,5 +329,3 @@ export const Constants = {
     },
   },
 } as const;
-
-

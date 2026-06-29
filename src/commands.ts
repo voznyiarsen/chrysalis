@@ -183,7 +183,9 @@ export class CommandManager {
         handler: () => {
           const block = this.bot.world.getBlock(this.bot.entity.position);
           if (block) {
-            this.logger.status(`Block at current position: ${block.name} (id: ${block.type})`);
+            this.logger.status(
+              `Block at current position: ${block.name} (id: ${block.type})`,
+            );
           } else {
             this.logger.status("No block at current position");
           }
@@ -279,7 +281,8 @@ export class CommandManager {
         },
       },
       jump: {
-        description: "Jump toward an offset position and return distance remaining",
+        description:
+          "Jump toward an offset position and return distance remaining",
         subcommands: {
           "<xoffset>": {
             description: "X offset from current position",
@@ -396,7 +399,10 @@ export class CommandManager {
         await result.node.handler(tokens, resolved);
       } catch (error: unknown) {
         const msg = error instanceof Error ? error.message : String(error);
-        this.logger.error(`Error executing command '${resolved}': ${msg}`, "Command");
+        this.logger.error(
+          `Error executing command '${resolved}': ${msg}`,
+          "Command",
+        );
       }
       return;
     }
@@ -641,7 +647,10 @@ export class CommandManager {
     const slotNumber = parseInt(args[1], 10);
     const item = this.bot.inventory!.slots![slotNumber];
     if (!item) {
-      this.logger.error(new Error(`Item in slot ${slotNumber} not found`), "Inventory");
+      this.logger.error(
+        new Error(`Item in slot ${slotNumber} not found`),
+        "Inventory",
+      );
       return;
     }
     this.logger.debug(
@@ -727,6 +736,7 @@ export class CommandManager {
 
   /**
    * Jump toward an offset position and return distance remaining.
+   * Uses accurate physics-based velocity calculation.
    * args[1]=xoffset, args[2]=yoffset, args[3]=zoffset
    */
   async jump(args: string[]): Promise<void> {
@@ -748,7 +758,7 @@ export class CommandManager {
     // Wait until settled on ground
     await (this.bot as any).combatManager._waitUntilSettled();
 
-    // Calculate and apply jump impulse
+    // Calculate and apply jump impulse using accurate physics
     const utils = (this.bot as any).utilsManager;
     const impulse = utils.getJumpVelocity(source, target);
     if (impulse) {
@@ -763,7 +773,9 @@ export class CommandManager {
     const dist = finalPos.distanceTo(target);
 
     this.logger.command(
-      `Jump: target position (${target.x.toFixed(2)}, ${target.y.toFixed(2)}, ${target.z.toFixed(2)}). Final position: (${finalPos.x.toFixed(2)}, ${finalPos.y.toFixed(2)}, ${finalPos.z.toFixed(2)}). Distance remaining: ${dist.toFixed(3)}b`,
+      `Jump: target (${target.x.toFixed(2)}, ${target.y.toFixed(2)}, ${target.z.toFixed(2)}). ` +
+      `Final: (${finalPos.x.toFixed(2)}, ${finalPos.y.toFixed(2)}, ${finalPos.z.toFixed(2)}). ` +
+      `Dist remaining: ${dist.toFixed(3)}b`,
     );
   }
 
@@ -787,7 +799,10 @@ export class CommandManager {
     const m = parseInt(args[3], 10);
 
     if (n <= 0 || m < 0) {
-      this.logger.error("Invalid arguments: run <cmd> <N> <M> where N>0, M>=0", "Command");
+      this.logger.error(
+        "Invalid arguments: run <cmd> <N> <M> where N>0, M>=0",
+        "Command",
+      );
       return;
     }
 
@@ -951,7 +966,10 @@ export class CommandManager {
       }
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : String(error);
-      this.logger.error(`Error calling function '${functionName}': ${msg}`, "Command");
+      this.logger.error(
+        `Error calling function '${functionName}': ${msg}`,
+        "Command",
+      );
     }
   }
 }
@@ -963,7 +981,10 @@ export function attachCommands(bot: Bot): Bot {
   try {
     bot.commandManager = new CommandManager(bot);
   } catch (error: unknown) {
-    logger.error(`CommandManager attachment failed: ${(error as Error).message}`, "Command");
+    logger.error(
+      `CommandManager attachment failed: ${(error as Error).message}`,
+      "Command",
+    );
     throw error;
   }
   // Attach the bot to the logger so the message listener can be registered.

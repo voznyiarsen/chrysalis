@@ -219,11 +219,7 @@ declare class UtilsManager {
   getCollisions(aabb: AABB, minYThreshold?: number): AABB[];
   isJumpPathClear(source: Vec3, target: Vec3): boolean;
   getHorizontalSpeed(): number;
-  getJumpVelocity(
-    source: Vec3,
-    target: Vec3,
-    angleDeg?: number,
-  ): Vec3 | null;
+  getJumpVelocity(source: Vec3, target: Vec3, angleDeg?: number): Vec3 | null;
   jumpViaOffset(offset?: Vec3): Promise<number>;
   getFlatVelocity(
     source: Vec3,

@@ -153,20 +153,13 @@ export function isJumpPathClear(
 
   // Use getJumpVelocity for the initial velocity so the simulation matches
   // the actual impulse applied by jump logic.
-  const jumpVel = getJumpVelocity(
-    source,
-    target,
-    0,
-    getSlipperiness,
-    () => Math.hypot(botEntity.velocity.x, botEntity.velocity.z),
+  const jumpVel = getJumpVelocity(source, target, 0, getSlipperiness, () =>
+    Math.hypot(botEntity.velocity.x, botEntity.velocity.z),
   );
   // Decompose jumpVel into magnitude along the target direction.
   // jumpVel.x = dirX * vH1, jumpVel.z = dirZ * vH1 → vH1 = jumpVel.x / dirX
   // Handle dirX=0 by using dirZ component instead.
-  const vH1 =
-    Math.abs(dirX) > 1e-6
-      ? jumpVel.x / dirX
-      : jumpVel.z / dirZ;
+  const vH1 = Math.abs(dirX) > 1e-6 ? jumpVel.x / dirX : jumpVel.z / dirZ;
   let currPos = source.clone();
   let currVel = new Vec3(
     dirX * vH1,
@@ -265,10 +258,11 @@ export function isJumpPathClear(
 /**
  * Compute a velocity vector for a jump toward a target.
  *
- * Uses the LCE ballistic model: the initial horizontal velocity needed to
- * reach the target under LCE airborne physics (gravity=0.08, drag=0.98,
- * friction=0.91) WITHOUT further air input.  The bot can optionally apply
- * air steering (seeairAccel` parameter) to extend.
+ * Uses accurate LCE physics: ground friction (St * 0.91) is applied on the
+ * takeoff tick, then air friction (0.91) on each subsequent airborne tick.
+ * This matches Mob::travel() (Mob.cpp:953-1060) where onGround is still true
+ * at the start of the takeoff tick, so ground friction is used for horizontal
+ * deceleration, even though the bot is moving upward with yd=0.42.
  *
  * LCE reference: Mob::jumpFromGround() (Mob.cpp:1329-1343) sets yd=0.42;
  * gravity and drag decay y velocity each tick until landing.
@@ -306,39 +300,57 @@ export function getJumpVelocity(
   }
   if (airborneTicks < 1) airborneTicks = 1;
 
-  // ── Horizontal distance covered during airborne ticks ────────────────
-  // Under LCE physics with friction=0.91 and optional air acceleration:
-  //   Each tick: v = v * 0.91 + airAccel; dist += v
-  //   Total distance = vH1 * sum(0.91^k, k=0..N-1) + airAccel * sum(0.91^(N-k-1), k=0..N-1)
-  //   = vH1 * geomSum(0.91, N) + airAccel * geomSum(0.91, N)
-  // Solving for vH1 to cover distance `len`:
-  //   vH1 = (len - airAccel * geomSum) / geomSum
+  // ── Horizontal distance calculation ──────────────────────────────────
+  // Accurate LCE model: tick 0 uses ground friction, ticks 1..N-1 use air friction.
+  //
+  // Let vH1 = initial horizontal velocity we need to compute.
+  // Let f_g = ground friction = St * 0.91 (applied on tick 0)
+  // Let f_a = air friction = 0.91 (applied on ticks 1..N-1)
+  // Let N = airborne ticks
+  //
+  // Tick 0 (takeoff):
+  //   distance += vH1
+  //   velocity after friction = vH1 * f_g
+  //
+  // Tick k (k = 1..N-1):
+  //   velocity before move = vel_after_tick_(k-1) + airAccel
+  //   distance += velocity before move
+  //   velocity after friction = (velocity before move) * f_a
+  //
+  // Total distance D = vH1 + vH1*f_g * geomSum(f_a, N-1) + airAccel * (N-1 + geomSum(f_a, N-1))
+  //
+  // Solving for vH1:
+  //   vH1 = (len - airAccel * (N-1 + geomSum(f_a, N-1))) / (1 + f_g * geomSum(f_a, N-1))
+
   const St = getSlipperiness(source);
   const AIR_FRICTION = Constants.PHYSICS.MOMENTUM; // 0.91
-  const geomSum =
-    (1 - Math.pow(AIR_FRICTION, airborneTicks)) / (1 - AIR_FRICTION);
+  const GROUND_FRICTION = St * AIR_FRICTION; // e.g., 0.6 * 0.91 = 0.546
 
-  // Ground momentum at takeoff preserves some pre-existing horizontal speed.
-  // LCE: friction at takeoff = block.friction * 0.91 (Mob.cpp:1000-1001).
-  const GROUND_FRICTION = St * AIR_FRICTION;
-  const groundGeomSum =
-    (1 - Math.pow(GROUND_FRICTION, airborneTicks)) / (1 - GROUND_FRICTION);
+  // Geometric sum for air friction over (N-1) ticks
+  const airGeomSum =
+    airborneTicks > 1
+      ? (1 - Math.pow(AIR_FRICTION, airborneTicks - 1)) / (1 - AIR_FRICTION)
+      : 0;
 
-  // Solve for initial horizontal speed vH1:
-  // len = vH1 * airGeomSum + vH0 * groundGeomSum + airAccel * airGeomSum
-  // where vH0 = getHorizontalSpeed() (pre-existing horizontal speed)
-  const vH0 = getHorizontalSpeed();
-  const calibrationFactor = Constants.PHYSICS.JUMP_CALIBRATION;
-  const vH1 =
-    ((len - airAccel * geomSum - vH0 * groundGeomSum) / geomSum) *
-    calibrationFactor;
+  // Contribution from air acceleration
+  const airAccelContribution =
+    airAccel * ((airborneTicks - 1) + airGeomSum);
+
+  // Denominator: 1 (tick 0 distance) + f_g * airGeomSum (decayed initial velocity)
+  const denominator = 1 + GROUND_FRICTION * airGeomSum;
+
+  const vH1 = (len - airAccelContribution) / denominator;
+
+  // Apply correction factor for server physics differences
+  const correctionFactor = Constants.PHYSICS.JUMP_CORRECTION;
+  const vH1Corrected = vH1 * correctionFactor;
 
   // ── Apply angle rotation ────────────────────────────────────────────
   const rad = (angleDeg * Math.PI) / 180;
   const cosA = Math.cos(rad);
   const sinA = Math.sin(rad);
-  const vx = ((dx / len) * cosA - (dz / len) * sinA) * vH1;
-  const vz = ((dx / len) * sinA + (dz / len) * cosA) * vH1;
+  const vx = ((dx / len) * cosA - (dz / len) * sinA) * vH1Corrected;
+  const vz = ((dx / len) * sinA + (dz / len) * cosA) * vH1Corrected;
   return new Vec3(vx, vy, vz);
 }
 
