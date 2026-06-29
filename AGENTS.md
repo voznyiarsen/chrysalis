@@ -329,6 +329,7 @@ require a running Minecraft server and use mocked bot instances. Suites:
 - `tests/unit/pvp.test.ts` — CombatDecision, health status, targeting, fall protection
 - `tests/unit/config.test.ts` — RuntimeConfig get/set/reset/overrides
 - `tests/unit/pvp-manager.test.ts` — Attack speed, cooldown, damage multiplier
+- `tests/unit/movement.test.ts` — Jump velocity calculation, ground friction on takeoff tick
 
 ### E2E Tests (Jest)
 
@@ -499,6 +500,7 @@ When an entity's velocity vector projects its AABB _into_ a solid block's AABB (
    - Scope of the change (e.g., refactor vs. targeted fix)
 
    If the task description already provides all the necessary details (specific files, exact behavior, test expectations), proceed without asking. Prefer a single focused question over multiple ones when possible.
+
 2. **Divide-Verify-Refine**: For complex tasks, break them down into smaller, manageable sub-tasks (Divide). After each sub-task, verify the result through builds, tests, or manual inspection (Verify). If issues are found, refine the implementation before proceeding to the next sub-task (Refine).
 3. When implementing new features, prefer enhancing existing modules over creating new top-level files.
 4. **Formatting**: Run linters to auto-fix formatting issues instead of manual fixes:
@@ -546,10 +548,11 @@ Using the `terminal` tool:
    - `command` (required): The shell one-liner to execute. Do not include shell substitutions like `$VAR`, `$(...)`, or backticks — resolve values beforehand.
    - Always provide both parameters in every `terminal` tool invocation without exception.
 10. **Use MCP Web Search Tools**: When you need to look up information outside the codebase — such as library documentation, API references, Minecraft protocol details, or library changelogs — prefer the MCP web search tools (`web_search_exa`, `web_fetch_exa`, `firecrawl_search`, `firecrawl_scrape`) over guessing or relying on stale local knowledge. This is especially useful for:
-   - Looking up the latest Mineflayer API changes or usage patterns.
-   - Finding documentation for npm packages or Minecraft protocol behavior.
-   - Researching bugs, errors, or unfamiliar patterns encountered during development.
-   - Checking for updates or releases of dependencies.
+
+- Looking up the latest Mineflayer API changes or usage patterns.
+- Finding documentation for npm packages or Minecraft protocol behavior.
+- Researching bugs, errors, or unfamiliar patterns encountered during development.
+- Checking for updates or releases of dependencies.
 
 ---
 
