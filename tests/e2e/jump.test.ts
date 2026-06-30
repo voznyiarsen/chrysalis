@@ -338,6 +338,92 @@ describeE2E("E2E Jump Tests", () => {
     });
   });
 
+  describe("jumpViaOffset tertiary", () => {
+    const directions = [
+      { name: "North-East-Up", offset: new Vec3(1, 1, -1) },
+      { name: "North-West-Up", offset: new Vec3(-1, 1, -1) },
+      { name: "South-East-Up", offset: new Vec3(1, 1, 1) },
+      { name: "South-West-Up", offset: new Vec3(-1, 1, 1) },
+      { name: "North-East-Down", offset: new Vec3(1, -1, -1) },
+      { name: "North-West-Down", offset: new Vec3(-1, -1, -1) },
+      { name: "South-East-Down", offset: new Vec3(1, -1, 1) },
+      { name: "South-West-Down", offset: new Vec3(-1, -1, 1) },
+    ];
+    const distances = [1.0, 1.5, 2.0];
+
+    const results: { direction: string; distance: number; result: number }[] =
+      [];
+
+    beforeEach(async () => {
+      await bot.waitForChunksToLoad!();
+      await bot.waitForTicks!(1);
+      await bot.utilsManager.assertCommandSuccess(
+        "tp",
+        Object.values(POSITION).join(" "),
+      );
+      await bot.waitForChunksToLoad!();
+      await bot.waitForTicks!(1);
+    }, TIMEOUT_MS);
+
+    for (const dir of directions) {
+      for (const distance of distances) {
+        test(
+          `${dir.name} ${distance} blocks`,
+          async () => {
+            const result = await bot.utilsManager.jumpViaOffset(
+              new Vec3(
+                dir.offset.x * distance,
+                dir.offset.y * distance,
+                dir.offset.z * distance,
+              ),
+            );
+            results.push({
+              direction: dir.name,
+              distance,
+              result,
+            });
+            logger.info(
+              `${dir.name} ${distance} blocks: ${result.toFixed(3)}b remaining`,
+              "Movement",
+            );
+            // Assert jump accuracy: remaining distance must be <= 0.3 blocks
+            expect(result).toBeLessThanOrEqual(0.3);
+          },
+          TIMEOUT_MS,
+        );
+      }
+    }
+
+    afterAll(() => {
+      // Should have 8 directions × 3 distances = 24 total tests
+      expect(results.length).toBe(24);
+
+      // Check that we have all 8 tertiary directions
+      const directionNames = [...new Set(results.map((r) => r.direction))];
+      expect(directionNames).toEqual(
+        expect.arrayContaining([
+          "North-East-Up",
+          "North-West-Up",
+          "South-East-Up",
+          "South-West-Up",
+          "North-East-Down",
+          "North-West-Down",
+          "South-East-Down",
+          "South-West-Down",
+        ]),
+      );
+
+      // Check that we have all 3 distances
+      const distanceValues = [...new Set(results.map((r) => r.distance))];
+      expect(distanceValues).toEqual([1.0, 1.5, 2.0]);
+
+      logger.info(
+        `jumpViaOffset tertiary results: ${results.length} tests completed`,
+        "Movement",
+      );
+    });
+  });
+
   test(
     "collisionStress — runs all 9 obstacle scenarios",
     async () => {
