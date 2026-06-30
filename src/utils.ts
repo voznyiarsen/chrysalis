@@ -902,6 +902,8 @@ export class UtilsManager {
     const legacySuccessKeys = new Set([
       "gameMode.changed", // 1.12.2 /gamemode (self)
       "gameMode.changed.other", // 1.12.2 /gamemode (other player)
+      "commands.effect.failure.notActive.all", // 1.12.2 /effect clear (no effects — idempotent success)
+      "commands.effect.failure.notActive", // 1.12.2 /effect clear <effect> (no effect — idempotent success)
     ]);
 
     return new Promise<string>((resolve, reject) => {
