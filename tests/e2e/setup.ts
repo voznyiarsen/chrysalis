@@ -95,6 +95,41 @@ export function summonZombieCmd(version: string = e2eVersion()): string {
     : "summon Zombie ~ ~1 ~";
 }
 
+/**
+ * `/summon` command for a passive test animal (no leading slash).
+ * Passive mobs survive on peaceful-like servers where hostiles are cleared
+ * on spawn, so combat E2E uses pigs instead of zombies.
+ */
+export function summonTargetCmd(version: string = e2eVersion()): string {
+  return isModernVersion(version) ? "summon pig ~ ~1 ~" : "summon Pig ~ ~1 ~";
+}
+
+/** Entity type selector for the test animal, branched by version. */
+export function targetTypeSelector(version: string = e2eVersion()): string {
+  return isModernVersion(version) ? "type=pig" : "type=Pig";
+}
+
+/**
+ * Summon a passive test animal and wait for it to appear in bot entities.
+ * Matches by entity id (snapshot before summon) so no version-specific name
+ * strings are needed. Returns null on timeout (~60 ticks).
+ */
+export async function summonTarget(bot: Bot): Promise<any> {
+  const before = new Set(Object.keys(bot.entities).map((k) => parseInt(k, 10)));
+  bot.chat!(`/${summonTargetCmd()}`);
+  for (let i = 0; i < 60; i++) {
+    await bot.waitForTicks!(1);
+    for (const [idStr, entity] of Object.entries(bot.entities)) {
+      const id = parseInt(idStr, 10);
+      if (before.has(id)) continue;
+      const e = entity as any;
+      // A freshly summoned creature: has position, is not a player.
+      if (e.position && e.type !== "player") return e;
+    }
+  }
+  return null;
+}
+
 /** `/kill` command for all non-player entities within radius. */
 export function killMobsCmd(
   radius: number,

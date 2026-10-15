@@ -31,7 +31,8 @@ import {
   logSuiteStart,
   pollUntil,
   resetBotState,
-  summonZombieCmd,
+  summonTarget,
+  targetTypeSelector,
 } from "./setup";
 
 // ── E2E configuration ───────────────────────────────────────────────
@@ -58,24 +59,11 @@ async function killNearbyEntities(
 }
 
 /**
- * Summon a zombie and wait for it to appear in bot entities.
- * Matches by entity id (snapshot before summon) so no version-specific
- * name/type strings are needed. Returns null on timeout.
+ * Summon a passive test animal. Hostile mobs are cleared on spawn by this
+ * server (peaceful-like), so pigs stand in for combat targets. See setup.ts.
  */
 async function summonMob(bot: Bot): Promise<any> {
-  const before = new Set(Object.keys(bot.entities).map((k) => parseInt(k, 10)));
-  bot.chat!(`/${summonZombieCmd(VERSION)}`);
-  for (let i = 0; i < 60; i++) {
-    await bot.waitForTicks!(1);
-    for (const [idStr, entity] of Object.entries(bot.entities)) {
-      const id = parseInt(idStr, 10);
-      if (before.has(id)) continue;
-      const e = entity as any;
-      // A freshly summoned creature: has position, is not a player.
-      if (e.position && e.type !== "player") return e;
-    }
-  }
-  return null;
+  return summonTarget(bot);
 }
 
 /** Teleport to an absolute position (correct template interpolation). */
@@ -446,15 +434,15 @@ describeE2E("E2E PvP Tests", () => {
         const zombie = await summonMob(bot);
         expect(zombie).not.toBeNull();
 
-        // Move the zombie 60 blocks away; the pearl decision caps at 50.
+        // Move the target 60 blocks away; the pearl decision caps at 50.
         // Branch entity-selector syntax by version (1.13 flattened IDs).
         if (isModernVersion(VERSION)) {
           bot.chat!(
-            `/tp @e[type=zombie,limit=1,sort=nearest] ${POSITION.x + 60} ${POSITION.y} ${POSITION.z}`,
+            `/tp @e[${targetTypeSelector(VERSION)},limit=1,sort=nearest] ${POSITION.x + 60} ${POSITION.y} ${POSITION.z}`,
           );
         } else {
           bot.chat!(
-            `/tp @e[type=Zombie,r=100] ${POSITION.x + 60} ${POSITION.y} ${POSITION.z}`,
+            `/tp @e[${targetTypeSelector(VERSION)},r=100] ${POSITION.x + 60} ${POSITION.y} ${POSITION.z}`,
           );
         }
         await bot.waitForTicks!(5);
@@ -570,7 +558,7 @@ describeE2E("E2E PvP Tests", () => {
         const cm = getCm();
         cm.setMode(3); // Mode 3 = all entities (players + mobs)
 
-        // Summon zombie and manually attack it
+        // Summon a target animal and manually attack it
         const zombie = await summonMob(bot);
         expect(zombie).not.toBeNull();
         await getPvp().attack(zombie);

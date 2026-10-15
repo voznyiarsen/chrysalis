@@ -191,6 +191,11 @@ export function isJumpPathClear(
       if (toi === null) continue;
       // Skip landing: box was above the block and is landing on top
       if (source.y >= bb.maxY - EPS && currVel.y <= 0) continue;
+      // Skip departure ground: blocks at/below the starting feet level
+      // cannot obstruct upward motion. The expanded tick-0 AABB always
+      // overlaps the floor being stood on; without this, every grounded
+      // jump reports blocked on its first tick.
+      if (currVel.y > 0 && bb.maxY <= source.y + EPS) continue;
       if (toi < earliestTOI) earliestTOI = toi;
     }
     if (earliestTOI < 1) {
