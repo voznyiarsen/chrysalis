@@ -76,7 +76,7 @@ All output flows through the unified Logger facade in `src/logger.ts`. **Do not 
 | Tag           | Domain                                      | Default Level |
 | ------------- | ------------------------------------------- | ------------- |
 | `Client`      | Bot lifecycle (login, kick, end, reconnect) | INFO          |
-| `Combat`      | Decisions, modes, pearls, strafing          | INFO/DEBUG    |
+| `Combat`      | Decisions, modes, pearls                    | INFO/DEBUG    |
 | `Inventory`   | Equip, toss, record, restore, consume       | INFO          |
 | `Command`     | User commands, run loops, pause             | INFO          |
 | `Status`      | Health, food, position, version             | INFO          |
@@ -97,7 +97,7 @@ DEBUG-level logs are suppressed by default. Toggle at runtime via the `debug` co
 
 ## Command & Interaction Model
 
-- **Server-only commands**: Start with `/`. In production code and tests, execute via `bot.utilsManager.assertCommandSuccess(command, args)` (defined in `src/utils.ts`), which sends the command and waits for the server's success message before resolving. The `bot.chat()` method should only be used inside `assertCommandSuccess` itself or for the `autosend` fallback in `src/commands.ts`.
+- **Server-only commands**: Start with `/`. In production code and tests, execute via `bot.chat()` directly followed by a short `waitForTicks` settle (e.g., `bot.chat('/give @p stone 1); await bot.waitForTicks(2)`). Do not wait on server success messages.
 - **Client-only commands**: Do not have a prefix. They are executed using internal bot logic and must **never** be sent via `bot.chat()`. They are registered by modules such as `src/commands.ts`.
 - **Runtime config**: Combat and movement constants can be adjusted at runtime via the `cfg` command (e.g., `cfg COMBAT.ATTACK_RANGE 4.0`), routed through `src/config.ts` (`RuntimeConfig` class), which wraps `src/constants.ts` and allows per-key overrides via a `Map`.
 
@@ -108,7 +108,7 @@ DEBUG-level logs are suppressed by default. Toggle at runtime via the `debug` co
 - **Unit tests**: `tests/unit/` — use mocked bot instances, no server required.
 - **E2E tests**: `tests/e2e/` — connect to a real Minecraft server; automatically skipped when `E2E_HOST` is not set.
 - **Run**: `npm test` (all), `npm test -- tests/unit` (unit only), `npm test -- tests/e2e` (e2e only).
-- **Headless mode**: `npm start -- --headless --bot1 "command"` for automated testing without a TUI.
+- **Headless mode**: `npm start -- --headless --bot "command"` for automated testing without a TUI.
 
 ---
 
@@ -116,13 +116,12 @@ DEBUG-level logs are suppressed by default. Toggle at runtime via the `debug` co
 
 Configuration is loaded from `.env` via `dotenv`. See `.env.example` for the full template.
 
-| Variable         | Default     | Description                                     |
-| ---------------- | ----------- | ----------------------------------------------- |
-| `PUPA_HOST`      | `localhost` | Minecraft server hostname                       |
-| `PUPA_PORT`      | `25565`     | Minecraft server port                           |
-| `PUPA_NAME`      | `Pupa`      | Bot player name                                 |
-| `PUPA_VERSION`   | `1.12.2`    | Minecraft protocol version                      |
-| `DEBUG_COMMANDS` | `0`         | Set to `1` to enable debug command registration |
+| Variable       | Default     | Description                |
+| -------------- | ----------- | -------------------------- |
+| `PUPA_HOST`    | `localhost` | Minecraft server hostname  |
+| `PUPA_PORT`    | `25565`     | Minecraft server port      |
+| `PUPA_NAME`    | `Pupa`      | Bot player name            |
+| `PUPA_VERSION` | `1.12.2`    | Minecraft protocol version |
 
 ---
 
@@ -139,7 +138,7 @@ Configuration is loaded from `.env` via `dotenv`. See `.env.example` for the ful
 | `src/inventory.ts`          | Inventory management (equip, toss, consume)             |
 | `src/listener-manager.ts`   | Event listener lifecycle management                     |
 | `src/logger.ts`             | Unified logging facade                                  |
-| `src/movement.ts`           | Movement mechanics (jump, strafe, collision physics)    |
+| `src/movement.ts`           | Movement mechanics (jump, collision physics)            |
 | `src/projectile.ts`         | Projectile trajectory calculation (pearl arcs)          |
 | `src/pvp.ts`                | PvP combat logic (CombatManager, PVPManager)            |
 | `src/tui.ts`                | Terminal UI (blessed-based)                             |
@@ -152,7 +151,7 @@ Configuration is loaded from `.env` via `dotenv`. See `.env.example` for the ful
 
 - **Don't call `ui.log()` or `console.log/error` directly** from any module other than `src/tui.ts` or `src/logger.ts`. Use the `logger` facade.
 - **Don't send client-only commands via `bot.chat()`**. Client-only commands (no `/` prefix) are handled by internal bot logic and will fail or cause errors if sent as chat.
-- **Don't use `bot.chat()` for server commands** in production code or tests. Use `bot.utilsManager.assertCommandSuccess(command, args)` instead.
+- **Don't wait on server success messages** for server commands in production code or tests. Use `bot.chat()` + `waitForTicks` settle instead.
 - **Don't add new top-level files** when an existing module can be extended. Prefer enhancing existing modules.
 - **Don't modify `.expect()` values in tests** to force a pass. Always fix the underlying issue.
 - **Don't assume the server is at fault.** If issues arise, the cause is in the codebase.

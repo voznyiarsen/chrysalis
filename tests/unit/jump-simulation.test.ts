@@ -1,6 +1,6 @@
 /**
  * @fileoverview Unit tests for jump path simulation.
- * 
+ *
  * Tests the isJumpPathClear function which simulates jump trajectories
  * and checks for collisions using accurate LCE physics.
  */
@@ -30,10 +30,9 @@ function createMockBotEntity(position: Vec3 = new Vec3(0, 0, 0)): {
 /**
  * Creates a mock getCollisions function that returns predefined obstacles
  */
-function createMockGetCollisions(obstacles: AABB[] = []): (
-  aabb: AABB,
-  minYThreshold: number,
-) => AABB[] {
+function createMockGetCollisions(
+  obstacles: AABB[] = [],
+): (aabb: AABB, minYThreshold: number) => AABB[] {
   return (aabb: AABB, minYThreshold: number) => {
     // Return obstacles that intersect with the query AABB
     return obstacles.filter((obs) => aabb.intersects(obs));
@@ -43,7 +42,9 @@ function createMockGetCollisions(obstacles: AABB[] = []): (
 /**
  * Creates a mock getSlipperiness function
  */
-function createMockGetSlipperiness(slipperiness: number = 0.6): (pos: Vec3) => number {
+function createMockGetSlipperiness(
+  slipperiness: number = 0.6,
+): (pos: Vec3) => number {
   return () => slipperiness;
 }
 
@@ -119,7 +120,7 @@ describe("isJumpPathClear", () => {
       const source = new Vec3(0, 0, 0);
       const target = new Vec3(3, 0, 0);
       const botEntity = createMockBotEntity(source);
-      
+
       // Create a wall obstacle at x=1.5
       const obstacle = new AABB(1.5, 0, -0.5, 1.5, 2, 0.5);
       const getCollisions = createMockGetCollisions([obstacle]);
@@ -141,7 +142,7 @@ describe("isJumpPathClear", () => {
       const source = new Vec3(0, 0, 0);
       const target = new Vec3(3, 0, 0);
       const botEntity = createMockBotEntity(source);
-      
+
       // Create an obstacle at jump height (y=1)
       const obstacle = new AABB(1.5, 1, -0.5, 1.5, 1.5, 0.5);
       const getCollisions = createMockGetCollisions([obstacle]);
@@ -163,7 +164,7 @@ describe("isJumpPathClear", () => {
       const source = new Vec3(0, 0, 0);
       const target = new Vec3(3, 0, 0);
       const botEntity = createMockBotEntity(source);
-      
+
       // Create a taller obstacle at the landing position that blocks the path
       const obstacle = new AABB(2.8, 0, -0.5, 3.2, 2, 0.5);
       const getCollisions = createMockGetCollisions([obstacle]);
@@ -185,7 +186,7 @@ describe("isJumpPathClear", () => {
       const source = new Vec3(0, 0, 0);
       const target = new Vec3(3, 0, 0);
       const botEntity = createMockBotEntity(source);
-      
+
       // Create an obstacle below the path (y=-1)
       const obstacle = new AABB(1.5, -1, -0.5, 1.5, -0.5, 0.5);
       const getCollisions = createMockGetCollisions([obstacle]);
@@ -207,7 +208,7 @@ describe("isJumpPathClear", () => {
       const source = new Vec3(0, 0, 0);
       const target = new Vec3(3, 0, 0);
       const botEntity = createMockBotEntity(source);
-      
+
       // Create an obstacle above the path (y=3)
       const obstacle = new AABB(1.5, 3, -0.5, 1.5, 3.5, 0.5);
       const getCollisions = createMockGetCollisions([obstacle]);
@@ -345,7 +346,7 @@ describe("isJumpPathClear", () => {
       const source = new Vec3(0, 0, 0);
       const target = new Vec3(3, 0, 0);
       const botEntity = createMockBotEntity(source);
-      
+
       // Create an obstacle at starting position
       const obstacle = new AABB(-0.5, 0, -0.5, 0.5, 2, 0.5);
       const getCollisions = createMockGetCollisions([obstacle]);
@@ -367,7 +368,7 @@ describe("isJumpPathClear", () => {
       const source = new Vec3(0, 0, 0);
       const target = new Vec3(3, 0, 0);
       const botEntity = createMockBotEntity(source);
-      
+
       // Create an obstacle at target position
       const obstacle = new AABB(2.5, 0, -0.5, 3.5, 2, 0.5);
       const getCollisions = createMockGetCollisions([obstacle]);
@@ -391,7 +392,7 @@ describe("isJumpPathClear", () => {
       const source = new Vec3(0, 0, 0);
       const target = new Vec3(4, 0, 0);
       const botEntity = createMockBotEntity(source);
-      
+
       // Create multiple obstacles along the path
       const obstacles = [
         new AABB(1, 0, -0.5, 1, 2, 0.5), // First obstacle
@@ -416,7 +417,7 @@ describe("isJumpPathClear", () => {
       const source = new Vec3(0, 0, 0);
       const target = new Vec3(3, 0, 0);
       const botEntity = createMockBotEntity(source);
-      
+
       // Create obstacles outside the path
       const obstacles = [
         new AABB(-2, 0, -0.5, -1, 2, 0.5), // Left of path
@@ -437,6 +438,4 @@ describe("isJumpPathClear", () => {
       expect(result).toBe(true);
     });
   });
-
-
 });

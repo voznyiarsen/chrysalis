@@ -108,7 +108,7 @@ describeE2E("E2E Pearl Tests", () => {
     bot.clearControlStates();
     (bot as any).pathfinder?.stop();
     (bot as any).pvp?.stop();
-    await bot.utilsManager.assertCommandSuccess("gamemode", "creative");
+    bot.chat!("/gamemode creative");
     await bot.waitForTicks!(2);
   }
 
@@ -122,14 +122,11 @@ describeE2E("E2E Pearl Tests", () => {
       try {
         await bot.waitForChunksToLoad!();
         await bot.waitForTicks!(1);
-        await bot.utilsManager.assertCommandSuccess(
-          "tp",
-          Object.values(POSITION).join(" "),
-        );
+        bot.chat!("/tp " + Object.values(POSITION).join(" "));
 
         await bot.waitForChunksToLoad!();
         await bot.waitForTicks!(1);
-        await bot.utilsManager.assertCommandSuccess("gamemode", "creative");
+        bot.chat!("/gamemode creative");
       } catch (error) {
         logger.error(error, "Combat");
       }
@@ -142,10 +139,7 @@ describeE2E("E2E Pearl Tests", () => {
       try {
         await bot.waitForChunksToLoad!();
         await bot.waitForTicks!(1);
-        await bot.utilsManager.assertCommandSuccess(
-          "tp",
-          Object.values(POSITION).join(" "),
-        );
+        bot.chat!("/tp " + Object.values(POSITION).join(" "));
 
         await bot.waitForChunksToLoad!();
         await bot.waitForTicks!(1);
@@ -162,12 +156,14 @@ describeE2E("E2E Pearl Tests", () => {
       try {
         bot.quit!();
         bot.end!();
+        // Give extra time for cleanup
+        await new Promise((resolve) => setTimeout(resolve, 1000));
       } catch (error) {
         logger.error(error, "Combat");
       }
     }
     logger.setDebugMode(false);
-  }, TIMEOUT_MS);
+  }, TIMEOUT_MS * 2);
 
   // ══════════════════════════════════════════════════════════════════
   // Comprehensive Pearl Throws

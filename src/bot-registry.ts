@@ -1,6 +1,6 @@
 /**
  * @fileoverview Multi-bot registry for managing bot instances, their loggers,
- * configs, and coordinated lifecycle. Supports 1-4 concurrent bot connections.
+ * configs, and coordinated lifecycle. Supports multiple concurrent bot connections.
  */
 
 import mineflayer, { Bot } from "mineflayer";
@@ -23,10 +23,7 @@ const HEADLESS_TIMEOUT_MS: number | null =
 
 export interface BotDefinition {
   number: number;
-  host?: string;
-  port?: number;
   username?: string;
-  version?: string;
   headlessCommand?: string;
 }
 
@@ -74,8 +71,8 @@ export class BotRegistry {
     if (this.bots.has(botNumber)) {
       throw new Error(`Bot ${botNumber} already exists`);
     }
-    if (botNumber < 1 || botNumber > 4) {
-      throw new Error(`Invalid bot number ${botNumber}; must be 1-4`);
+    if (botNumber < 1) {
+      throw new Error(`Invalid bot number ${botNumber}; must be >= 1`);
     }
 
     const cfg = this.getConfig(botNumber);
@@ -102,7 +99,6 @@ export class BotRegistry {
     bot.runtimeConfig = runtimeConfig;
 
     // Store the logger on the bot for plugin access
-    bot.__botNumber = botNumber;
     bot.__logger = botLog;
 
     this._setupBotListeners(bot, botNumber, cfg);

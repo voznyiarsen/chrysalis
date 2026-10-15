@@ -143,7 +143,7 @@ export class CommandManager {
         description: "Clear inventory via creative mode",
         handler: async () => {
           // mineflayer plugin property access
-          await (this.bot as any).inventoryManager.clearInventory();
+          await this.bot.inventoryManager.clearInventory();
         },
       },
       v: {
@@ -367,7 +367,7 @@ export class CommandManager {
         pitch: () => this.bot?.entity?.pitch,
         version: () => this.bot?.version,
         // mineflayer plugin property access
-        target: () => (this.bot as any)?.pvp?.target?.username,
+        target: () => this.bot?.pvp?.target?.username,
       };
 
       if (botGetters[trimmed] !== undefined) {
@@ -447,8 +447,8 @@ export class CommandManager {
    */
   async tossSingle(args: string[]): Promise<void> {
     const item =
-      (this.bot.registry as any).items[parseInt(args[1])] ||
-      (this.bot.registry as any).itemsByName[args[1]];
+      this.bot.registry.items[parseInt(args[1])] ||
+      this.bot.registry.itemsByName[args[1]];
     if (!item) {
       this.logger.error(new Error(`Item '${args[1]}' not found`), "Inventory");
       return;
@@ -472,7 +472,7 @@ export class CommandManager {
     const count = this.bot.inventory.slots.filter(Boolean).length;
     try {
       // mineflayer plugin property access
-      await (this.bot as any).inventoryManager.tossAllItems();
+      await this.bot.inventoryManager.tossAllItems();
       this.logger.inventory(
         `Tossed ${count} ${count === 1 ? "item" : "items"}`,
       );
@@ -489,8 +489,8 @@ export class CommandManager {
    */
   async equip(args: string[]): Promise<void> {
     const item =
-      (this.bot.registry as any).items[parseInt(args[1])] ||
-      (this.bot.registry as any).itemsByName[args[1]];
+      this.bot.registry.items[parseInt(args[1])] ||
+      this.bot.registry.itemsByName[args[1]];
     const destination = args[2];
     if (!item) {
       this.logger.error(new Error(`Item '${args[1]}' not found`), "Inventory");
@@ -498,10 +498,7 @@ export class CommandManager {
     }
 
     try {
-      await this.bot.equip(
-        parseInt(item.id),
-        destination as EquipmentDestination,
-      );
+      await this.bot.equip(item.id, destination as EquipmentDestination);
       this.logger.inventory(`Equipped ${item.displayName} to ${destination}`);
     } catch (error: unknown) {
       const err = error instanceof Error ? error : new Error(String(error));
@@ -538,7 +535,7 @@ export class CommandManager {
     const count = this.bot.entity.equipment.filter(Boolean).length;
     try {
       // mineflayer plugin property access
-      await (this.bot as any).inventoryManager.unequipAllItems();
+      await this.bot.inventoryManager.unequipAllItems();
       this.logger.inventory(`Unequipped ${count} items`);
     } catch (error: unknown) {
       const err = error instanceof Error ? error : new Error(String(error));
@@ -568,7 +565,7 @@ export class CommandManager {
   async restore(args: string[]): Promise<void> {
     const slot = args[1] || 0;
     // mineflayer plugin property access
-    await (this.bot as any).inventoryManager.restoreInventory(slot);
+    await this.bot.inventoryManager.restoreInventory(slot);
   }
 
   /**
@@ -578,7 +575,7 @@ export class CommandManager {
   async record(args: string[]): Promise<void> {
     const slot = args[1] || 0;
     // mineflayer plugin property access
-    await (this.bot as any).inventoryManager.recordInventory(slot);
+    await this.bot.inventoryManager.recordInventory(slot);
   }
 
   /**
@@ -586,16 +583,20 @@ export class CommandManager {
    */
   toggleCombat(): void {
     // mineflayer plugin property access
-    const listener = (this.bot as any).combatManager.doDecide;
-    if ((this.bot as any).listenerCount("physicsTick", listener) > 0) {
+    const listener = this.bot.combatManager.doDecide;
+    if (
+      (this.bot.listenerCount as unknown as (e: string) => number)(
+        "physicsTick",
+      ) > 0
+    ) {
       this.logger.combat("Combat disabled");
-      (this.bot as any).off("physicsTick", listener);
+      this.bot.off("physicsTick", listener);
       // mineflayer plugin property access
-      (this.bot as any).pvp.stop();
+      this.bot.pvp.stop();
     } else {
       this.logger.combat("Combat enabled");
       // mineflayer plugin property access
-      (this.bot as any).on("physicsTick", listener);
+      this.bot.on("physicsTick", listener);
     }
   }
 
@@ -605,8 +606,9 @@ export class CommandManager {
    */
   changeMode(args: string[]): void {
     // mineflayer plugin property access
-    const cm = (this.bot as any).combatManager;
-    cm.setMode(parseInt(args[1] ?? cm.mode, 10));
+    const cm = this.bot.combatManager;
+    const arg = args[1] ?? String(cm.mode);
+    cm.setMode(parseInt(arg, 10));
     this.logger.combat(`Mode changed to ${cm.mode}`);
   }
 
@@ -616,7 +618,7 @@ export class CommandManager {
   pacify(): void {
     this.logger.combat("Pacifying bot...");
     // mineflayer plugin property access
-    (this.bot as any).combatManager.setMode(4);
+    this.bot.combatManager.setMode(4);
     this._stopRun();
   }
 
@@ -627,7 +629,7 @@ export class CommandManager {
   queryPlayerDB(args: string[]): void {
     const username = args[1];
     // mineflayer plugin property access
-    const player = (this.bot as any).players[username];
+    const player = this.bot.players[username];
     if (!player) {
       this.logger.error(new Error(`Player '${username}' not found`), "Command");
       return;
@@ -654,7 +656,7 @@ export class CommandManager {
       return;
     }
     this.logger.debug(
-      `Slot Debug: '${(item as any).displayName}' (slot ${slotNumber})`,
+      `Slot Debug: '${item.displayName}' (slot ${slotNumber})`,
       "Debug",
     );
     this.logger.debug(util.inspect(item, { depth: 1, colors: true }), "Debug");
@@ -665,7 +667,8 @@ export class CommandManager {
    */
   quit(): void {
     this.bot.end();
-    process.exit(0);
+    // Allow the disconnect packet to flush before terminating the process.
+    setTimeout(() => process.exit(0), 100);
   }
 
   /**
@@ -673,7 +676,7 @@ export class CommandManager {
    */
   configCommand(args: string[]): void {
     // mineflayer plugin property access
-    const rc = (this.bot as any).runtimeConfig;
+    const rc = this.bot.runtimeConfig;
     if (!rc) {
       this.logger.error(new Error("Runtime config not available"), "Config");
       return;
@@ -712,10 +715,10 @@ export class CommandManager {
 
     if (category === "COMBAT") {
       // mineflayer plugin property access
-      const pvp = (this.bot as any).pvp;
-      if (key === "ATTACK_RANGE") pvp.attackRange = value;
-      if (key === "FOLLOW_RANGE") pvp.followRange = value;
-      if (key === "VIEW_DISTANCE") pvp.viewDistance = value;
+      const pvp = this.bot.pvp;
+      if (key === "ATTACK_RANGE") pvp.attackRange = value as number;
+      if (key === "FOLLOW_RANGE") pvp.followRange = value as number;
+      if (key === "VIEW_DISTANCE") pvp.viewDistance = value as number;
       if (key === "USE_OFFSET_BASED_PEARLS") {
         this.logger.config(
           `Offset-based pearl throwing ${value ? "enabled" : "disabled"}`,
@@ -730,6 +733,15 @@ export class CommandManager {
    */
   async pause(args: string[]): Promise<void> {
     const ticks = parseInt(args[1], 10);
+    if (isNaN(ticks) || ticks < 0) {
+      this.logger.error(
+        new Error(
+          `Invalid tick count: '${args[1]}'. Usage: pause <ticks> where ticks >= 0`,
+        ),
+        "Command",
+      );
+      return;
+    }
     this.logger.command(`Pausing the bot for ${ticks} ticks`);
     await this.bot.waitForTicks(ticks);
   }
@@ -756,17 +768,17 @@ export class CommandManager {
     const target = source.offset(xOffset, yOffset, zOffset);
 
     // Wait until settled on ground
-    await (this.bot as any).combatManager._waitUntilSettled();
+    await this.bot.combatManager._waitUntilSettled();
 
     // Calculate and apply jump impulse using accurate physics
-    const utils = (this.bot as any).utilsManager;
+    const utils = this.bot.utilsManager;
     const impulse = utils.getJumpVelocity(source, target);
     if (impulse) {
       utils.applyImpulse(impulse, "set", true);
     }
 
     // Wait until landed
-    await (this.bot as any).combatManager._waitUntilSettled();
+    await this.bot.combatManager._waitUntilSettled();
 
     // Calculate distance remaining to target
     const finalPos = this.bot.entity.position;
@@ -774,8 +786,8 @@ export class CommandManager {
 
     this.logger.command(
       `Jump: target (${target.x.toFixed(2)}, ${target.y.toFixed(2)}, ${target.z.toFixed(2)}). ` +
-      `Final: (${finalPos.x.toFixed(2)}, ${finalPos.y.toFixed(2)}, ${finalPos.z.toFixed(2)}). ` +
-      `Dist remaining: ${dist.toFixed(3)}b`,
+        `Final: (${finalPos.x.toFixed(2)}, ${finalPos.y.toFixed(2)}, ${finalPos.z.toFixed(2)}). ` +
+        `Dist remaining: ${dist.toFixed(3)}b`,
     );
   }
 
@@ -880,8 +892,8 @@ export class CommandManager {
   private _addManagerFunctions(): void {
     // Add inventory manager functions if available
     // mineflayer plugin property access
-    if ((this.bot as any).inventoryManager) {
-      const im = (this.bot as any).inventoryManager;
+    if (this.bot.inventoryManager) {
+      const im = this.bot.inventoryManager;
       const inventoryFunctions = {
         clearInventory: this._safeBind(im, im.clearInventory),
         recordInventory: this._safeBind(im, im.recordInventory),
@@ -892,11 +904,17 @@ export class CommandManager {
 
     // Add combat manager functions if available
     // mineflayer plugin property access
-    if ((this.bot as any).combatManager) {
-      const cm = (this.bot as any).combatManager;
+    if (this.bot.combatManager) {
+      const cm = this.bot.combatManager;
       const combatFunctions = {
-        toggleCombatMode: this._safeBind(cm, cm.toggleCombatMode),
-        setTargetFilter: this._safeBind(cm, cm.setTargetFilter),
+        toggleCombatMode: this._safeBind(
+          cm,
+          (cm as unknown as Record<string, unknown>).toggleCombatMode,
+        ),
+        setTargetFilter: this._safeBind(
+          cm,
+          (cm as unknown as Record<string, unknown>).setTargetFilter,
+        ),
       };
       Object.assign(this.functionRegistry, combatFunctions);
     }

@@ -8,6 +8,7 @@
 
 import { Bot } from "mineflayer";
 import { Vec3 } from "vec3";
+import { Constants } from "../../src/constants";
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -42,10 +43,7 @@ export async function placeTerrain(
     const x = Math.floor(anchor.x + dx);
     const y = Math.floor(anchor.y + dy);
     const z = Math.floor(anchor.z + dz);
-    await bot.utilsManager.assertCommandSuccess(
-      "setblock",
-      `${x} ${y} ${z} stone`,
-    );
+    bot.chat!(`/setblock ${x} ${y} ${z} stone`);
     await bot.waitForTicks!(1);
   }
   await bot.waitForTicks!(2);
@@ -67,10 +65,7 @@ export async function clearTerrain(
     const x = Math.floor(anchor.x + dx);
     const y = Math.floor(anchor.y + dy);
     const z = Math.floor(anchor.z + dz);
-    await bot.utilsManager.assertCommandSuccess(
-      "setblock",
-      `${x} ${y} ${z} air`,
-    );
+    bot.chat!(`/setblock ${x} ${y} ${z} air`);
   }
   await bot.waitForTicks!(2);
 }

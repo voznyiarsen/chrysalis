@@ -329,8 +329,50 @@ export function getProjectileOffset(
 }
 
 /**
+ * Raycast between two positions to detect block collisions.
+ * Returns the first block hit along the path, or null if clear.
+ * @param from - Start position
+ * @param to - End position
+ * @param blockAt - Function to look up a block at a given position
+ * @returns The first block hit, or null if path is clear
+ */
+function raycastBlocks(
+  from: Vec3,
+  to: Vec3,
+  blockAt: (pos: Vec3) => any,
+): any | null {
+  const dir = to.minus(from);
+  const len = dir.norm();
+  if (len < 1e-6) return null;
+
+  const step = dir.scaled(1 / len);
+  const steps = Math.ceil(len);
+
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    const pos = from.plus(step.scaled(i));
+    const block = blockAt(pos);
+    if (block && block.boundingBox !== "empty") {
+      return block;
+    }
+  }
+  return null;
+}
+
+/**
+ * Check if a position is in water.
+ * @param pos - Position to check
+ * @param blockAt - Function to look up a block at a given position
+ * @returns true if the position is in water
+ */
+function isInWater(pos: Vec3, blockAt: (pos: Vec3) => any): boolean {
+  const block = blockAt(pos);
+  return block && block.name === "water";
+}
+
+/**
  * Check whether a projectile trajectory is clear of blocks and entities.
- * Simulates the full flight path.
+ * Simulates the full flight path with swept collision detection.
  * @param source - Launch position
  * @param target - Target position
  * @param v - Initial projectile speed
@@ -361,21 +403,27 @@ export function isProjectilePathClear(
   const maxTicks = 200;
   for (let i = 0; i < maxTicks; i++) {
     const nextPos = currPos.plus(currVel);
-    const block = blockAt(nextPos);
-    if (
-      block &&
-      block.boundingBox !== "empty" &&
-      isPointInBlock(nextPos, block)
-    )
-      return false;
+
+    // Use swept raycast for block collision (more accurate than discrete check)
+    const hitBlock = raycastBlocks(currPos, nextPos, blockAt);
+    if (hitBlock && isPointInBlock(nextPos, hitBlock)) return false;
+
+    // Check entity collisions with correct pearl hitbox (0.25x0.25)
     const hitEntities = entities.filter(
-      (e: any) => e.position.distanceTo(nextPos) < (e.width || 0.6),
+      (e: any) => e.position.distanceTo(nextPos) < 0.25, // Pearl hitbox size
     );
     if (hitEntities.length > 0) return false;
+
     currPos = nextPos;
-    currVel.y = currVel.y * drag - g;
-    currVel.x *= drag;
-    currVel.z *= drag;
+
+    // Apply water physics if in water (drag changes to 0.80)
+    const inWater = isInWater(currPos, blockAt);
+    const effectiveDrag = inWater ? 0.8 : drag;
+
+    currVel.y = currVel.y * effectiveDrag - g;
+    currVel.x *= effectiveDrag;
+    currVel.z *= effectiveDrag;
+
     if (currPos.distanceTo(target) < 1.0) return true;
     if (currPos.y < -64) break;
   }

@@ -6,6 +6,10 @@ import prismarineItem from "prismarine-item";
 import { Constants } from "./constants";
 import { Bot } from "mineflayer";
 import { Vec3 } from "vec3";
+import * as fs from "node:fs";
+import { promisify } from "node:util";
+
+const writeFileAsync = promisify(fs.writeFile);
 
 // Construct the Item class with a game version
 const Item: any = prismarineItem("1.19.3");
@@ -145,14 +149,14 @@ class InventoryManager {
    */
   hasFood(): boolean {
     // mineflayer plugin property access
-    const currentTick = (this.bot as any).time.age;
+    const currentTick = this.bot.time.age;
     const cacheKey = "has:food";
 
     if (this._lastCacheTick === currentTick && this._itemCache.has(cacheKey)) {
       return this._itemCache.get(cacheKey) as boolean;
     }
 
-    const foodsByName = (this.bot as any).registry?.foodsByName ?? {};
+    const foodsByName = this.bot.registry?.foodsByName ?? {};
     const has = this.bot.inventory
       .items()
       .some(
@@ -246,9 +250,9 @@ class InventoryManager {
    */
   async clearInventory(): Promise<void> {
     const creativeName = InventoryManager.GAMEMODE_NAMES[1];
-    if ((this.bot.game as any).gameMode !== creativeName) {
+    if (this.bot.game.gameMode !== creativeName) {
       throw new Error(
-        `clearInventory requires creative mode, current gamemode is ${(this.bot.game as any).gameMode}`,
+        `clearInventory requires creative mode, current gamemode is ${this.bot.game.gameMode}`,
       );
     }
     try {
@@ -275,10 +279,7 @@ class InventoryManager {
     targetSlot: string = "hand",
   ): Promise<void> {
     await this.clearInventory();
-    await this.bot.utilsManager.assertCommandSuccess(
-      "give",
-      `@p ${itemName} ${count}`,
-    );
+    this.bot.chat!(`/give @p ${itemName} ${count}`);
     await this.bot.waitForTicks!(Constants.TIMING.EQUIP_TICKS);
 
     for (let attempt = 0; attempt < 10; attempt++) {
@@ -327,7 +328,7 @@ class InventoryManager {
     if (metadata !== undefined) args += ` ${metadata}`;
     if (nbt) args += ` ${nbt}`;
 
-    await this.bot.utilsManager.assertCommandSuccess("give", args);
+    this.bot.chat!(`/give ${args}`);
 
     const t0 = Date.now();
     while (Date.now() - t0 < timeoutMs) {
@@ -390,9 +391,9 @@ class InventoryManager {
     slot: number = 36, // Default to first quickbar slot
   ): Promise<void> {
     const creativeName = InventoryManager.GAMEMODE_NAMES[1];
-    if ((this.bot.game as any).gameMode !== creativeName) {
+    if (this.bot.game.gameMode !== creativeName) {
       throw new Error(
-        `getItemViaCreative requires creative mode (gamemode 1), current gamemode is ${(this.bot.game as any).gameMode}`,
+        `getItemViaCreative requires creative mode (gamemode 1), current gamemode is ${this.bot.game.gameMode}`,
       );
     }
 
@@ -438,8 +439,6 @@ class InventoryManager {
    * @param slot - Recording slot index for the filename
    */
   async recordInventory(slot: number | string = 0): Promise<void> {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const fs = require("node:fs");
     const array = this.bot.inventory.slots.filter((item: any) => item?.type);
     const data = array.map(
       ({ type, count, metadata, nbt, name, displayName, slot }: any) => ({
@@ -454,20 +453,14 @@ class InventoryManager {
     );
 
     const filename = `./recording-${slot}.json`;
-    fs.writeFile(
-      filename,
-      JSON.stringify(data, null, 2),
-      (error: Error | null) => {
-        if (error) {
-          error.message = `Failed to record inventory: ${error.message}`;
-          this.logger.error(error, "Inventory");
-        } else {
-          this.logger.inventory(
-            `${data.length} items recorded into slot ${slot}`,
-          );
-        }
-      },
-    );
+    try {
+      await writeFileAsync(filename, JSON.stringify(data, null, 2));
+      this.logger.inventory(`${data.length} items recorded into slot ${slot}`);
+    } catch (error: unknown) {
+      const err = error as Error;
+      err.message = `Failed to record inventory: ${err.message}`;
+      this.logger.error(err, "Inventory");
+    }
   }
 
   /**
@@ -475,8 +468,6 @@ class InventoryManager {
    * @param slot - Recording slot index matching the filename
    */
   async restoreInventory(slot: number | string = 0): Promise<void> {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const fs = require("node:fs");
     const raw = fs.readFileSync(`./recording-${slot}.json`, "utf8");
     const data = JSON.parse(raw);
     await this.setGamemode(1);
@@ -517,18 +508,16 @@ class InventoryManager {
   ): Promise<void> {
     const modeName = InventoryManager.GAMEMODE_NAMES[mode] || String(mode);
     const t0 = Date.now();
-    if ((this.bot.game as any).gameMode !== modeName) {
+    if (this.bot.game.gameMode !== modeName) {
       this.logger.status(
-        `Setting gamemode from ${(this.bot.game as any).gameMode} to ${modeName}`,
+        `Setting gamemode from ${this.bot.game.gameMode} to ${modeName}`,
       );
-      await this.bot.utilsManager.assertCommandSuccess(
-        "gamemode",
-        String(mode),
-      );
-      while ((this.bot.game as any).gameMode !== modeName) {
+      this.bot.chat!(`/gamemode ${mode}`);
+      await this.bot.waitForTicks!(2);
+      while (this.bot.game.gameMode !== modeName) {
         if (Date.now() - t0 > timeout) {
           this.logger.warning(
-            `Timeout while setting gamemode to ${modeName} (current: ${(this.bot.game as any).gameMode}). Proceeding anyway`,
+            `Timeout while setting gamemode to ${modeName} (current: ${this.bot.game.gameMode}). Proceeding anyway`,
           );
           return;
         }
@@ -676,12 +665,7 @@ class InventoryManager {
         0.1;
       if (bindingCurse) otherEnchantWeight -= 1;
     }
-    return (
-      (stats as any).defense +
-      (stats as any).toughness +
-      protectionLVL +
-      otherEnchantWeight
-    );
+    return stats.defense + stats.toughness + protectionLVL + otherEnchantWeight;
   }
 
   /**
@@ -734,7 +718,7 @@ class InventoryManager {
     }
 
     // In creative mode, eating doesn't grant effects — skip activation
-    if ((this.bot.game as any).gameMode === "creative") {
+    if (this.bot.game.gameMode === "creative") {
       this.logger.inventory(
         `Skipping ${bestGapple.displayName} use in creative mode (no effect)`,
       );
@@ -764,7 +748,7 @@ class InventoryManager {
       ...Object.values(this.bot.entity.equipment).filter((i: any) => i != null),
     ];
 
-    const foodsByName = (this.bot as any).registry?.foodsByName ?? {};
+    const foodsByName = this.bot.registry?.foodsByName ?? {};
     const items = inventory.filter(
       (item: any) =>
         (foodsByName as Record<string, unknown>)[item.name] !== undefined,
@@ -790,10 +774,7 @@ class InventoryManager {
     if (!(await this._equipItem(food.name, "off-hand"))) return;
 
     // Skip eating if food is already full or in creative mode
-    if (
-      this.bot.food! >= 20 ||
-      (this.bot.game as any).gameMode === "creative"
-    ) {
+    if (this.bot.food! >= 20 || this.bot.game.gameMode === "creative") {
       this.logger.inventory(
         `Skipping ${food.displayName} use \u2014 food full or creative mode`,
       );
@@ -850,7 +831,7 @@ class InventoryManager {
     // Resolve the effect ID dynamically from registry using the potion NBT
     const potionId = (nbt as any).simplify(potion.nbt).Potion as string;
     const effectName = potionId.replace(/^minecraft:/, "");
-    const effectsByName = (this.bot as any).registry?.effectsByName ?? {};
+    const effectsByName = this.bot.registry?.effectsByName ?? {};
     const effect = effectsByName[effectName];
     if (!effect) {
       this.logger.debug(
@@ -1066,12 +1047,11 @@ class InventoryManager {
     if (!item?.name) return -1;
     const stats = materialStats[item.name];
     if (!stats) return 0;
-    const baseDPS = (stats as any).damage * (stats as any).speed;
+    const baseDPS = stats.damage * stats.speed;
     let sharpnessBonus = 0;
     if (item.enchants && Array.isArray(item.enchants)) {
       const sharpness = item.enchants.find((e: any) => e.name === "sharpness");
-      if (sharpness)
-        sharpnessBonus = (sharpness.lvl || 0) * 1.25 * (stats as any).speed;
+      if (sharpness) sharpnessBonus = (sharpness.lvl || 0) * 1.25 * stats.speed;
     }
     return baseDPS + sharpnessBonus;
   }

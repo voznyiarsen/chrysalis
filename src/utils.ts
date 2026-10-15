@@ -360,11 +360,9 @@ export class UtilsManager {
   _solidCache: Map<string, { solids: Vec3[]; expiry: number }>;
   liquidBlockIds: Set<number>;
   lastImpulseTick?: number;
-  logger: any;
 
   constructor(bot: Bot) {
     this.bot = bot;
-    this.logger = bot.__logger || console;
 
     if (typeof this.bot.chat === "function") {
       this.bot._originalChat = this.bot.chat.bind(this.bot);
@@ -422,7 +420,7 @@ export class UtilsManager {
   }
 
   getEffectsMultiplier(): number {
-    const effects = (this.bot.entity as any).effects as Record<
+    const effects = this.bot.entity.effects as unknown as Record<
       string,
       { amplifier: number } | undefined
     >;
@@ -535,7 +533,7 @@ export class UtilsManager {
     mode: "add" | "set" = "add",
     force = false,
   ): void {
-    const currentTick = (this.bot.time as any).age;
+    const currentTick = this.bot.time.age;
     if (!force && this.lastImpulseTick === currentTick) return;
     const entity = this.bot.entity as any;
     if (mode === "add") {
@@ -647,7 +645,7 @@ export class UtilsManager {
   }
 
   getHorizontalSpeed(): number {
-    return getHorizontalSpeed(this.bot.entity as any);
+    return getHorizontalSpeed(this.bot.entity);
   }
 
   getFlatVelocity(
@@ -671,7 +669,7 @@ export class UtilsManager {
       source,
       Constants.MOVEMENT.SOLID_BLOCK_RADIUS,
       (pos: Vec3) => this.bot.blockAt(pos),
-      (this.bot.entity as any).width,
+      this.bot.entity.width,
       this._solidCache,
       this._solidCacheMaxSize,
     );
@@ -714,10 +712,10 @@ export class UtilsManager {
     const impulse = this.getJumpVelocity(jumpSource, targetPos);
     if (!impulse) return -1;
     const original = this.applyImpulse.bind(this);
-    const startTick = (this.bot.time as any).age;
+    const startTick = this.bot.time.age;
     this.applyImpulse = (imp: Vec3, mode = "add", force = false) => {
       const r = original(imp, mode, force);
-      if ((this.bot.time as any).age - startTick >= 40) {
+      if (this.bot.time.age - startTick >= 40) {
         this.applyImpulse = original;
       }
       return r;
@@ -884,57 +882,6 @@ export class UtilsManager {
    * @returns The matched success message text
    * @throws Error if no success message arrives within the timeout
    */
-  async assertCommandSuccess(
-    command: string,
-    args: string = "",
-    timeoutTicks = 20,
-  ): Promise<string> {
-    const bot = this.bot;
-    const fullCommand = `/${command} ${args}`.trim();
-    const timeoutMs = timeoutTicks * 50;
-
-    // Command success messages are identified by their `translate` key.
-    // On 1.13+ servers, these follow the pattern `commands.<verb>.<...>.success[.*]`.
-    // On 1.12.2 and earlier, some commands use legacy keys that don't follow
-    // this pattern (e.g. `gameMode.changed` for /gamemode). A pattern match
-    // plus a small legacy-key set covers all versions without maintaining a
-    // full explicit allowlist.
-    const legacySuccessKeys = new Set([
-      "gameMode.changed", // 1.12.2 /gamemode (self)
-      "gameMode.changed.other", // 1.12.2 /gamemode (other player)
-      "commands.effect.failure.notActive.all", // 1.12.2 /effect clear (no effects — idempotent success)
-      "commands.effect.failure.notActive", // 1.12.2 /effect clear <effect> (no effect — idempotent success)
-    ]);
-
-    return new Promise<string>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        bot.removeListener("message", onMessage);
-        reject(
-          new Error(
-            `Timed out after ${timeoutMs}ms waiting for success message after sending: ${fullCommand}`,
-          ),
-        );
-      }, timeoutMs);
-
-      const onMessage = (jsonMsg: any) => {
-        const translate: unknown =
-          (jsonMsg as any)?.json?.translate ?? (jsonMsg as any)?.translate;
-        if (
-          typeof translate === "string" &&
-          (legacySuccessKeys.has(translate) ||
-            (translate.startsWith("commands.") &&
-              translate.includes("success")))
-        ) {
-          clearTimeout(timer);
-          bot.removeListener("message", onMessage);
-          resolve(jsonMsg?.toString?.() ?? String(jsonMsg));
-        }
-      };
-
-      bot.on("message", onMessage);
-      bot.chat!(fullCommand);
-    });
-  }
 }
 
 /**

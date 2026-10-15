@@ -41,8 +41,8 @@ declare class InventoryManager {
   hasItem(itemName: string, metadata?: number): boolean;
   hasFood(): boolean;
   clearInventory(): Promise<void>;
-  recordInventory(slot: string): Promise<void>;
-  restoreInventory(slot: string): Promise<void>;
+  recordInventory(slot: number | string): Promise<void>;
+  restoreInventory(slot: number | string): Promise<void>;
   tossAllItems(): Promise<void>;
   equipArmor(): Promise<void>;
   equipGapple(): Promise<void>;
@@ -117,6 +117,8 @@ declare class CombatManager {
     targetPos: Vec3,
     arcType?: "low" | "high" | "auto",
   ): Promise<void>;
+  _waitUntilSettled(): Promise<void>;
+  lastPearlTime: number;
 }
 
 declare class CommandManager {
@@ -159,7 +161,6 @@ declare class UtilsManager {
   isNewThreshold: boolean;
   momentumThreshold: number;
   applyEffects: boolean;
-  logger: unknown;
   getSlipperiness(pos: Vec3): number;
   getEffectsMultiplier(): number;
   simulateTick(state: unknown, inputs: unknown): unknown;
@@ -228,14 +229,9 @@ declare class UtilsManager {
     speed: number,
     yVel: number,
   ): Vec3;
-  getGroundBelow(pos: Vec3): number;
+  getGroundBelow(): number;
   getFallDamage(fallDistance: number): number;
   clearSolidCache(): void;
-  assertCommandSuccess(
-    command: string,
-    args?: string,
-    timeoutTicks?: number,
-  ): Promise<string>;
 }
 
 declare module "prismarine-windows" {
@@ -261,18 +257,59 @@ declare module "mineflayer" {
     runtimeConfig: RuntimeConfig;
     /** Pupa's logger instance. */
     __logger: Logger;
-    /** Bot number for multi-bot tagging. */
-    __botNumber: number;
     /** Listener manager for cleanup. */
     listenerManager: ListenerManager;
     /** Bot number (public alias). */
     botNumber: number;
     /** Original chat function, saved before UtilsManager wraps it. */
     _originalChat: (...args: unknown[]) => void;
+    /** Currently held item (from inventory). */
+    heldItem: {
+      type: number;
+      name: string;
+      metadata: number;
+      nbt: unknown;
+    } | null;
   }
 
   interface Entity {
     /** Equipment slots (helmet, chestplate, leggings, boots). */
     equipment: Array<{ name: string; type: number; count: number } | null>;
+    /** Active status effects keyed by effect ID (e.g., "10" = regeneration). */
+    effects: unknown[];
+    /** Per-entity metadata flags. */
+    metadata: Record<number, unknown>;
+  }
+
+  interface BotEvents {
+    /** Fires every physics tick. */
+    physicsTick(): void;
+    /** Emitted by PVPManager when it begins attacking. */
+    startedAttacking(): void;
+    /** Emitted by PVPManager when it stops attacking. */
+    stoppedAttacking(): void;
+    /** Emitted by PVPManager when an attack is performed. */
+    attackedTarget(): void;
+    /** Emitted by mineflayer-pathfinder when path computation stops. */
+    path_stop(): void;
+  }
+
+  interface Registry {
+    /** Numeric-indexed item registry. */
+    items: Record<number, { id: number; name: string }>;
+    /** Name-indexed item registry. */
+    itemsByName: Record<string, { id: number; name: string }>;
+  }
+
+  interface Game {
+    /** Current gamemode name (e.g., "survival", "creative"). */
+    gameMode: string;
+  }
+
+  interface Bot {
+    /** mineflayer item/block/effect registry. */
+    registry: Registry;
+    /** mineflayer game-state info. */
+    game: Game;
   }
 }

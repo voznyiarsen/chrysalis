@@ -247,6 +247,9 @@ export function isJumpPathClear(
     currVel.x = currVel.x * AIR_FRICTION + dirX * airAccel;
     currVel.z = currVel.z * AIR_FRICTION + dirZ * airAccel;
     if (currPos.y < target.y - 2 && currVel.y < 0) break;
+    // Void safety: stop simulation if falling below bedrock void level (Y < -64)
+    // This prevents infinite loops and matches the projectile collision detection
+    if (currPos.y < -64) break;
   }
   return false;
 }
@@ -333,8 +336,7 @@ export function getJumpVelocity(
       : 0;
 
   // Contribution from air acceleration
-  const airAccelContribution =
-    airAccel * ((airborneTicks - 1) + airGeomSum);
+  const airAccelContribution = airAccel * (airborneTicks - 1 + airGeomSum);
 
   // Denominator: 1 (tick 0 distance) + f_g * airGeomSum (decayed initial velocity)
   const denominator = 1 + GROUND_FRICTION * airGeomSum;

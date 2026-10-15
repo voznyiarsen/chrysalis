@@ -5,12 +5,12 @@ A terminal-based Minecraft bot with advanced combat, inventory management, physi
 ## Features
 
 - **Terminal UI**: Interactive TUI using `blessed` for logs and commands. Supports log levels (DEBUG, INFO, WARN, ERROR) with color-coded output. Headless mode for automated testing.
-- **Combat System**: Automated PVP split into two layers: `PVPManager` for precise attack timing and cooldowns, and `CombatManager` for high-level decision-making, strafing, pearl arc prediction, fall damage mitigation, and edge protection.
+- **Combat System**: Automated PVP split into two layers: `PVPManager` for precise attack timing and cooldowns, and `CombatManager` for high-level decision-making, pearl arc prediction, fall damage mitigation, and edge protection.
 - **Cisco IOS-Style CLI**: Hierarchical command tree with context-sensitive help (`?`), Tab auto-completion, and `${variable}` substitution in commands.
 - **Runtime Configuration**: Adjust combat and movement constants on the fly via `cfg` without restarting.
 - **Inventory Management**: Smart equipment handling (armor scoring, weapon DPS, golden apple priority), per-tick item caching with event-driven invalidation, inventory recording/restoring via creative mode.
-- **Physics Simulation**: Custom AABB-based collision detection, sprint-jump trajectory simulation, projectile path prediction, and LiquidBounce-inspired strafing mechanics.
-- **LRU Block Cache**: Efficient solid-block lookup for strafing with a 16-entry LRU cache.
+- **Physics Simulation**: Custom AABB-based collision detection, sprint-jump trajectory simulation, and projectile path prediction.
+- **LRU Block Cache**: Efficient solid-block lookup with a 16-entry LRU cache.
 - **Built with TypeScript**: Fully typed source code under `src/`, compiled to CommonJS for Node.js.
 
 ## Installation
@@ -170,7 +170,7 @@ logger.packet(msg, level?, caller?);
 | Tag           | Domain                                      | Default Level |
 | ------------- | ------------------------------------------- | ------------- |
 | `Client`      | Bot lifecycle (login, kick, end, reconnect) | INFO          |
-| `Combat`      | Decisions, modes, pearls, strafing          | INFO/DEBUG    |
+| `Combat`      | Decisions, modes, pearls                    | INFO/DEBUG    |
 | `Inventory`   | Equip, toss, record, restore, consume       | INFO          |
 | `Command`     | User commands, run loops, pause             | INFO          |
 | `Status`      | Health, food, position, version             | INFO          |
@@ -301,7 +301,9 @@ Unit tests live in `tests/unit/` and follow the `*.test.ts` naming convention. T
 require a running Minecraft server and use mocked bot instances. Suites:
 
 - `tests/unit/utils.test.ts` — AABB collision detection, fall damage, projectile prediction
-- `tests/unit/aabb-strafe.test.ts` — AABB strafing movement and collision
+- `tests/unit/jump-simulation.test.ts` — Jump physics simulation
+- `tests/unit/movement.test.ts` — Movement and collision
+- `tests/unit/movement-void.test.ts` — Void safety in jump simulation
 - `tests/unit/pvp.test.ts` — CombatDecision, health status, targeting, fall protection
 - `tests/unit/config.test.ts` — RuntimeConfig get/set/reset/overrides
 - `tests/unit/pvp-manager.test.ts` — Attack speed, cooldown, damage multiplier
@@ -312,9 +314,8 @@ End-to-end tests live in `tests/e2e/` and follow the `*.test.ts` naming conventi
 connect to a real Minecraft server using configuration from `.env` and are
 automatically skipped when `E2E_HOST` is not set. Suites:
 
-- `tests/e2e/jump.test.ts` — Jump and collision debug methods
+- `tests/e2e/jump.test.ts` — Jump physics and collision
 - `tests/e2e/pearl.test.ts` — Ender pearl throw trajectory and accuracy
-- `tests/e2e/strafe.test.ts` — Strafe movement and pathfinding
 - `tests/e2e/inventory.test.ts` — Inventory management E2E tests
 - `tests/e2e/pvp.test.ts` — PvP combat E2E tests
 
@@ -335,23 +336,37 @@ npx jest --verbose
 The bot can run in headless mode for automated testing without a TUI. Run from compiled output (via `npm start`):
 
 ```bash
-# Run headless (requires prior build)
-npm start -- --headless --bot1 "dud"
+# Run headless with default username from .env (PUPA_NAME)
+npm start -- --headless --bot
+
+# Run headless with specific username
+npm start -- --headless --bot "MyBot"
+
+# Run headless with specific username and command
+npm start -- --headless --bot "MyBot" "dud"
+
+# Run headless with command only (uses default username)
+npm start -- --headless --bot "dud"
+
+# Multiple bots with different usernames
+npm start -- --headless --bot "BotA" "dud" --bot "BotB" "dud"
 
 # Chain multiple commands
-npm start -- --headless --bot1 "cmd1; cmd2; cmd3;"
+npm start -- --headless --bot "MyBot" "cmd1; cmd2; cmd3;"
 
 # Repeat a command N times with M tick gap
-npm start -- --headless --bot1 "run dud 10 1"
+npm start -- --headless --bot "MyBot" "run dud 10 1"
 
 # Custom timeout and multiple commands
-npm start -- --headless --bot1 "run dud 10 5"
+npm start -- --headless --bot "MyBot" "run dud 10 5"
 
 # Flags can appear in any order
-npm start -- --timeout 60 --headless --bot1 "eq 1 boots; v"
+npm start -- --timeout 60 --headless --bot "MyBot" "eq 1 boots; v"
 ```
 
 The headless mode defaults to a 10-second timeout. Use `--timeout <seconds>` to customize.
+
+**Note:** When multiple bots use the same username (or the default username), duplicate usernames are detected and only the first instance is used. When using the default username with multiple bots, usernames are automatically numbered (e.g., `Pupa1`, `Pupa2`).
 
 ## License
 

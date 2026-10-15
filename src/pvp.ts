@@ -70,6 +70,7 @@ export class PVPManager {
   wasInRange: boolean = false;
   blockingExplosion: boolean = false;
   private _explosionTimeout: ReturnType<typeof setTimeout> | null = null;
+  private _shieldReequipTimeout: ReturnType<typeof setTimeout> | null = null;
   attackRange: number = Constants.COMBAT.ATTACK_RANGE;
   followRange: number = Constants.COMBAT.FOLLOW_RANGE;
   viewDistance: number = Constants.COMBAT.VIEW_DISTANCE;
@@ -79,7 +80,7 @@ export class PVPManager {
   constructor(bot: Bot) {
     this.bot = bot;
     this.movements = new Movements(bot);
-    this.bot.on("physicsTick" as any, () => this.update());
+    this.bot.on("physicsTick", () => this.update());
     this.bot.on("entityGone", (e: { position: Vec3 }) => {
       if (e === this.target) this.stop();
     });
@@ -96,7 +97,7 @@ export class PVPManager {
       pf.setMovements(this.movements);
       pf.setGoal(new goals.GoalFollow(this.target, this.followRange), true);
     }
-    this.bot.emit("startedAttacking" as any);
+    this.bot.emit("startedAttacking");
   }
 
   async stop(): Promise<void> {
@@ -104,23 +105,24 @@ export class PVPManager {
     this.target = undefined;
     this.goal = null;
     this._clearExplosionTimeout();
+    this._clearShieldReequipTimeout();
     const pathfinder = this.bot.pathfinder;
     if (pathfinder) {
       pathfinder.stop();
       try {
         await new Promise<void>((resolve, reject) => {
           const timeout = setTimeout(() => reject(new Error("timeout")), 5000);
-          this.bot.once("path_stop" as any, () => {
+          this.bot.once("path_stop", () => {
             clearTimeout(timeout);
             resolve();
           });
         });
       } catch {
-        this.bot.removeAllListeners("path_stop" as any);
+        this.bot.removeAllListeners("path_stop");
         pathfinder.setGoal(null);
       }
     }
-    this.bot.emit("stoppedAttacking" as any);
+    this.bot.emit("stoppedAttacking");
   }
 
   forceStop(): void {
@@ -128,9 +130,17 @@ export class PVPManager {
     this.target = undefined;
     this.goal = null;
     this._clearExplosionTimeout();
+    this._clearShieldReequipTimeout();
     const pathfinder = this.bot.pathfinder;
     if (pathfinder) pathfinder.setGoal(null);
-    this.bot.emit("stoppedAttacking" as any);
+    this.bot.emit("stoppedAttacking");
+  }
+
+  private _clearShieldReequipTimeout(): void {
+    if (this._shieldReequipTimeout !== null) {
+      clearTimeout(this._shieldReequipTimeout);
+      this._shieldReequipTimeout = null;
+    }
   }
 
   setGoal(pos: Vec3 | null): void {
@@ -220,10 +230,12 @@ export class PVPManager {
       true,
     );
     this.bot.attack(this.target);
-    this.bot.emit("attackedTarget" as any);
+    this.bot.emit("attackedTarget");
     this.timeToNextAttack = this.getWeaponCooldown();
     if (this.hasShield()) {
-      setTimeout(() => {
+      this._clearShieldReequipTimeout();
+      this._shieldReequipTimeout = setTimeout(() => {
+        this._shieldReequipTimeout = null;
         if (this.target && this.hasShield()) {
           this.bot.activateItem(true);
         }
@@ -249,20 +261,30 @@ class CombatDecision {
   condition: () => boolean;
   action: () => Promise<void>;
   name: string;
+  /**
+   * Priority tier. Higher values are checked first and short-circuit the
+   * decision loop if their action swaps the held item. 0 = run after higher
+   * tiers and never short-circuit.
+   */
+  priority: number;
 
   /**
    * @param condition - Function returning boolean
    * @param action - Async function to execute
    * @param name - Decision name
+   * @param priority - Priority tier; default 0. Tier >= 1 may short-circuit
+   *   lower tiers if its action swaps the held item.
    */
   constructor(
     condition: () => boolean,
     action: () => Promise<void>,
     name: string,
+    priority: number = 0,
   ) {
     this.condition = condition;
     this.action = action;
     this.name = name;
+    this.priority = priority;
   }
 }
 
@@ -312,7 +334,7 @@ class CombatManager {
    */
   setupDecisions(): void {
     const { CRITICAL_HP_MULT, LOW_FOOD } = Constants.COMBAT;
-    const inv = () => (this.bot as any).inventoryManager;
+    const inv = () => this.bot.inventoryManager;
 
     this.decisions = [
       new CombatDecision(
@@ -349,17 +371,20 @@ class CombatManager {
           }
         },
         "fall",
+        10,
       ),
 
       new CombatDecision(
         () => true,
         () => inv().equipArmor(),
         "armor",
+        5,
       ),
       new CombatDecision(
         () => true,
         () => inv().equipWeapon(),
         "weapon",
+        5,
       ),
 
       new CombatDecision(
@@ -373,13 +398,16 @@ class CombatManager {
               !hasGapple)
           );
         },
-        () => inv().equipTotem(),
+        async () => {
+          await inv().equipTotem();
+        },
         "totem",
+        10,
       ),
 
       new CombatDecision(
         () => {
-          const target = (this.bot as any).pvp.target;
+          const target = this.bot.pvp.target;
           if (!target) return false;
 
           const { COOLDOWN } = Constants.COMBAT.ENDER_PEARL;
@@ -387,11 +415,7 @@ class CombatManager {
 
           const dist = this.bot.entity!.position.distanceTo(target.position);
           const hasPearls = inv().hasItem("ender_pearl");
-          if (
-            !hasPearls ||
-            dist <= (this.bot as any).pvp.attackRange ||
-            dist > 50
-          )
+          if (!hasPearls || dist <= this.bot.pvp.attackRange || dist > 50)
             return false;
 
           const eyePos = this.bot.entity!.position.offset(
@@ -404,7 +428,7 @@ class CombatManager {
           return this.getBestPearlOffset(eyePos, targetPos, "low") !== null;
         },
         async () => {
-          const target = (this.bot as any).pvp.target;
+          const target = this.bot.pvp.target;
           const eyePos = this.bot.entity!.position.offset(
             0,
             Constants.PHYSICS.EYE_HEIGHT,
@@ -429,6 +453,7 @@ class CombatManager {
           this.lastPearlTime = Date.now();
         },
         "pearl",
+        0,
       ),
 
       new CombatDecision(
@@ -436,7 +461,7 @@ class CombatManager {
           const { totalHealth, healthPoints } = this.getHealthStatus();
           const hasGapple = inv().hasItem("golden_apple");
           const hasTotems = inv().hasItem("totem_of_undying");
-          const regeneration = (this.bot as any).entity.effects["10"];
+          const regeneration = this.bot.entity.effects["10"];
           return (
             hasGapple &&
             healthPoints < 20 &&
@@ -447,13 +472,14 @@ class CombatManager {
         },
         () => inv().equipGapple(),
         "heal",
+        10,
       ),
 
       new CombatDecision(
         () => {
           const { totalHealth } = this.getHealthStatus();
           const hasPotion = inv().hasItem("potion");
-          const strength = (this.bot as any).entity.effects["5"];
+          const strength = this.bot.entity.effects["5"];
           const hasTotems = inv().hasItem("totem_of_undying");
           const hasGapple = inv().hasItem("golden_apple");
           return (
@@ -464,6 +490,7 @@ class CombatManager {
         },
         () => inv().equipBuff(),
         "buff",
+        0,
       ),
 
       new CombatDecision(
@@ -472,7 +499,7 @@ class CombatManager {
           const hasGapple = inv().hasItem("golden_apple");
           const hasTotems = inv().hasItem("totem_of_undying");
           const hasFood = inv().hasFood();
-          const regeneration = (this.bot as any).entity.effects["10"];
+          const regeneration = this.bot.entity.effects["10"];
 
           const safe =
             totalHealth > (this.lastDamage || 1) * CRITICAL_HP_MULT ||
@@ -485,6 +512,7 @@ class CombatManager {
         },
         () => inv().equipFood(),
         "food",
+        0,
       ),
 
       new CombatDecision(
@@ -497,12 +525,14 @@ class CombatManager {
         },
         () => inv().equipUtility(),
         "utility",
+        0,
       ),
 
       new CombatDecision(
         () => true,
         () => this.decideIfToss(),
         "toss",
+        0,
       ),
     ];
   }
@@ -521,10 +551,7 @@ class CombatManager {
     source: Vec3,
     target: Vec3,
   ): { pitch: number; arc: "low" | "high" } | null {
-    const result = (this.bot as any).utilsManager.getBestPearlTrajectory(
-      source,
-      target,
-    );
+    const result = this.bot.utilsManager.getBestPearlTrajectory(source, target);
 
     if (result) {
       if (result.arc === "high") {
@@ -555,7 +582,7 @@ class CombatManager {
     const { VELOCITY, GRAVITY, DRAG } = Constants.COMBAT.ENDER_PEARL;
 
     try {
-      const offset = (this.bot as any).utilsManager.getProjectileOffset(
+      const offset = this.bot.utilsManager.getProjectileOffset(
         source,
         target,
         VELOCITY,
@@ -577,7 +604,7 @@ class CombatManager {
       // Try the other arc type if the first one fails
       if (arcType === "low") {
         try {
-          const offset = (this.bot as any).utilsManager.getProjectileOffset(
+          const offset = this.bot.utilsManager.getProjectileOffset(
             source,
             target,
             VELOCITY,
@@ -609,26 +636,23 @@ class CombatManager {
     try {
       const svc: { switchedItem: boolean } = { switchedItem: false };
       const track = (fn: () => Promise<void>) => async () => {
-        const heldBefore = (this.bot as any).heldItem?.type;
+        const heldBefore = this.bot.heldItem?.type;
         await fn();
-        const heldAfter = (this.bot as any).heldItem?.type;
+        const heldAfter = this.bot.heldItem?.type;
         if (heldBefore !== heldAfter) svc.switchedItem = true;
       };
 
-      // Priority decisions that may cause an item swap — if any of these
-      // trigger and swap the held item, we skip the lower-priority decisions.
-      const priorityNames = new Set([
-        "fall",
-        "totem",
-        "heal",
-        "armor",
-        "weapon",
-      ]);
+      // Sort decisions so the highest-priority tier runs first. Decisions
+      // with priority > 0 may short-circuit lower tiers if their action
+      // swaps the held item.
+      const sorted = [...this.decisions].sort(
+        (a, b) => b.priority - a.priority,
+      );
 
-      for (const decision of this.decisions) {
+      for (const decision of sorted) {
         if (decision.condition()) {
           this.logger.debug(`Decision: ${decision.name} triggered`, "Combat");
-          if (priorityNames.has(decision.name)) {
+          if (decision.priority > 0) {
             await track(decision.action)();
             if (svc.switchedItem) {
               this.logger.debug(
@@ -685,7 +709,7 @@ class CombatManager {
       case 1: // Players (Survival)
         filter = (e) =>
           e.type === "player" &&
-          (this.bot as any).players[e.username]?.gamemode === 0 &&
+          this.bot.players[e.username]?.gamemode === 0 &&
           !this.alliesSet.has(e.username) &&
           distSq(e) <= viewDistSq;
         break;
@@ -732,8 +756,8 @@ class CombatManager {
    * Record the last damage taken based on health change.
    */
   getLastDamage(): void {
-    const health =
-      this.bot.health! + ((this.bot as any).entity.metadata[11] || 0);
+    const absorb = (this.bot.entity.metadata[11] as unknown as number) || 0;
+    const health = this.bot.health! + absorb;
     const delta = this.lastHealth - health;
     if (delta > 0) this.lastDamage = delta;
     this.lastHealth = health;
@@ -749,7 +773,7 @@ class CombatManager {
     absorbPoints: number;
   } {
     const hp = this.bot.health!;
-    const ap = (this.bot as any).entity.metadata[11] || 0;
+    const ap = (this.bot.entity.metadata[11] as unknown as number) || 0;
     return { totalHealth: hp + ap, healthPoints: hp, absorbPoints: ap };
   }
 
@@ -775,17 +799,15 @@ class CombatManager {
       EAT_BUFFER,
     } = Constants.COMBAT.SURVIVAL;
     const { totalHealth } = this.getHealthStatus();
-    const velY = (this.bot as any).entity.velocity.y;
+    const velY = this.bot.entity.velocity.y;
 
-    if (velY >= 0 || (this.bot as any).entity.onGround) {
+    if (velY >= 0 || this.bot.entity.onGround) {
       return { isDangerous: false };
     }
 
-    const groundY = (this.bot as any).utilsManager.getGroundBelow();
+    const groundY = this.bot.utilsManager.getGroundBelow();
     const fallDistance = this.bot.entity!.position.y - groundY;
-    const predictedDamage = (this.bot as any).utilsManager.getFallDamage(
-      fallDistance,
-    );
+    const predictedDamage = this.bot.utilsManager.getFallDamage(fallDistance);
 
     // Tolerance: 32 ticks (1.6s) to eat + 10 ticks buffer = 42 ticks
     const EAT_TICKS_WITH_TOLERANCE = EAT_TICKS + EAT_BUFFER;
@@ -839,7 +861,7 @@ class CombatManager {
       await this.executeDecisions();
     } catch (error: unknown) {
       const err = error as Error;
-      const targetName = (this.bot as any).pvp?.target?.username ?? "none";
+      const targetName = this.bot.pvp?.target?.username ?? "none";
       err.message = `Error in combat loop (mode=${this.mode}, target=${targetName}, health=${this.bot.health?.toFixed(1) ?? "unknown"}): ${err.message}`;
       this.logger.error(err, "Combat");
     } finally {
@@ -853,7 +875,7 @@ class CombatManager {
   async decideIfToss(): Promise<void> {
     const junk = ["compass", "knowledge_book", "glass_bottle"];
     for (const name of junk) {
-      const items = (this.bot as any).inventoryManager.findItem(name);
+      const items = this.bot.inventoryManager.findItem(name);
       if (items.length > 0) {
         const item = items[0];
         this.logger.inventory(
@@ -870,18 +892,18 @@ class CombatManager {
    * Avoid unwanted blocks (web, cactus, liquid) by applying a velocity impulse.
    */
   doAvoid(): void {
-    const unwanted = (this.bot as any).utilsManager.isInUnwanted(
+    const unwanted = this.bot.utilsManager.isInUnwanted(
       this.bot.entity!.position,
     );
     if (unwanted) {
-      const impulse = (this.bot as any).utilsManager.getFlatVelocity(
+      const impulse = this.bot.utilsManager.getFlatVelocity(
         this.bot.entity!.position,
-        unwanted,
+        unwanted as unknown as Vec3,
         180,
         0.01,
-        (this.bot as any).entity.velocity.y,
+        this.bot.entity.velocity.y,
       );
-      (this.bot as any).utilsManager.applyImpulse(impulse, "set");
+      this.bot.utilsManager.applyImpulse(impulse, "set");
     }
   }
 
@@ -963,7 +985,7 @@ class CombatManager {
    * Update the PVP target to the nearest entity matching the current mode filter.
    */
   updateTarget(): void {
-    const currentTarget = (this.bot as any).pvp.target;
+    const currentTarget = this.bot.pvp.target;
     const filter = this.getTargetFilter();
 
     // Stickiness: if the current target is still alive and matches the filter,
@@ -979,12 +1001,12 @@ class CombatManager {
         `Target: acquired ${target.username ?? target.name ?? "entity"}. Distance: ${dist.toFixed(1)}b`,
         "Combat",
       );
-      (this.bot as any).pvp.attack(target);
+      this.bot.pvp.attack(target);
     } else {
       if (currentTarget) {
         this.logger.debug(`Target: lost. No valid entity in range`, "Combat");
       }
-      (this.bot as any).pvp.forceStop();
+      this.bot.pvp.forceStop();
     }
   }
 
@@ -1011,14 +1033,11 @@ class CombatManager {
       this.logger.debug("Pearl: cannot reach target with any arc", "Combat");
       return;
     }
-    await (this.bot as any).inventoryManager.equipPearl(
-      targetPos,
-      result.offset,
-    );
+    await this.bot.inventoryManager.equipPearl(targetPos, result.offset);
     this.lastPearlTime = Date.now();
   }
 
-  private async _waitUntilSettled(): Promise<void> {
+  async _waitUntilSettled(): Promise<void> {
     while (
       !this.bot.entity.onGround ||
       this.bot.entity.velocity.x !== 0 ||
@@ -1037,6 +1056,10 @@ class CombatManager {
 export function attachCombat(bot: Bot): Bot {
   bot.combatManager = new CombatManager(bot);
   return bot;
+}
+
+export function plugin(bot: Bot): void {
+  bot.pvp = new PVPManager(bot);
 }
 
 export { CombatDecision, CombatManager };

@@ -1,7 +1,7 @@
 /**
  * @fileoverview Pupa — Minecraft bot entry point.
  *
- * Multi-bot registry: supports 1-4 bots via --bot1 through --bot4 flags.
+ * Multi-bot registry: supports multiple bots via --bot flags.
  * Each bot operates independently with its own connection, plugins, and
  * command execution, sharing a single logger/TUI instance.
  */
@@ -17,63 +17,79 @@ import { BotRegistry, BotDefinition, BotConfig } from "./bot-registry";
 const HEADLESS = process.argv.includes("--headless");
 
 /**
- * Parse --bot1 through --bot4 flags and per-bot config overrides.
- * Also supports global --host, --port, --username, --version for backward compat.
+ * Parse --bot flags and extract usernames/commands.
+ * Supported syntaxes:
+ *   --bot "USERNAME"
+ *   --bot
+ *   --bot "USERNAME" "COMMANDS"
+ *   --bot "COMMANDS"
+ *
+ * Also supports global --host, --port, --version for shared configuration.
  */
 function parseBotDefinitions(): BotDefinition[] {
   const bots: BotDefinition[] = [];
-  const botFlags = ["bot1", "bot2", "bot3", "bot4"];
+  const seenUsernames = new Set<string>();
+  const defaultUsername = process.env.PUPA_NAME || "Pupa";
 
-  for (const flag of botFlags) {
-    const idx = process.argv.indexOf(`--${flag}`);
-    if (idx === -1) continue;
+  // Find all --bot flags
+  const botIndices: number[] = [];
+  for (let i = 0; i < process.argv.length; i++) {
+    if (process.argv[i] === "--bot") {
+      botIndices.push(i);
+    }
+  }
 
-    // Deduplicate: only the first occurrence counts
-    const num = parseInt(flag.replace("bot", ""), 10);
-    if (bots.some((b) => b.number === num)) continue;
+  // If no --bot flags, create a single bot with default username
+  if (botIndices.length === 0) {
+    bots.push({ number: 1 });
+    return bots;
+  }
 
-    const def: BotDefinition = { number: num };
+  for (let i = 0; i < botIndices.length; i++) {
+    const idx = botIndices[i];
+    const def: BotDefinition = { number: i + 1 };
 
-    // Per-bot config overrides: --bot<N>-host, --bot<N>-port, --bot<N>-username, --bot<N>-version
-    const hostIdx = process.argv.indexOf(`--${flag}-host`);
-    if (hostIdx !== -1 && hostIdx + 1 < process.argv.length)
-      def.host = process.argv[hostIdx + 1];
-
-    const portIdx = process.argv.indexOf(`--${flag}-port`);
-    if (portIdx !== -1 && portIdx + 1 < process.argv.length)
-      def.port = parseInt(process.argv[portIdx + 1], 10);
-
-    const usernameIdx = process.argv.indexOf(`--${flag}-username`);
-    if (usernameIdx !== -1 && usernameIdx + 1 < process.argv.length)
-      def.username = process.argv[usernameIdx + 1];
-
-    const versionIdx = process.argv.indexOf(`--${flag}-version`);
-    if (versionIdx !== -1 && versionIdx + 1 < process.argv.length)
-      def.version = process.argv[versionIdx + 1];
-
-    // In headless mode, the command follows the --bot<N> flag (next non-flag arg)
+    // In headless mode, check if there are two args (username + command) or one arg (command only)
     if (HEADLESS) {
-      const cmdStart = idx + 1;
-      if (cmdStart < process.argv.length) {
-        const next = process.argv[cmdStart];
-        // Only consume if it looks like a command (not a --flag)
-        if (!next.startsWith("--")) {
-          def.headlessCommand = next;
+      const arg1 =
+        idx + 1 < process.argv.length ? process.argv[idx + 1] : undefined;
+      const arg2 =
+        idx + 2 < process.argv.length ? process.argv[idx + 2] : undefined;
+
+      if (arg1 && !arg1.startsWith("--") && arg2 && !arg2.startsWith("--")) {
+        // Two args: first is username, second is command
+        def.username = arg1;
+        def.headlessCommand = arg2;
+      } else if (arg1 && !arg1.startsWith("--")) {
+        // One arg: could be command (contains semicolon) or username
+        if (arg1.includes(";")) {
+          def.headlessCommand = arg1;
+        } else {
+          def.username = arg1;
         }
+      }
+    } else {
+      // Non-headless mode: next arg is username
+      const nextArg =
+        idx + 1 < process.argv.length ? process.argv[idx + 1] : undefined;
+      if (nextArg && !nextArg.startsWith("--")) {
+        def.username = nextArg;
       }
     }
 
-    bots.push(def);
-  }
+    // Handle duplicate usernames
+    const baseUsername = def.username || defaultUsername;
+    if (seenUsernames.has(baseUsername)) {
+      logger.warning(
+        `Duplicate username "${baseUsername}" detected for bot ${def.number}. Using first instance only.`,
+        "Client",
+      );
+      // Skip this bot definition
+      continue;
+    }
+    seenUsernames.add(baseUsername);
 
-  if (bots.length === 0) {
-    bots.push({
-      number: 1,
-      host: process.argv[2] || undefined,
-      port: process.argv[3] ? parseInt(process.argv[3], 10) : undefined,
-      username: process.argv[4] || undefined,
-      version: process.argv[5] || undefined,
-    });
+    bots.push(def);
   }
 
   return bots;
@@ -83,44 +99,43 @@ function parseBotDefinitions(): BotDefinition[] {
  * Resolve the full configuration for a bot definition by merging with
  * global overrides and process.argv defaults.
  */
-function resolveConfig(def: BotDefinition): BotConfig {
-  // Global overrides (--host, --port, --username, --version)
+function resolveConfig(
+  def: BotDefinition,
+  botNumber: number,
+  allBots: BotDefinition[],
+): BotConfig {
+  // Global overrides (--host, --port, --version)
   const globalHostIdx = process.argv.indexOf("--host");
   const globalPortIdx = process.argv.indexOf("--port");
-  const globalUsernameIdx = process.argv.indexOf("--username");
   const globalVersionIdx = process.argv.indexOf("--version");
 
-  const baseUsername =
-    def.username ||
-    (globalUsernameIdx !== -1
-      ? process.argv[globalUsernameIdx + 1]
-      : undefined) ||
-    process.env.PUPA_NAME ||
-    "Pupa";
+  const defaultUsername = process.env.PUPA_NAME || "Pupa";
 
-  // Append bot number to username to prevent conflicts when multiple bots
-  // connect to the same server. Single-bot mode (bot 1) gets "Pupa1".
-  const username = `${baseUsername}${def.number}`;
+  // Determine base username
+  let baseUsername = def.username || defaultUsername;
+
+  // If using default username and there are multiple bots, append number to prevent collisions
+  const usingDefault = !def.username;
+  const hasMultipleBots = allBots.length > 1;
+
+  if (usingDefault && hasMultipleBots) {
+    baseUsername = `${defaultUsername}${botNumber}`;
+  }
 
   return {
     host:
-      def.host ||
       (globalHostIdx !== -1 ? process.argv[globalHostIdx + 1] : undefined) ||
       process.env.PUPA_HOST ||
       "localhost",
     port:
-      def.port ||
       (globalPortIdx !== -1
         ? parseInt(process.argv[globalPortIdx + 1], 10)
-        : undefined) ||
-      parseInt(process.env.PUPA_PORT || "25565", 10),
-    username,
+        : undefined) || parseInt(process.env.PUPA_PORT || "25565", 10),
+    username: baseUsername,
     version:
-      def.version ||
       (globalVersionIdx !== -1
         ? process.argv[globalVersionIdx + 1]
-        : undefined) ||
-      undefined,
+        : undefined) || undefined,
   };
 }
 
@@ -132,7 +147,7 @@ async function start(): Promise<void> {
   registry.setDefinitions(botDefs);
 
   for (const def of botDefs) {
-    const cfg = resolveConfig(def);
+    const cfg = resolveConfig(def, def.number, botDefs);
     registry.configs.set(def.number, cfg);
 
     try {

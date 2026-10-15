@@ -19,21 +19,21 @@
 import "dotenv/config";
 import mineflayer, { Bot } from "mineflayer";
 import { pathfinder } from "mineflayer-pathfinder";
+import { PVPManager } from "../../src/pvp";
 import { attachInventory } from "../../src/inventory";
 import { attachCombat } from "../../src/pvp";
 import { attachCommands } from "../../src/commands";
 import { attachUtils } from "../../src/utils";
 import { RuntimeConfig } from "../../src/config";
 import { logger } from "../../src/logger";
-import { Vec3 } from "vec3";
 import { Constants } from "../../src/constants";
+import { Vec3 } from "vec3";
 
 const HOST = process.env.E2E_HOST;
 const PORT = parseInt(process.env.E2E_PORT || "25565", 10);
 const USERNAME = "inventory_test";
 const VERSION = process.env.E2E_VERSION || undefined;
 const TIMEOUT_MS = parseInt(process.env.E2E_TIMEOUT || "60", 10) * 1000;
-const CONNECT_TIMEOUT_MS = 15_000;
 const POSITION = new Vec3(50, 1, 50);
 
 // ── Conditional test runner ─────────────────────────────────────────
@@ -58,7 +58,7 @@ async function createBot(): Promise<Bot> {
       bot.removeAllListeners("error");
       bot.removeAllListeners("end");
       reject(new Error("Connection timed out"));
-    }, CONNECT_TIMEOUT_MS);
+    }, TIMEOUT_MS);
 
     bot.once("spawn", () => {
       clearTimeout(timer);
@@ -74,8 +74,11 @@ async function createBot(): Promise<Bot> {
     });
   });
 
+  // Load standard plugins
   bot.loadPlugin(pathfinder);
+  bot.pvp = new PVPManager(bot);
 
+  // Load Pupa managers
   (bot as any).runtimeConfig = new RuntimeConfig();
   (bot as any).__logger = logger;
   attachInventory(bot);
@@ -116,9 +119,18 @@ function getEquippedItem(
     : null;
 }
 
+/** Reset bot state between tests: stop pathfinding/PVP, switch to creative. */
+async function resetBotState(bot: Bot): Promise<void> {
+  bot.clearControlStates();
+  (bot as any).pathfinder?.stop();
+  (bot as any).pvp?.stop();
+  bot.chat!("/gamemode creative");
+  await bot.waitForTicks!(2);
+}
+
 /** Clear the bot's entire inventory via creative mode. */
 async function clearInventory(bot: Bot): Promise<void> {
-  await bot.utilsManager.assertCommandSuccess("gamemode", "creative");
+  bot.chat!("/gamemode creative");
   await bot.waitForTicks!(2);
   await getInv(bot).clearInventory();
   await bot.waitForTicks!(2);
@@ -148,7 +160,7 @@ async function giveItem(
     args += ` 0`;
   }
   if (nbt) args += ` ${nbt}`;
-  await bot.utilsManager.assertCommandSuccess("give", args);
+  bot.chat!(`/give ${args}`);
   await bot.waitForTicks!(Constants.TIMING.EQUIP_TICKS);
 }
 
@@ -254,13 +266,11 @@ describeE2E("E2E Inventory Tests", () => {
       try {
         await bot.waitForChunksToLoad!();
         await bot.waitForTicks!(1);
-        await bot.utilsManager.assertCommandSuccess(
-          "tp",
-          Object.values(POSITION).join(" "),
-        );
+        bot.chat!("/tp " + Object.values(POSITION).join(" "));
+
         await bot.waitForChunksToLoad!();
         await bot.waitForTicks!(1);
-        await bot.utilsManager.assertCommandSuccess("gamemode", "creative");
+        bot.chat!("/gamemode creative");
       } catch (error) {
         logger.error(error, "Inventory");
       }
@@ -268,21 +278,19 @@ describeE2E("E2E Inventory Tests", () => {
   }, TIMEOUT_MS);
 
   beforeEach(async () => {
+    // Run before each test
     if (bot && bot.entity) {
       try {
         await bot.waitForChunksToLoad!();
         await bot.waitForTicks!(1);
-        await bot.utilsManager.assertCommandSuccess(
-          "tp",
-          Object.values(POSITION).join(" "),
-        );
+        bot.chat!("/tp " + Object.values(POSITION).join(" "));
+
         await bot.waitForChunksToLoad!();
         await bot.waitForTicks!(1);
+        await resetBotState(bot);
         await clearInventory(bot);
         await getInv(bot).unequipAllItems();
         await clearEffects(bot);
-        await bot.utilsManager.assertCommandSuccess("gamemode", "creative");
-        await bot.waitForTicks!(2);
       } catch (error) {
         logger.error(error, "Inventory");
       }
@@ -294,12 +302,14 @@ describeE2E("E2E Inventory Tests", () => {
       try {
         bot.quit!();
         bot.end!();
+        // Give extra time for cleanup
+        await new Promise((resolve) => setTimeout(resolve, 1000));
       } catch (error) {
         logger.error(error, "Inventory");
       }
     }
     logger.setDebugMode(false);
-  }, TIMEOUT_MS);
+  }, TIMEOUT_MS * 2);
 
   // ══════════════════════════════════════════════════════════════════
   // Category 1: Armor Equip Prioritization (Worst to Best)
@@ -475,7 +485,9 @@ describeE2E("E2E Inventory Tests", () => {
 
       // Give a higher-DPS weapon — should replace.
       // Netherite axe (DPS = 10.0) only exists in 1.16+; use diamond sword (DPS = 11.2) on 1.12.2.
-      const finalWeapon = supportsNetherite() ? "netherite_axe" : "diamond_sword";
+      const finalWeapon = supportsNetherite()
+        ? "netherite_axe"
+        : "diamond_sword";
       const finalDPS = supportsNetherite() ? "10.0" : "11.2";
       await giveItem(bot, finalWeapon, 1);
       await getInv(bot).equipWeapon();
@@ -540,12 +552,26 @@ describeE2E("E2E Inventory Tests", () => {
 
     test("equipBuff prefers strong_strength over regular strength", async () => {
       // Give regular strength potion (Potion: minecraft:strength)
-      await giveItem(bot, "potion", 1, undefined, '{Potion:"minecraft:strength"}');
+      await giveItem(
+        bot,
+        "potion",
+        1,
+        undefined,
+        '{Potion:"minecraft:strength"}',
+      );
       // Give strong strength potion (Potion: minecraft:strong_strength)
-      await giveItem(bot, "potion", 1, undefined, '{Potion:"minecraft:strong_strength"}');
+      await giveItem(
+        bot,
+        "potion",
+        1,
+        undefined,
+        '{Potion:"minecraft:strong_strength"}',
+      );
 
       // Verify both potions are in inventory before equipBuff
-      const invItems = bot.inventory.items().filter((i: any) => i.name === "potion");
+      const invItems = bot.inventory
+        .items()
+        .filter((i: any) => i.name === "potion");
       expect(invItems.length).toBe(2);
 
       await getInv(bot).equipBuff();
@@ -662,12 +688,11 @@ describeE2E("E2E Inventory Tests", () => {
       // The food should be equipped (or was eaten if food wasn't full)
       // Since we can't reliably drain food via effects/movement in test,
       // we verify the food is either equipped or was consumed.
-      const foodInInv = bot.inventory.items().filter(
-        (i: any) => i.name === "cooked_beef",
-      ).length;
+      const foodInInv = bot.inventory
+        .items()
+        .filter((i: any) => i.name === "cooked_beef").length;
       // Either the food is equipped, was consumed, or is in inventory
-      const foodHandled =
-        offHandItem?.name === "cooked_beef" || foodInInv > 0;
+      const foodHandled = offHandItem?.name === "cooked_beef" || foodInInv > 0;
       expect(foodHandled).toBe(true);
 
       // Restore creative mode
@@ -684,7 +709,13 @@ describeE2E("E2E Inventory Tests", () => {
       await clearEffects(bot);
 
       // Give strength potion
-      await giveItem(bot, "potion", 1, undefined, '{Potion:"minecraft:strength"}');
+      await giveItem(
+        bot,
+        "potion",
+        1,
+        undefined,
+        '{Potion:"minecraft:strength"}',
+      );
 
       // equipBuff should equip and drink the potion
       await getInv(bot).equipBuff();

@@ -26,7 +26,13 @@ describe("getJumpVelocity", () => {
     const target = new Vec3(0, 0, 0);
     const { getSlipperiness, getHorizontalSpeed } = getMocker();
 
-    const vel = getJumpVelocity(source, target, 0, getSlipperiness, getHorizontalSpeed);
+    const vel = getJumpVelocity(
+      source,
+      target,
+      0,
+      getSlipperiness,
+      getHorizontalSpeed,
+    );
 
     expect(vel.x).toBe(0);
     expect(vel.y).toBe(Constants.PHYSICS.JUMP_VELOCITY); // 0.42
@@ -38,7 +44,13 @@ describe("getJumpVelocity", () => {
     const target = new Vec3(3, 0, 0);
     const { getSlipperiness, getHorizontalSpeed } = getMocker();
 
-    const vel = getJumpVelocity(source, target, 0, getSlipperiness, getHorizontalSpeed);
+    const vel = getJumpVelocity(
+      source,
+      target,
+      0,
+      getSlipperiness,
+      getHorizontalSpeed,
+    );
 
     expect(vel.x).toBeGreaterThan(0);
     expect(vel.z).toBe(0);
@@ -50,7 +62,13 @@ describe("getJumpVelocity", () => {
     const target = new Vec3(0, 0, 3);
     const { getSlipperiness, getHorizontalSpeed } = getMocker();
 
-    const vel = getJumpVelocity(source, target, 0, getSlipperiness, getHorizontalSpeed);
+    const vel = getJumpVelocity(
+      source,
+      target,
+      0,
+      getSlipperiness,
+      getHorizontalSpeed,
+    );
 
     expect(vel.x).toBe(0);
     expect(vel.z).toBeGreaterThan(0);
@@ -61,8 +79,20 @@ describe("getJumpVelocity", () => {
     const source = new Vec3(0, 0, 0);
     const { getSlipperiness, getHorizontalSpeed } = getMocker();
 
-    const vel3 = getJumpVelocity(source, new Vec3(0, 0, 3), 0, getSlipperiness, getHorizontalSpeed);
-    const vel5 = getJumpVelocity(source, new Vec3(0, 0, 5), 0, getSlipperiness, getHorizontalSpeed);
+    const vel3 = getJumpVelocity(
+      source,
+      new Vec3(0, 0, 3),
+      0,
+      getSlipperiness,
+      getHorizontalSpeed,
+    );
+    const vel5 = getJumpVelocity(
+      source,
+      new Vec3(0, 0, 5),
+      0,
+      getSlipperiness,
+      getHorizontalSpeed,
+    );
 
     expect(vel5.z).toBeGreaterThan(vel3.z);
   });
@@ -73,7 +103,13 @@ describe("getJumpVelocity", () => {
     const { getSlipperiness, getHorizontalSpeed } = getMocker();
 
     // With 90 degree angle, the bot should move in +Z direction (south)
-    const vel = getJumpVelocity(source, target, 90, getSlipperiness, getHorizontalSpeed);
+    const vel = getJumpVelocity(
+      source,
+      target,
+      90,
+      getSlipperiness,
+      getHorizontalSpeed,
+    );
 
     expect(Math.abs(vel.x)).toBeLessThan(0.001);
     expect(vel.z).toBeGreaterThan(0);
@@ -84,7 +120,13 @@ describe("getJumpVelocity", () => {
     const { getSlipperiness, getHorizontalSpeed } = getMocker();
 
     for (const dist of [1, 2, 3, 4, 5]) {
-      const vel = getJumpVelocity(source, new Vec3(dist, 0, 0), 0, getSlipperiness, getHorizontalSpeed);
+      const vel = getJumpVelocity(
+        source,
+        new Vec3(dist, 0, 0),
+        0,
+        getSlipperiness,
+        getHorizontalSpeed,
+      );
       expect(vel.y).toBeCloseTo(Constants.PHYSICS.JUMP_VELOCITY, 10);
     }
   });
@@ -94,12 +136,16 @@ describe("getJumpVelocity", () => {
     const target = new Vec3(3, 0, 0);
 
     const velDefault = getJumpVelocity(
-      source, target, 0,
+      source,
+      target,
+      0,
       () => Constants.PHYSICS.SLIPPERINESS.DEFAULT,
       () => 0,
     );
     const velIce = getJumpVelocity(
-      source, target, 0,
+      source,
+      target,
+      0,
       () => Constants.PHYSICS.SLIPPERINESS.ICE,
       () => 0,
     );
@@ -115,8 +161,22 @@ describe("getJumpVelocity", () => {
     const target = new Vec3(4, 0, 0);
     const { getSlipperiness, getHorizontalSpeed } = getMocker();
 
-    const velNoAccel = getJumpVelocity(source, target, 0, getSlipperiness, getHorizontalSpeed, 0);
-    const velWithAccel = getJumpVelocity(source, target, 0, getSlipperiness, getHorizontalSpeed, 0.02);
+    const velNoAccel = getJumpVelocity(
+      source,
+      target,
+      0,
+      getSlipperiness,
+      getHorizontalSpeed,
+      0,
+    );
+    const velWithAccel = getJumpVelocity(
+      source,
+      target,
+      0,
+      getSlipperiness,
+      getHorizontalSpeed,
+      0.02,
+    );
 
     // With air acceleration, less initial velocity is needed
     expect(velWithAccel.x).toBeLessThan(velNoAccel.x);
@@ -127,7 +187,13 @@ describe("getJumpVelocity", () => {
     const target = new Vec3(1, 0, 0);
     const { getSlipperiness, getHorizontalSpeed } = getMocker();
 
-    const vel = getJumpVelocity(source, target, 0, getSlipperiness, getHorizontalSpeed);
+    const vel = getJumpVelocity(
+      source,
+      target,
+      0,
+      getSlipperiness,
+      getHorizontalSpeed,
+    );
 
     // With accurate physics and correction factor, the velocity for a 1-block
     // jump should be reasonable (between 0.1 and 0.3 blocks/tick).

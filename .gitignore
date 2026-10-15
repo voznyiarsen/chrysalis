@@ -149,4 +149,4 @@ plans/
 ignore/
 codeArchive/
 documentation/
-comprehend/
+documentation/**
