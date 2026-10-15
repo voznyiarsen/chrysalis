@@ -1038,11 +1038,19 @@ class CombatManager {
   }
 
   async _waitUntilSettled(): Promise<void> {
+    let iterations = 0;
     while (
       !this.bot.entity.onGround ||
       this.bot.entity.velocity.x !== 0 ||
       this.bot.entity.velocity.z !== 0
     ) {
+      if (++iterations > 200) {
+        this.logger.warning(
+          `_waitUntilSettled: timed out after 200 ticks (onGround=${this.bot.entity.onGround})`,
+          "Combat",
+        );
+        break;
+      }
       await this.bot.waitForTicks!(1);
     }
   }

@@ -15,80 +15,32 @@
  */
 
 import "dotenv/config";
-import mineflayer, { Bot } from "mineflayer";
-import { pathfinder } from "mineflayer-pathfinder";
-import { PVPManager } from "../../src/pvp";
-import { attachInventory } from "../../src/inventory";
-import { attachCombat } from "../../src/pvp";
-import { attachCommands } from "../../src/commands";
-import { attachUtils } from "../../src/utils";
-import { RuntimeConfig } from "../../src/config";
-import { logger } from "../../src/logger";
+import { Bot } from "mineflayer";
 import { Vec3 } from "vec3";
+import { logger } from "../../src/logger";
+import {
+  createBot,
+  e2eTimeoutMs,
+  ensureReady,
+  getSessionPosition,
+  getSessionSuffix,
+  getUsername,
+  logSuiteStart,
+  pollUntil,
+  resetBotState,
+} from "./setup";
 
 // ── E2E configuration ───────────────────────────────────────────────
 
 const HOST = process.env.E2E_HOST;
-const PORT = parseInt(process.env.E2E_PORT || "25565", 10);
-const USERNAME = "jump_test";
-const VERSION = process.env.E2E_VERSION || undefined;
-const TIMEOUT_MS = parseInt(process.env.E2E_TIMEOUT || "60", 10) * 1000;
-const POSITION = new Vec3(0, 1, 0);
+const USERNAME = getUsername("jmp");
+const BASE_POSITION = new Vec3(0, 1, 0);
+const POSITION = getSessionPosition(BASE_POSITION);
+const TIMEOUT_MS = e2eTimeoutMs();
 
 // ── Conditional test runner ─────────────────────────────────────────
 
 const describeE2E = HOST ? describe : describe.skip;
-
-// ── Bot creation helper ─────────────────────────────────────────────
-
-async function createBot(): Promise<Bot> {
-  const bot = mineflayer.createBot({
-    host: HOST!,
-    port: PORT,
-    username: USERNAME,
-    version: VERSION,
-    logErrors: true,
-    hideErrors: false,
-  });
-
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      bot.removeAllListeners("spawn");
-      bot.removeAllListeners("error");
-      bot.removeAllListeners("end");
-      reject(new Error("Connection timed out"));
-    }, TIMEOUT_MS);
-
-    bot.once("spawn", () => {
-      clearTimeout(timer);
-      resolve();
-    });
-    bot.once("error", (err: Error) => {
-      clearTimeout(timer);
-      reject(err);
-    });
-    bot.once("end", () => {
-      clearTimeout(timer);
-      reject(new Error("Bot disconnected before spawn"));
-    });
-  });
-
-  // Load standard plugins
-  bot.loadPlugin(pathfinder);
-  bot.pvp = new PVPManager(bot);
-
-  // Load Pupa managers
-  (bot as any).runtimeConfig = new RuntimeConfig();
-  (bot as any).__logger = logger;
-  attachInventory(bot);
-  attachCombat(bot);
-  attachCommands(bot);
-  attachUtils(bot);
-
-  logger.setDebugMode(true);
-
-  return bot;
-}
 
 // ── E2E test suite ──────────────────────────────────────────────────
 
@@ -104,16 +56,13 @@ describeE2E("E2E Jump Tests", () => {
 
   beforeAll(async () => {
     // Run before all tests
-    bot = await createBot();
-    if (bot && bot.entity) {
-      try {
-        bot.chat!("/gamemode creative");
-        await bot.waitForTicks!(5);
-        bot.chat!(`/tp ${Object.values(POSITION).join(" ")}`);
-        await bot.waitForTicks!(5);
-      } catch (error) {
-        logger.error(error, "Movement");
-      }
+    logSuiteStart("E2E Jump Tests", USERNAME);
+    bot = await createBot({ username: USERNAME, timeoutMs: TIMEOUT_MS });
+    try {
+      await ensureReady(bot, POSITION);
+    } catch (error) {
+      logger.error(error, "Movement");
+      throw error;
     }
   }, TIMEOUT_MS);
 
@@ -121,11 +70,10 @@ describeE2E("E2E Jump Tests", () => {
     // Run before each test
     if (bot && bot.entity) {
       try {
-        bot.chat!(`/tp ${Object.values(POSITION).join(" ")}`);
+        bot.chat!(`/tp ${POSITION.x} ${POSITION.y} ${POSITION.z}`);
+        await bot.waitForChunksToLoad!();
         await bot.waitForTicks!(5);
-        bot.clearControlStates();
-        (bot as any).pathfinder?.stop();
-        (bot as any).pvp?.stop();
+        await resetBotState(bot);
       } catch (error) {
         logger.error(error, "Movement");
       }
@@ -164,7 +112,9 @@ describeE2E("E2E Jump Tests", () => {
     async () => {
       const source = bot.entity.position;
       const targetPos = source.offset(3, 0, 0);
-      getUtils().isJumpPathClear(source, targetPos);
+      const result = getUtils().isJumpPathClear(source, targetPos);
+      expect(typeof result).toBe("boolean");
+      logger.info(`isJumpPathClear default offset: ${result}`, "Movement");
     },
     TIMEOUT_MS,
   );
@@ -182,7 +132,7 @@ describeE2E("E2E Jump Tests", () => {
       [];
 
     beforeEach(async () => {
-      bot.chat!(`/tp ${Object.values(POSITION).join(" ")}`);
+      bot.chat!(`/tp ${POSITION.x} ${POSITION.y} ${POSITION.z}`);
       await bot.waitForTicks!(5);
     }, TIMEOUT_MS);
 
@@ -199,15 +149,6 @@ describeE2E("E2E Jump Tests", () => {
               distance,
               result,
             });
-            if (result < 0.3) {
-              bot.chat!(
-                `/setblock ${Object.values(POSITION.offset(dir.offset.x * distance, -1, dir.offset.z * distance)).join(" ")} diamond_block`,
-              );
-            } else {
-              bot.chat!(
-                `/setblock ${Object.values(POSITION.offset(dir.offset.x * distance, -1, dir.offset.z * distance)).join(" ")} redstone_block`,
-              );
-            }
             logger.info(
               `${dir.name} ${distance} blocks: ${result.toFixed(3)}b remaining`,
               "Movement",
@@ -254,7 +195,7 @@ describeE2E("E2E Jump Tests", () => {
       [];
 
     beforeEach(async () => {
-      bot.chat!(`/tp ${Object.values(POSITION).join(" ")}`);
+      bot.chat!(`/tp ${POSITION.x} ${POSITION.y} ${POSITION.z}`);
       await bot.waitForTicks!(5);
     }, TIMEOUT_MS);
 
@@ -271,15 +212,6 @@ describeE2E("E2E Jump Tests", () => {
               distance,
               result,
             });
-            if (result < 0.3) {
-              bot.chat!(
-                `/setblock ${Object.values(POSITION.offset(dir.offset.x * distance, -1, dir.offset.z * distance)).join(" ")} diamond_block`,
-              );
-            } else {
-              bot.chat!(
-                `/setblock ${Object.values(POSITION.offset(dir.offset.x * distance, -1, dir.offset.z * distance)).join(" ")} redstone_block`,
-              );
-            }
             logger.info(
               `${dir.name} ${distance} blocks: ${result.toFixed(3)}b remaining`,
               "Movement",
@@ -348,35 +280,55 @@ describeE2E("E2E Jump Tests", () => {
       const utils = getUtils();
       const source = bot.entity.position;
       const targetPos = source.offset(-3, 0, 0);
-      for (const scenario of scenarios) {
-        await bot.waitForTicks!(5);
-        if (scenario.obstacle) {
-          const o = scenario.obstacle;
-          const obstaclePos = source.offset(o.dx, o.dy, o.dz);
-          bot.chat!(
-            `/setblock ${Math.floor(obstaclePos.x)} ${Math.floor(obstaclePos.y)} ${Math.floor(obstaclePos.z)} emerald_block`,
-          );
-          await bot.waitForTicks!(3);
-        }
-        const result = utils.isJumpPathClear(source, targetPos);
+      // Track placed obstacles so a failed assertion still cleans up.
+      const placed: Vec3[] = [];
+      try {
+        for (const scenario of scenarios) {
+          await bot.waitForTicks!(5);
+          if (scenario.obstacle) {
+            const o = scenario.obstacle;
+            const obstaclePos = source.offset(o.dx, o.dy, o.dz);
+            bot.chat!(
+              `/setblock ${Math.floor(obstaclePos.x)} ${Math.floor(obstaclePos.y)} ${Math.floor(obstaclePos.z)} emerald_block`,
+            );
+            placed.push(obstaclePos);
+            // Wait for the block update to reach the client's world view.
+            await pollUntil(
+              bot,
+              () => {
+                const b = bot.blockAt(obstaclePos);
+                return !!b && b.boundingBox !== "empty";
+              },
+              40,
+              `obstacle for ${scenario.name} to appear`,
+            );
+          }
+          const result = utils.isJumpPathClear(source, targetPos);
 
-        // Assert expected results based on comments
-        if (scenario.name === "Test 0") {
-          // Should be CLEAR
-          expect(result).toBe(true);
-        } else {
-          // All other tests should be BLOCKED
-          expect(result).toBe(false);
-        }
+          // Assert expected results based on comments
+          if (scenario.name === "Test 0") {
+            // Should be CLEAR
+            expect(result).toBe(true);
+          } else {
+            // All other tests should be BLOCKED
+            expect(result).toBe(false);
+          }
 
-        if (scenario.obstacle) {
-          const o = scenario.obstacle;
-          const obstaclePos = source.offset(o.dx, o.dy, o.dz);
+          if (scenario.obstacle) {
+            const obstaclePos = placed.pop()!;
+            bot.chat!(
+              `/setblock ${Math.floor(obstaclePos.x)} ${Math.floor(obstaclePos.y)} ${Math.floor(obstaclePos.z)} air`,
+            );
+            await bot.waitForTicks!(3);
+          }
+        }
+      } finally {
+        for (const obstaclePos of placed) {
           bot.chat!(
             `/setblock ${Math.floor(obstaclePos.x)} ${Math.floor(obstaclePos.y)} ${Math.floor(obstaclePos.z)} air`,
           );
-          await bot.waitForTicks!(3);
         }
+        if (placed.length > 0) await bot.waitForTicks!(3);
       }
     },
     TIMEOUT_MS,

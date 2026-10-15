@@ -15,80 +15,37 @@
  */
 
 import "dotenv/config";
-import mineflayer, { Bot } from "mineflayer";
-import { pathfinder } from "mineflayer-pathfinder";
-import { PVPManager } from "../../src/pvp";
-import { attachInventory } from "../../src/inventory";
-import { attachCombat } from "../../src/pvp";
-import { attachCommands } from "../../src/commands";
-import { attachUtils } from "../../src/utils";
-import { RuntimeConfig } from "../../src/config";
-import { logger } from "../../src/logger";
+import { Bot } from "mineflayer";
 import { Vec3 } from "vec3";
+import { logger } from "../../src/logger";
 import { Constants } from "../../src/constants";
-import { getCooldown } from "../../src/pvp";
+import {
+  createBot,
+  e2eTimeoutMs,
+  e2eVersion,
+  ensureReady,
+  getSessionPosition,
+  getUsername,
+  isModernVersion,
+  killMobsCmd,
+  logSuiteStart,
+  pollUntil,
+  resetBotState,
+  summonZombieCmd,
+} from "./setup";
 
 // ── E2E configuration ───────────────────────────────────────────────
 
 const HOST = process.env.E2E_HOST;
-const PORT = parseInt(process.env.E2E_PORT || "25565", 10);
-const USERNAME = "pvp_test";
-const VERSION = process.env.E2E_VERSION || undefined;
-const TIMEOUT_MS = parseInt(process.env.E2E_TIMEOUT || "60", 10) * 1000;
-const POSITION = new Vec3(400, 1, 400);
+const USERNAME = getUsername("pvp");
+const BASE_POSITION = new Vec3(400, 1, 400);
+const POSITION = getSessionPosition(BASE_POSITION);
+const TIMEOUT_MS = e2eTimeoutMs();
+const VERSION = e2eVersion();
 
 // ── Conditional test runner ─────────────────────────────────────────
 
 const describeE2E = HOST ? describe : describe.skip;
-
-// ── Bot creation helper ─────────────────────────────────────────────
-
-async function createBot(): Promise<Bot> {
-  const bot = mineflayer.createBot({
-    host: HOST!,
-    port: PORT,
-    username: USERNAME,
-    version: VERSION,
-    logErrors: true,
-    hideErrors: false,
-  });
-
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      bot.removeAllListeners("spawn");
-      bot.removeAllListeners("error");
-      bot.removeAllListeners("end");
-      reject(new Error("Connection timed out"));
-    }, TIMEOUT_MS);
-
-    bot.once("spawn", () => {
-      clearTimeout(timer);
-      resolve();
-    });
-    bot.once("error", (err: Error) => {
-      clearTimeout(timer);
-      reject(err);
-    });
-    bot.once("end", () => {
-      clearTimeout(timer);
-      reject(new Error("Bot disconnected before spawn"));
-    });
-  });
-
-  bot.loadPlugin(pathfinder);
-  bot.pvp = new PVPManager(bot);
-
-  (bot as any).runtimeConfig = new RuntimeConfig();
-  (bot as any).__logger = logger;
-  attachInventory(bot);
-  attachCombat(bot);
-  attachCommands(bot);
-  attachUtils(bot);
-
-  logger.setDebugMode(true);
-
-  return bot;
-}
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -96,23 +53,35 @@ async function killNearbyEntities(
   bot: Bot,
   radius: number = 30,
 ): Promise<void> {
-  bot.chat!("/kill @e[type=!player,distance=.." + radius + "]");
+  bot.chat!(`/${killMobsCmd(radius, VERSION)}`);
   await bot.waitForTicks!(3);
 }
 
-/** Summon a zombie and wait for it to appear in bot entities. */
+/**
+ * Summon a zombie and wait for it to appear in bot entities.
+ * Matches by entity id (snapshot before summon) so no version-specific
+ * name/type strings are needed. Returns null on timeout.
+ */
 async function summonMob(bot: Bot): Promise<any> {
-  bot.chat!("/summon zombie ~ ~1 ~");
-  for (let i = 0; i < 40; i++) {
+  const before = new Set(Object.keys(bot.entities).map((k) => parseInt(k, 10)));
+  bot.chat!(`/${summonZombieCmd(VERSION)}`);
+  for (let i = 0; i < 60; i++) {
     await bot.waitForTicks!(1);
-    for (const [, entity] of Object.entries(bot.entities)) {
+    for (const [idStr, entity] of Object.entries(bot.entities)) {
+      const id = parseInt(idStr, 10);
+      if (before.has(id)) continue;
       const e = entity as any;
-      if (e.type === "mob" && e.position && e.name === "zombie") {
-        return e;
-      }
+      // A freshly summoned creature: has position, is not a player.
+      if (e.position && e.type !== "player") return e;
     }
   }
   return null;
+}
+
+/** Teleport to an absolute position (correct template interpolation). */
+async function tpTo(bot: Bot, x: number, y: number, z: number): Promise<void> {
+  bot.chat!(`/tp ${x} ${y} ${z}`);
+  await bot.waitForTicks!(2);
 }
 
 // ── E2E test suite ──────────────────────────────────────────────────
@@ -126,37 +95,29 @@ describeE2E("E2E PvP Tests", () => {
   const getPvp = (): any => (bot as any).pvp;
 
   /**
-   * Reset bot state between tests: stop pathfinding/PVP, switch to creative.
+   * Give an item and wait until it arrives (fire-and-forget is flaky).
    */
-  async function resetBotState(): Promise<void> {
-    bot.clearControlStates();
-    (bot as any).pathfinder?.stop();
-    if (getPvp()) {
-      getPvp().forceStop();
-    }
-    if (bot.combatManager) {
-      bot.combatManager.setMode(0);
-    }
-    bot.chat!("/gamemode creative");
-    await bot.waitForTicks!(2);
+  async function giveAndWait(item: string): Promise<void> {
+    bot.chat!(`/give @p ${item} 1`);
+    await pollUntil(
+      bot,
+      () => bot.inventoryManager.getItemCount(item) >= 1,
+      60,
+      `${item} in inventory after /give`,
+    );
   }
 
   jest.setTimeout(TIMEOUT_MS * 5);
 
   beforeAll(async () => {
     // Run before all tests
-    bot = await createBot();
-    if (bot && bot.entity) {
-      try {
-        await bot.waitForChunksToLoad!();
-        await bot.waitForTicks!(1);
-        bot.chat!("/tp " + Object.values(POSITION).join(" "));
-        await bot.waitForChunksToLoad!();
-        await bot.waitForTicks!(1);
-        bot.chat!("/gamemode creative");
-      } catch (error) {
-        logger.error(error, "Combat");
-      }
+    logSuiteStart("E2E PvP Tests", USERNAME);
+    bot = await createBot({ username: USERNAME, timeoutMs: TIMEOUT_MS });
+    try {
+      await ensureReady(bot, POSITION);
+    } catch (error) {
+      logger.error(error, "Combat");
+      throw error;
     }
   }, TIMEOUT_MS);
 
@@ -164,12 +125,11 @@ describeE2E("E2E PvP Tests", () => {
     if (bot && bot.entity) {
       try {
         await killNearbyEntities(bot, 30);
+        bot.chat!(`/tp ${POSITION.x} ${POSITION.y} ${POSITION.z}`);
         await bot.waitForChunksToLoad!();
         await bot.waitForTicks!(1);
-
-        await bot.waitForChunksToLoad!();
-        await bot.waitForTicks!(1);
-        await resetBotState();
+        await resetBotState(bot);
+        bot.combatManager.setMode(0);
       } catch (error) {
         logger.error(error, "Combat");
       }
@@ -191,83 +151,11 @@ describeE2E("E2E PvP Tests", () => {
     logger.setDebugMode(false);
   }, TIMEOUT_MS * 2);
 
-  // ══════════════════════════════════════════════════════════════════
-  // Category 1: Target Acquisition & Tracking
-  // ══════════════════════════════════════════════════════════════════
-
-  describe("Target Acquisition & Tracking", () => {
-    test(
-      "setMode — switches to PvP mode (1)",
-      () => {
-        const cm = getCm();
-        cm.setMode(1);
-        expect(cm.mode).toBe(1);
-      },
-      TIMEOUT_MS,
-    );
-
-    test(
-      "getTargetFilter — returns a function",
-      () => {
-        const cm = getCm();
-        cm.setMode(1);
-        const filter = cm.getTargetFilter();
-        expect(typeof filter).toBe("function");
-      },
-      TIMEOUT_MS,
-    );
-
-    test(
-      "getTargetFilter — caches filter for same mode",
-      () => {
-        const cm = getCm();
-        cm.setMode(2);
-        const f1 = cm.getTargetFilter();
-        const f2 = cm.getTargetFilter();
-        expect(f1).toBe(f2);
-      },
-      TIMEOUT_MS,
-    );
-
-    test(
-      "getTargetFilter — invalidates cache on mode change",
-      () => {
-        const cm = getCm();
-        cm.setMode(1);
-        const f1 = cm.getTargetFilter();
-        cm.setMode(2);
-        const f2 = cm.getTargetFilter();
-        expect(f1).not.toBe(f2);
-      },
-      TIMEOUT_MS,
-    );
-
-    test(
-      "addAlly / removeAlly — modifies allies set",
-      () => {
-        const cm = getCm();
-        cm.setMode(2);
-        cm.addAlly("SomePlayer");
-        expect(cm.alliesSet.has("SomePlayer")).toBe(true);
-        cm.removeAlly("SomePlayer");
-        expect(cm.alliesSet.has("SomePlayer")).toBe(false);
-      },
-      TIMEOUT_MS,
-    );
-
-    test(
-      "addAlly — invalidates mode filter cache",
-      () => {
-        const cm = getCm();
-        cm.setMode(1);
-        const f1 = cm.getTargetFilter();
-        cm.addAlly("Player1");
-        const f2 = cm.getTargetFilter();
-        expect(f1).not.toBe(f2);
-      },
-      TIMEOUT_MS,
-    );
-  });
+  // ──────────────────────────────────────────────────────────────────
+  // NOTE: Target-filter/mode/ally pure logic (setMode, getTargetFilter
+  // caching, addAlly/removeAlly) is covered without a server in
+  // tests/unit/pvp.test.ts. E2E covers only live-server behavior below.
+  // ──────────────────────────────────────────────────────────────────
 
   // ══════════════════════════════════════════════════════════════════
   // Category 2: Attack Lifecycle
@@ -388,116 +276,28 @@ describeE2E("E2E PvP Tests", () => {
       TIMEOUT_MS,
     );
 
-    test(
-      "getCooldown — matches weapon speed for iron sword",
-      () => {
-        expect(getCooldown("minecraft:iron_sword")).toBe(12);
-      },
-      TIMEOUT_MS,
-    );
-
-    test(
-      "getCooldown — fist cooldown",
-      () => {
-        expect(getCooldown(null)).toBe(5);
-      },
-      TIMEOUT_MS,
-    );
-
-    test(
-      "getCooldown — trident cooldown",
-      () => {
-        expect(getCooldown("minecraft:trident")).toBe(18);
-      },
-      TIMEOUT_MS,
-    );
+    // NOTE: getCooldown weapon-table values are covered in
+    // tests/unit/pvp-manager.test.ts; only the live tick path stays here.
   });
 
-  // ══════════════════════════════════════════════════════════════════
-  // Category 4: Health Status & Damage Tracking
-  // ══════════════════════════════════════════════════════════════════
-
-  describe("Health Status & Damage Tracking", () => {
-    test(
-      "getHealthStatus — full health in creative",
-      () => {
-        const cm = getCm();
-        const status = cm.getHealthStatus();
-        expect(status.healthPoints).toBe(20);
-        expect(status.absorbPoints).toBe(0);
-        expect(status.totalHealth).toBe(20);
-      },
-      TIMEOUT_MS,
-    );
-
-    test(
-      "getHealthStatus — partial health",
-      () => {
-        // Directly set health to simulate damage
-        bot.health = 10;
-        const cm = getCm();
-        const status = cm.getHealthStatus();
-        expect(status.healthPoints).toBe(10);
-        expect(status.absorbPoints).toBe(0);
-        expect(status.totalHealth).toBe(10);
-        // Restore
-        bot.health = 20;
-      },
-      TIMEOUT_MS,
-    );
-
-    test(
-      "getLastDamage — records damage taken",
-      () => {
-        const cm = getCm();
-        cm.lastHealth = 20;
-        cm.lastDamage = 0;
-
-        // Simulate damage by reducing health
-        bot.health = 15;
-        cm.getLastDamage();
-        expect(cm.lastDamage).toBe(5);
-
-        // Restore
-        bot.health = 20;
-      },
-      TIMEOUT_MS,
-    );
-
-    test(
-      "getLastDamage — does not record healing",
-      () => {
-        const cm = getCm();
-        cm.lastDamage = 5;
-        cm.lastHealth = 20;
-        cm.getLastDamage();
-        expect(cm.lastDamage).toBe(5);
-      },
-      TIMEOUT_MS,
-    );
-  });
+  // ──────────────────────────────────────────────────────────────────
+  // NOTE: Health/damage pure logic (getHealthStatus arithmetic,
+  // getLastDamage deltas) is covered in tests/unit/pvp.test.ts with mocked
+  // bots. Live damage application needs survival-mode setup and stays below
+  // in the fall-protection tests.
+  // ──────────────────────────────────────────────────────────────────
 
   // ══════════════════════════════════════════════════════════════════
   // Category 5: Fall Protection
   // ══════════════════════════════════════════════════════════════════
 
   describe("Fall Protection", () => {
-    test(
-      "getFallProtectionStatus — safe when on ground",
-      () => {
-        const cm = getCm();
-        const status = cm.getFallProtectionStatus();
-        expect(status.isDangerous).toBe(false);
-      },
-      TIMEOUT_MS,
-    );
-
+    // NOTE: safe-on-ground is covered in tests/unit/pvp.test.ts.
     test(
       "getFallProtectionStatus — safe when velocity is upward",
       async () => {
         const cm = getCm();
-        bot.chat!("/tp `${POSITION.x} ${POSITION.y} ${POSITION.z}`,");
-        await bot.waitForTicks!(2);
+        await tpTo(bot, POSITION.x, POSITION.y, POSITION.z);
         bot.setControlState("jump", true);
         await bot.waitForTicks!(1);
         bot.setControlState("jump", false);
@@ -513,19 +313,16 @@ describeE2E("E2E PvP Tests", () => {
       async () => {
         const cm = getCm();
 
-        bot.chat!("/gamemode survival");
-        await bot.waitForTicks!(2);
+        await bot.inventoryManager.setGamemode(0);
+        try {
+          await tpTo(bot, POSITION.x, POSITION.y + 50, POSITION.z);
 
-        bot.chat!("/tp `${POSITION.x} ${POSITION.y + 50} ${POSITION.z}`,");
-        await bot.waitForTicks!(2);
-
-        const status = cm.getFallProtectionStatus();
-        expect(status.isDangerous).toBe(true);
-
-        bot.chat!("/tp `${POSITION.x} ${POSITION.y} ${POSITION.z}`,");
-        await bot.waitForTicks!(2);
-        bot.chat!("/gamemode creative");
-        await bot.waitForTicks!(2);
+          const status = cm.getFallProtectionStatus();
+          expect(status.isDangerous).toBe(true);
+        } finally {
+          await tpTo(bot, POSITION.x, POSITION.y, POSITION.z);
+          await bot.inventoryManager.setGamemode(1);
+        }
       },
       TIMEOUT_MS,
     );
@@ -535,21 +332,18 @@ describeE2E("E2E PvP Tests", () => {
       async () => {
         const cm = getCm();
 
-        bot.chat!("/gamemode survival");
-        await bot.waitForTicks!(2);
+        await bot.inventoryManager.setGamemode(0);
+        try {
+          await tpTo(bot, POSITION.x, POSITION.y + 50, POSITION.z);
 
-        bot.chat!("/tp `${POSITION.x} ${POSITION.y + 50} ${POSITION.z}`,");
-        await bot.waitForTicks!(2);
-
-        const status = cm.getFallProtectionStatus();
-        expect(status.isDangerous).toBe(true);
-        expect(status.predictedDamage).toBeDefined();
-        expect(status.predictedDamage).toBeGreaterThan(0);
-
-        bot.chat!("/tp `${POSITION.x} ${POSITION.y} ${POSITION.z}`,");
-        await bot.waitForTicks!(2);
-        bot.chat!("/gamemode creative");
-        await bot.waitForTicks!(2);
+          const status = cm.getFallProtectionStatus();
+          expect(status.isDangerous).toBe(true);
+          expect(status.predictedDamage).toBeDefined();
+          expect(status.predictedDamage).toBeGreaterThan(0);
+        } finally {
+          await tpTo(bot, POSITION.x, POSITION.y, POSITION.z);
+          await bot.inventoryManager.setGamemode(1);
+        }
       },
       TIMEOUT_MS,
     );
@@ -565,11 +359,10 @@ describeE2E("E2E PvP Tests", () => {
       async () => {
         const cm = getCm();
 
-        bot.chat!("/give @p iron_helmet 1");
-        bot.chat!("/give @p iron_chestplate 1");
-        bot.chat!("/give @p iron_leggings 1");
-        bot.chat!("/give @p iron_boots 1");
-        await bot.waitForTicks!(5);
+        await giveAndWait("iron_helmet");
+        await giveAndWait("iron_chestplate");
+        await giveAndWait("iron_leggings");
+        await giveAndWait("iron_boots");
 
         await cm.executeDecisions();
 
@@ -584,8 +377,7 @@ describeE2E("E2E PvP Tests", () => {
       async () => {
         const cm = getCm();
 
-        bot.chat!("/give @p diamond_sword 1");
-        await bot.waitForTicks!(5);
+        await giveAndWait("diamond_sword");
 
         await cm.executeDecisions();
 
@@ -652,10 +444,19 @@ describeE2E("E2E PvP Tests", () => {
         const cm = getCm();
 
         const zombie = await summonMob(bot);
+        expect(zombie).not.toBeNull();
 
-        bot.chat!(
-          "/tp `@e[type=zombie,limit=1,sort=nearest] ${POSITION.x + 60} ${POSITION.y} ${POSITION.z}`,",
-        );
+        // Move the zombie 60 blocks away; the pearl decision caps at 50.
+        // Branch entity-selector syntax by version (1.13 flattened IDs).
+        if (isModernVersion(VERSION)) {
+          bot.chat!(
+            `/tp @e[type=zombie,limit=1,sort=nearest] ${POSITION.x + 60} ${POSITION.y} ${POSITION.z}`,
+          );
+        } else {
+          bot.chat!(
+            `/tp @e[type=Zombie,r=100] ${POSITION.x + 60} ${POSITION.y} ${POSITION.z}`,
+          );
+        }
         await bot.waitForTicks!(5);
 
         const eyePos = bot.entity.position.offset(
@@ -712,7 +513,7 @@ describeE2E("E2E PvP Tests", () => {
         cm._edgeSneaking = true;
         bot.setControlState("sneak", true);
 
-        bot.chat!("/tp `${POSITION.x + 0.1} ${POSITION.y} ${POSITION.z}`,");
+        await tpTo(bot, POSITION.x + 0.1, POSITION.y, POSITION.z);
         await bot.waitForTicks!(5);
 
         cm.doEdgeProtection();
@@ -744,6 +545,9 @@ describeE2E("E2E PvP Tests", () => {
   // ══════════════════════════════════════════════════════════════════
 
   describe("Avoid Unwanted Blocks", () => {
+    // NOTE: doAvoid's escape-direction math is a known open issue (refactor
+    // plan 1.1: boolean passed where a Vec3 target is expected). This stays
+    // a no-throw smoke test until that fix lands; it must not assert motion.
     test(
       "doAvoid — runs without error on clean ground",
       () => {
@@ -772,9 +576,8 @@ describeE2E("E2E PvP Tests", () => {
         await getPvp().attack(zombie);
         expect(getPvp().target).toBe(zombie);
 
-        bot.chat!("/give @p iron_chestplate 1");
-        bot.chat!("/give @p diamond_sword 1");
-        await bot.waitForTicks!(3);
+        await giveAndWait("iron_chestplate");
+        await giveAndWait("diamond_sword");
 
         // doDecide should run without error
         // The target may or may not be retained depending on entity tracking
@@ -859,20 +662,27 @@ describeE2E("E2E PvP Tests", () => {
     );
 
     test(
-      "goal integration — pathfinder navigates toward goal",
+      "goal integration — pathfinder navigates toward goal while attacking",
       async () => {
-        const goal = new Vec3(POSITION.x + 5, POSITION.y, POSITION.z);
+        // setGoal alone only stores the goal; the pathfinder engages via
+        // update() while a target is tracked, so this needs a live target.
+        const zombie = await summonMob(bot);
+        expect(zombie).not.toBeNull();
+        await getPvp().attack(zombie);
+
+        const goal = new Vec3(POSITION.x + 20, POSITION.y, POSITION.z);
         getPvp().setGoal(goal);
+        const startDist = bot.entity.position.distanceTo(goal);
 
-        await bot.waitForTicks!(10);
-
-        const dist = bot.entity.position.distanceTo(goal);
-        expect(dist).toBeLessThanOrEqual(10);
+        await pollUntil(
+          bot,
+          () => bot.entity.position.distanceTo(goal) < startDist,
+          200,
+          "bot to move toward combat goal",
+        );
 
         getPvp().clearGoal();
-        if ((bot as any).pathfinder) {
-          (bot as any).pathfinder.stop();
-        }
+        getPvp().forceStop();
       },
       TIMEOUT_MS,
     );

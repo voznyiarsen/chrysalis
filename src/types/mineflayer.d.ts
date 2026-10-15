@@ -41,6 +41,7 @@ declare class InventoryManager {
   hasItem(itemName: string, metadata?: number): boolean;
   hasFood(): boolean;
   clearInventory(): Promise<void>;
+  setGamemode(mode: number, timeout?: number): Promise<void>;
   recordInventory(slot: number | string): Promise<void>;
   restoreInventory(slot: number | string): Promise<void>;
   tossAllItems(): Promise<void>;

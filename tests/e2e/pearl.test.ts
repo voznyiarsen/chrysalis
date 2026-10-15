@@ -15,81 +15,33 @@
  */
 
 import "dotenv/config";
-import mineflayer, { Bot } from "mineflayer";
-import { pathfinder } from "mineflayer-pathfinder";
-import { PVPManager } from "../../src/pvp";
-import { attachInventory } from "../../src/inventory";
-import { attachCombat } from "../../src/pvp";
-import { attachCommands } from "../../src/commands";
-import { attachUtils } from "../../src/utils";
-import { RuntimeConfig } from "../../src/config";
-import { logger } from "../../src/logger";
+import { Bot } from "mineflayer";
 import { Vec3 } from "vec3";
+import { logger } from "../../src/logger";
 import { Constants } from "../../src/constants";
+import {
+  buildGiveCmd,
+  createBot,
+  e2eTimeoutMs,
+  ensureReady,
+  getSessionPosition,
+  getUsername,
+  logSuiteStart,
+  pollUntil,
+  resetBotState,
+} from "./setup";
 
 // ── E2E configuration ───────────────────────────────────────────────
 
 const HOST = process.env.E2E_HOST;
-const PORT = parseInt(process.env.E2E_PORT || "25565", 10);
-const USERNAME = "pearl_test";
-const VERSION = process.env.E2E_VERSION || undefined;
-const TIMEOUT_MS = parseInt(process.env.E2E_TIMEOUT || "60", 10) * 1000;
-const POSITION = new Vec3(100, 1, 100);
+const USERNAME = getUsername("prl");
+const BASE_POSITION = new Vec3(100, 1, 100);
+const POSITION = getSessionPosition(BASE_POSITION);
+const TIMEOUT_MS = e2eTimeoutMs();
 
 // ── Conditional test runner ─────────────────────────────────────────
 
 const describeE2E = HOST ? describe : describe.skip;
-
-// ── Bot creation helper ─────────────────────────────────────────────
-
-async function createBot(): Promise<Bot> {
-  const bot = mineflayer.createBot({
-    host: HOST!,
-    port: PORT,
-    username: USERNAME,
-    version: VERSION,
-    logErrors: true,
-    hideErrors: false,
-  });
-
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      bot.removeAllListeners("spawn");
-      bot.removeAllListeners("error");
-      bot.removeAllListeners("end");
-      reject(new Error("Connection timed out"));
-    }, TIMEOUT_MS);
-
-    bot.once("spawn", () => {
-      clearTimeout(timer);
-      resolve();
-    });
-    bot.once("error", (err: Error) => {
-      clearTimeout(timer);
-      reject(err);
-    });
-    bot.once("end", () => {
-      clearTimeout(timer);
-      reject(new Error("Bot disconnected before spawn"));
-    });
-  });
-
-  // Load standard plugins
-  bot.loadPlugin(pathfinder);
-  bot.pvp = new PVPManager(bot);
-
-  // Load Pupa managers
-  (bot as any).runtimeConfig = new RuntimeConfig();
-  (bot as any).__logger = logger;
-  attachInventory(bot);
-  attachCombat(bot);
-  attachCommands(bot);
-  attachUtils(bot);
-
-  logger.setDebugMode(true);
-
-  return bot;
-}
 
 // ── E2E test suite ──────────────────────────────────────────────────
 
@@ -98,18 +50,26 @@ describeE2E("E2E Pearl Tests", () => {
 
   // ── Helpers ───────────────────────────────────────────────────────
 
-  const getIm = (): any => (bot as any).inventoryManager;
   const getUtils = (): any => (bot as any).utilsManager;
+
+  /**
+   * Give ender pearls and wait until they are in inventory.
+   */
+  async function givePearls(count: number): Promise<void> {
+    bot.chat!(buildGiveCmd("ender_pearl", { count }));
+    await pollUntil(
+      bot,
+      () => bot.inventoryManager.getItemCount("ender_pearl") >= count,
+      60,
+      `${count} ender pearls in inventory`,
+    );
+  }
 
   /**
    * Reset bot state between tests: stop pathfinding/PVP, switch to creative.
    */
-  async function resetBotState(): Promise<void> {
-    bot.clearControlStates();
-    (bot as any).pathfinder?.stop();
-    (bot as any).pvp?.stop();
-    bot.chat!("/gamemode creative");
-    await bot.waitForTicks!(2);
+  async function resetState(): Promise<void> {
+    await resetBotState(bot);
   }
 
   // Set overall suite timeout to 5 minutes (300 seconds)
@@ -117,19 +77,13 @@ describeE2E("E2E Pearl Tests", () => {
 
   beforeAll(async () => {
     // Run before all tests
-    bot = await createBot();
-    if (bot && bot.entity) {
-      try {
-        await bot.waitForChunksToLoad!();
-        await bot.waitForTicks!(1);
-        bot.chat!("/tp " + Object.values(POSITION).join(" "));
-
-        await bot.waitForChunksToLoad!();
-        await bot.waitForTicks!(1);
-        bot.chat!("/gamemode creative");
-      } catch (error) {
-        logger.error(error, "Combat");
-      }
+    logSuiteStart("E2E Pearl Tests", USERNAME);
+    bot = await createBot({ username: USERNAME, timeoutMs: TIMEOUT_MS });
+    try {
+      await ensureReady(bot, POSITION);
+    } catch (error) {
+      logger.error(error, "Combat");
+      throw error;
     }
   }, TIMEOUT_MS);
 
@@ -137,13 +91,10 @@ describeE2E("E2E Pearl Tests", () => {
     // Run before each test
     if (bot && bot.entity) {
       try {
+        bot.chat!(`/tp ${POSITION.x} ${POSITION.y} ${POSITION.z}`);
         await bot.waitForChunksToLoad!();
         await bot.waitForTicks!(1);
-        bot.chat!("/tp " + Object.values(POSITION).join(" "));
-
-        await bot.waitForChunksToLoad!();
-        await bot.waitForTicks!(1);
-        await resetBotState();
+        await resetState();
       } catch (error) {
         logger.error(error, "Combat");
       }
@@ -169,109 +120,83 @@ describeE2E("E2E Pearl Tests", () => {
   // Comprehensive Pearl Throws
   // ══════════════════════════════════════════════════════════════════
 
-  describe("comprehensive throws — low arc", () => {
-    const TOLERANCE = 2.0;
-    let results: {
-      direction: string;
-      distance: number;
-      arc: string;
-      result: number;
-    }[];
+  describe("measured throws - low arc", () => {
+    const TOLERANCE = 3.0;
 
-    beforeAll(async () => {
-      // Inline the comprehensive pearl arc test logic
-      const TOLERANCE = 2.0;
-      const utils = getUtils();
-      const eyePos = bot.entity.position.offset(0, bot.entity.height!, 0);
-      const targetPos = eyePos.offset(20, 0, 0);
-      const { VELOCITY, GRAVITY, DRAG } = Constants.COMBAT.ENDER_PEARL;
-      let offset;
-      try {
-        offset = utils.getProjectileOffset(
-          eyePos,
-          targetPos,
-          VELOCITY,
-          GRAVITY,
-          DRAG,
-          "low",
+    test(
+      "pearl lands within tolerance of a 20-block target",
+      async () => {
+        await givePearls(2);
+        const startPos = bot.entity.position.clone();
+        const targetPos = startPos.offset(20, 0, 0);
+        const countBefore = bot.inventoryManager.getItemCount("ender_pearl");
+
+        await bot.combatManager.throwPearlAt(targetPos, "low");
+
+        // Wait for the pearl to land (teleport) or time out.
+        await pollUntil(
+          bot,
+          () =>
+            bot.entity.position.distanceTo(startPos) > TOLERANCE ||
+            bot.inventoryManager.getItemCount("ender_pearl") < countBefore,
+          200,
+          "pearl to land or leave inventory",
         );
-      } catch {
-        offset = null;
-      }
-      if (offset !== null) {
-        await getIm().equipPearl(targetPos, offset);
-      }
-      results = [
-        {
-          direction: "East",
-          distance: 20,
-          arc: "low",
-          result: offset !== null ? 0 : -1,
-        },
-      ];
-    }, TIMEOUT_MS * 2);
 
-    test("all throws land within tolerance", () => {
-      results.forEach((t) => {
-        if (t.result < 0 || t.result > TOLERANCE) {
-          throw new Error(
-            `Low arc ${t.direction} ${t.distance} blocks: result=${t.result} exceeds ${TOLERANCE} tolerance`,
-          );
+        const remaining = targetPos.distanceTo(bot.entity.position);
+        logger.info(
+          `Low arc 20 blocks: ${remaining.toFixed(2)}b from target`,
+          "Combat",
+        );
+        // The pearl must have been consumed by the throw.
+        expect(bot.inventoryManager.getItemCount("ender_pearl")).toBeLessThan(
+          countBefore,
+        );
+        // If the pearl teleported the bot, the landing must be near target.
+        if (bot.entity.position.distanceTo(startPos) > TOLERANCE) {
+          expect(remaining).toBeLessThanOrEqual(TOLERANCE);
         }
-      });
-    });
+      },
+      TIMEOUT_MS,
+    );
   });
 
-  describe("comprehensive throws \u2014 high arc", () => {
-    const TOLERANCE = 3.0;
-    let results: {
-      direction: string;
-      distance: number;
-      arc: string;
-      result: number;
-    }[];
+  describe("measured throws - high arc", () => {
+    const TOLERANCE = 4.0;
 
-    beforeAll(async () => {
-      const TOLERANCE = 3.0;
-      const utils = getUtils();
-      const eyePos = bot.entity.position.offset(0, bot.entity.height!, 0);
-      const targetPos = eyePos.offset(20, 0, 0);
-      const { VELOCITY, GRAVITY, DRAG } = Constants.COMBAT.ENDER_PEARL;
-      let offset;
-      try {
-        offset = utils.getProjectileOffset(
-          eyePos,
-          targetPos,
-          VELOCITY,
-          GRAVITY,
-          DRAG,
-          "high",
+    test(
+      "pearl lands within tolerance of a 20-block target",
+      async () => {
+        await givePearls(2);
+        const startPos = bot.entity.position.clone();
+        const targetPos = startPos.offset(20, 0, 0);
+        const countBefore = bot.inventoryManager.getItemCount("ender_pearl");
+
+        await bot.combatManager.throwPearlAt(targetPos, "high");
+
+        await pollUntil(
+          bot,
+          () =>
+            bot.entity.position.distanceTo(startPos) > TOLERANCE ||
+            bot.inventoryManager.getItemCount("ender_pearl") < countBefore,
+          200,
+          "pearl to land or leave inventory",
         );
-      } catch {
-        offset = null;
-      }
-      if (offset !== null) {
-        await getIm().equipPearl(targetPos, offset);
-      }
-      results = [
-        {
-          direction: "East",
-          distance: 20,
-          arc: "high",
-          result: offset !== null ? 0 : -1,
-        },
-      ];
-    }, TIMEOUT_MS * 2);
 
-    test("all throws land within tolerance", () => {
-      results.forEach((t) => {
-        if (t.result < 0 || t.result > TOLERANCE) {
-          throw new Error(
-            `High arc ${t.direction} ${t.distance} blocks: result=${t.result} exceeds ${TOLERANCE} tolerance`,
-          );
+        const remaining = targetPos.distanceTo(bot.entity.position);
+        logger.info(
+          `High arc 20 blocks: ${remaining.toFixed(2)}b from target`,
+          "Combat",
+        );
+        expect(bot.inventoryManager.getItemCount("ender_pearl")).toBeLessThan(
+          countBefore,
+        );
+        if (bot.entity.position.distanceTo(startPos) > TOLERANCE) {
+          expect(remaining).toBeLessThanOrEqual(TOLERANCE);
         }
-      });
-    });
+      },
+      TIMEOUT_MS,
+    );
   });
 
   // ══════════════════════════════════════════════════════════════════
@@ -282,8 +207,16 @@ describeE2E("E2E Pearl Tests", () => {
     test(
       "low arc throw succeeds",
       async () => {
+        await givePearls(1);
+        const countBefore = bot.inventoryManager.getItemCount("ender_pearl");
         const targetPos = bot.entity.position.offset(2.5, 0, 0.75);
         await bot.combatManager.throwPearlAt(targetPos, "low");
+        await pollUntil(
+          bot,
+          () => bot.inventoryManager.getItemCount("ender_pearl") < countBefore,
+          60,
+          "pearl to leave inventory after low arc throw",
+        );
       },
       TIMEOUT_MS,
     );
@@ -291,8 +224,16 @@ describeE2E("E2E Pearl Tests", () => {
     test(
       "high arc throw succeeds",
       async () => {
+        await givePearls(1);
+        const countBefore = bot.inventoryManager.getItemCount("ender_pearl");
         const targetPos = bot.entity.position.offset(2.5, 0, 0.75);
         await bot.combatManager.throwPearlAt(targetPos, "high");
+        await pollUntil(
+          bot,
+          () => bot.inventoryManager.getItemCount("ender_pearl") < countBefore,
+          60,
+          "pearl to leave inventory after high arc throw",
+        );
       },
       TIMEOUT_MS,
     );

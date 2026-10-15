@@ -312,17 +312,31 @@ require a running Minecraft server and use mocked bot instances. Suites:
 
 End-to-end tests live in `tests/e2e/` and follow the `*.test.ts` naming convention. They
 connect to a real Minecraft server using configuration from `.env` and are
-automatically skipped when `E2E_HOST` is not set. Suites:
+automatically skipped when `E2E_HOST` is not set. Shared bot lifecycle,
+session identity, and 1.12.2 vs 1.13+ command branching live in
+`tests/e2e/setup.ts`. Suites:
 
 - `tests/e2e/jump.test.ts` — Jump physics and collision
 - `tests/e2e/pearl.test.ts` — Ender pearl throw trajectory and accuracy
 - `tests/e2e/inventory.test.ts` — Inventory management E2E tests
 - `tests/e2e/pvp.test.ts` — PvP combat E2E tests
 
+E2E requires operator permission: each suite checks OP in `beforeAll` and
+fails fast naming the `/op <username>` command to run on the server console.
+Concurrent runs need a distinct `E2E_SUFFIX` per session (usernames become
+`inv|jmp|prl|pvp_<suffix>` with per-session positions), and each session's
+bot must be OPed.
+
 Run all tests:
 
 ```bash
 npm test
+```
+
+E2E only:
+
+```bash
+npm run test:e2e
 ```
 
 Or with verbose output:

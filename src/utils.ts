@@ -728,11 +728,14 @@ export class UtilsManager {
   }
 
   private async _waitUntilSettled(): Promise<void> {
+    let iterations = 0;
     while (
       !this.bot.entity.onGround ||
       this.bot.entity.velocity.x !== 0 ||
       this.bot.entity.velocity.z !== 0
     ) {
+      // Guard against void/unloaded-chunk hangs where onGround never resolves.
+      if (++iterations > 200) break;
       await this.bot.waitForTicks!(1);
     }
   }

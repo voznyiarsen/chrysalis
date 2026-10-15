@@ -17,79 +17,38 @@
 // ── E2E configuration ───────────────────────────────────────────────
 
 import "dotenv/config";
-import mineflayer, { Bot } from "mineflayer";
-import { pathfinder } from "mineflayer-pathfinder";
-import { PVPManager } from "../../src/pvp";
-import { attachInventory } from "../../src/inventory";
-import { attachCombat } from "../../src/pvp";
-import { attachCommands } from "../../src/commands";
-import { attachUtils } from "../../src/utils";
-import { RuntimeConfig } from "../../src/config";
+import { Bot } from "mineflayer";
+import { Vec3 } from "vec3";
 import { logger } from "../../src/logger";
 import { Constants } from "../../src/constants";
-import { Vec3 } from "vec3";
+import {
+  buildGiveCmd,
+  createBot,
+  e2eTimeoutMs,
+  e2eVersion,
+  effectClearCmd,
+  effectGiveCmd,
+  enchNbt,
+  ensureReady,
+  getSessionPosition,
+  getUsername,
+  isModernVersion,
+  logSuiteStart,
+  pollUntil,
+  resetBotState,
+  type EnchantSpec,
+} from "./setup";
 
 const HOST = process.env.E2E_HOST;
-const PORT = parseInt(process.env.E2E_PORT || "25565", 10);
-const USERNAME = "inventory_test";
-const VERSION = process.env.E2E_VERSION || undefined;
-const TIMEOUT_MS = parseInt(process.env.E2E_TIMEOUT || "60", 10) * 1000;
-const POSITION = new Vec3(50, 1, 50);
+const USERNAME = getUsername("inv");
+const BASE_POSITION = new Vec3(50, 1, 50);
+const POSITION = getSessionPosition(BASE_POSITION);
+const TIMEOUT_MS = e2eTimeoutMs();
+const VERSION = e2eVersion();
 
 // ── Conditional test runner ─────────────────────────────────────────
 
 const describeE2E = HOST ? describe : describe.skip;
-
-// ── Bot creation helper ─────────────────────────────────────────────
-
-async function createBot(): Promise<Bot> {
-  const bot = mineflayer.createBot({
-    host: HOST!,
-    port: PORT,
-    username: USERNAME,
-    version: VERSION,
-    logErrors: true,
-    hideErrors: false,
-  });
-
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      bot.removeAllListeners("spawn");
-      bot.removeAllListeners("error");
-      bot.removeAllListeners("end");
-      reject(new Error("Connection timed out"));
-    }, TIMEOUT_MS);
-
-    bot.once("spawn", () => {
-      clearTimeout(timer);
-      resolve();
-    });
-    bot.once("error", (err: Error) => {
-      clearTimeout(timer);
-      reject(err);
-    });
-    bot.once("end", () => {
-      clearTimeout(timer);
-      reject(new Error("Bot disconnected before spawn"));
-    });
-  });
-
-  // Load standard plugins
-  bot.loadPlugin(pathfinder);
-  bot.pvp = new PVPManager(bot);
-
-  // Load Pupa managers
-  (bot as any).runtimeConfig = new RuntimeConfig();
-  (bot as any).__logger = logger;
-  attachInventory(bot);
-  attachCombat(bot);
-  attachCommands(bot);
-  attachUtils(bot);
-
-  logger.setDebugMode(true);
-
-  return bot;
-}
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -120,27 +79,26 @@ function getEquippedItem(
 }
 
 /** Reset bot state between tests: stop pathfinding/PVP, switch to creative. */
-async function resetBotState(bot: Bot): Promise<void> {
-  bot.clearControlStates();
-  (bot as any).pathfinder?.stop();
-  (bot as any).pvp?.stop();
-  bot.chat!("/gamemode creative");
-  await bot.waitForTicks!(2);
+async function resetState(bot: Bot): Promise<void> {
+  await resetBotState(bot);
 }
 
 /** Clear the bot's entire inventory via creative mode. */
 async function clearInventory(bot: Bot): Promise<void> {
-  bot.chat!("/gamemode creative");
-  await bot.waitForTicks!(2);
+  await bot.inventoryManager.setGamemode(1);
   await getInv(bot).clearInventory();
-  await bot.waitForTicks!(2);
+  await pollUntil(
+    bot,
+    () => bot.inventory.items().length === 0,
+    40,
+    "inventory to be empty after clear",
+  );
 }
 
 /**
- * Give the bot an item via /give command.
- * Uses 1.12.2-compatible syntax: /give <player> <item> [amount] [data] [dataTag]
- * When metadata or nbt is provided, count is always included (required by 1.12.2).
- * The data value (0) is included before NBT since 1.12.2 requires it.
+ * Give the bot an item via /give and wait until it arrives.
+ * 1.12.2 syntax: /give <player> <item> [amount] [data] [dataTag].
+ * 1.13+ syntax:  /give <player> <item>[nbt] [amount].
  */
 async function giveItem(
   bot: Bot,
@@ -148,37 +106,33 @@ async function giveItem(
   count: number = 1,
   metadata?: number,
   nbt?: string,
+  modernNbt?: string,
 ): Promise<void> {
-  let args = `@p ${itemName}`;
-  // In 1.12.2, count MUST be present when metadata or nbt follows.
-  const hasExtra = metadata !== undefined || nbt !== undefined;
-  if (count !== 1 || hasExtra) args += ` ${count}`;
-  if (metadata !== undefined) {
-    args += ` ${metadata}`;
-  } else if (nbt) {
-    // 1.12.2 requires a data value before the dataTag; default to 0.
-    args += ` 0`;
-  }
-  if (nbt) args += ` ${nbt}`;
-  bot.chat!(`/give ${args}`);
+  bot.chat!(
+    buildGiveCmd(itemName, { count, metadata, nbt }, VERSION, modernNbt),
+  );
+  await pollUntil(
+    bot,
+    () => bot.inventoryManager.getItemCount(itemName) >= count,
+    60,
+    `${count}x ${itemName} in inventory after /give`,
+  );
   await bot.waitForTicks!(Constants.TIMING.EQUIP_TICKS);
 }
 
 /**
  * Give the bot an enchanted item via /give with NBT.
- * 1.12.2 syntax uses numeric enchantment IDs with the "ench" tag.
+ * 1.12.2 uses numeric enchantment IDs (`ench` tag);
+ * 1.13+ uses namespaced keys (`Enchantments` tag).
  */
 async function giveEnchantedItem(
   bot: Bot,
   itemName: string,
-  enchantments: Array<{ id: number; lvl: number }>,
+  enchantments: EnchantSpec[],
   count: number = 1,
 ): Promise<void> {
-  const enchStr = enchantments
-    .map((e) => `{id:${e.id},lvl:${e.lvl}}`)
-    .join(",");
-  const nbt = `{ench:[${enchStr}]}`;
-  await giveItem(bot, itemName, count, undefined, nbt);
+  const tag = enchNbt(enchantments, VERSION);
+  await giveItem(bot, itemName, count, undefined, tag.legacy, tag.modern);
 }
 
 /** Check if the server version supports netherite items (1.16+). */
@@ -192,62 +146,71 @@ function supportsNetherite(): boolean {
 }
 
 /**
- * Send a command that may not produce a success message.
- * Uses bot.chat() directly and waits for ticks instead of assertCommandSuccess.
+ * Send a command and wait for the server to process it.
+ * Always awaited: fire-and-forget /commands are the top flake source.
  */
 async function sendCommand(bot: Bot, command: string): Promise<void> {
   bot.chat!(`/${command}`);
   await bot.waitForTicks!(Constants.TIMING.EQUIP_TICKS);
 }
 
-/** Set the bot's health via /effect instant_health and instant_damage. */
+/**
+ * Reduce the bot's health to at most `target` via instant_damage.
+ * Instant Damage 0 deals 6hp per hit, so exact values below 20 are not all
+ * reachable — callers needing "not full" should accept anything < 20.
+ * Throws if the bot dies or the target is unreachable within 6 hits.
+ */
 async function setBotHealth(bot: Bot, health: number): Promise<void> {
-  // Heal fully first with instant_health (amplifier 255 = massive heal)
-  sendCommand(bot, "effect @p instant_health 1 255");
-  await bot.waitForTicks!(2);
+  // Heal fully first with instant_health (amplifier 255 = massive heal).
+  await sendCommand(
+    bot,
+    effectGiveCmd("@p", "instant_health", 1, 255, VERSION),
+  );
+  await pollUntil(bot, () => bot.health! >= 20, 40, "full health");
   if (health < 20) {
     // /damage doesn't exist in 1.12.2; use instant_damage instead.
-    // Instant Damage deals 2^(amplifier+1) * 3 health points.
-    // amplifier 0 = 6hp, 1 = 12hp, 2 = 24hp (overkill).
-    // For precise control, apply multiple smaller hits.
-    let remaining = 20 - health;
-    while (remaining > 0) {
-      // Each amplifier-0 instant_damage hit deals 6hp (3 hearts)
-      const hits = Math.min(Math.ceil(remaining / 6), 1);
-      sendCommand(bot, "effect @p instant_damage 1 0");
-      await bot.waitForTicks!(3);
-      remaining -= hits * 6;
+    // Amplifier 0 deals 6hp per hit.
+    for (let attempt = 0; attempt < 6 && bot.health! > health; attempt++) {
+      await sendCommand(
+        bot,
+        effectGiveCmd("@p", "instant_damage", 1, 0, VERSION),
+      );
+      await bot.waitForTicks!(5);
+      if (bot.health! <= 0) {
+        throw new Error("setBotHealth killed the bot — aborting");
+      }
+    }
+    if (bot.health! > health) {
+      throw new Error(
+        `setBotHealth could not reach ${health} (at ${bot.health})`,
+      );
     }
   }
 }
 
-/** Set the bot's food level via /effect saturation/hunger. */
+/**
+ * Set the bot's food level: drains with hunger when below 20, fills with
+ * saturation otherwise. Polls `bot.food` so under-drained tests fail loudly
+ * instead of asserting on the wrong state.
+ */
 async function setBotFood(bot: Bot, food: number): Promise<void> {
   if (food < 20) {
-    // Drain food with hunger effect (amplifier 1 = faster drain).
-    // Hunger effect: exhaustion increases by 0.025 * (amplifier+1) per tick.
-    // At amplifier 1, that's 0.05/tick — drains 20 food in ~400 ticks.
-    // Use amplifier 5 for faster drain: 0.15/tick, drains in ~130 ticks.
-    sendCommand(bot, "effect @p hunger 300 5 true");
-    // Wait long enough for food to drain significantly
-    await bot.waitForTicks!(20);
-    // Clear hunger effect to stop draining
-    sendCommand(bot, "effect @p clear");
+    // Hunger amplifier 5 drains fast; poll until at/below target.
+    await sendCommand(bot, effectGiveCmd("@p", "hunger", 300, 5, VERSION));
+    await pollUntil(bot, () => bot.food! <= food, 400, `food <= ${food}`);
+    await sendCommand(bot, effectClearCmd("@p", VERSION));
     await bot.waitForTicks!(2);
-    // Heal back to target with saturation if needed
-    if (food > 0) {
-      sendCommand(bot, `effect @p saturation 1 ${food} true`);
-      await bot.waitForTicks!(3);
-    }
   } else {
-    sendCommand(bot, "effect @p saturation 1 20 1 true");
+    await sendCommand(bot, effectGiveCmd("@p", "saturation", 5, 1, VERSION));
+    await pollUntil(bot, () => bot.food! >= 20, 100, "full food");
+    await sendCommand(bot, effectClearCmd("@p", VERSION));
     await bot.waitForTicks!(2);
   }
 }
 
 /** Remove all effects from the bot. */
 async function clearEffects(bot: Bot): Promise<void> {
-  sendCommand(bot, "effect @p clear");
+  await sendCommand(bot, effectClearCmd("@p", VERSION));
   await bot.waitForTicks!(3);
 }
 
@@ -261,19 +224,13 @@ describeE2E("E2E Inventory Tests", () => {
   jest.setTimeout(TIMEOUT_MS * 5);
 
   beforeAll(async () => {
-    bot = await createBot();
-    if (bot && bot.entity) {
-      try {
-        await bot.waitForChunksToLoad!();
-        await bot.waitForTicks!(1);
-        bot.chat!("/tp " + Object.values(POSITION).join(" "));
-
-        await bot.waitForChunksToLoad!();
-        await bot.waitForTicks!(1);
-        bot.chat!("/gamemode creative");
-      } catch (error) {
-        logger.error(error, "Inventory");
-      }
+    logSuiteStart("E2E Inventory Tests", USERNAME);
+    bot = await createBot({ username: USERNAME, timeoutMs: TIMEOUT_MS });
+    try {
+      await ensureReady(bot, POSITION);
+    } catch (error) {
+      logger.error(error, "Inventory");
+      throw error;
     }
   }, TIMEOUT_MS);
 
@@ -281,13 +238,10 @@ describeE2E("E2E Inventory Tests", () => {
     // Run before each test
     if (bot && bot.entity) {
       try {
+        bot.chat!(`/tp ${POSITION.x} ${POSITION.y} ${POSITION.z}`);
         await bot.waitForChunksToLoad!();
         await bot.waitForTicks!(1);
-        bot.chat!("/tp " + Object.values(POSITION).join(" "));
-
-        await bot.waitForChunksToLoad!();
-        await bot.waitForTicks!(1);
-        await resetBotState(bot);
+        await resetState(bot);
         await clearInventory(bot);
         await getInv(bot).unequipAllItems();
         await clearEffects(bot);
@@ -377,14 +331,18 @@ describeE2E("E2E Inventory Tests", () => {
       // Give leather helmet with Protection V (enchanted)
       // Protection V adds 5 to score, leather defense=1 → total 6
       // vs iron defense=2, toughness=0 → total 2
-      await giveEnchantedItem(bot, "leather_helmet", [{ id: 0, lvl: 5 }]);
+      await giveEnchantedItem(bot, "leather_helmet", [
+        { id: 0, key: "minecraft:protection", lvl: 5 },
+      ]);
       await getInv(bot).equipArmor();
       expect(getEquippedItem(bot, "head")!.name).toBe("leather_helmet");
     });
 
     test("higher enchant level wins within same material", async () => {
       // Give iron helmet with Protection I
-      await giveEnchantedItem(bot, "iron_helmet", [{ id: 0, lvl: 1 }]);
+      await giveEnchantedItem(bot, "iron_helmet", [
+        { id: 0, key: "minecraft:protection", lvl: 1 },
+      ]);
       await getInv(bot).equipArmor();
       const headItem = getEquippedItem(bot, "head");
       expect(headItem!.name).toBe("iron_helmet");
@@ -395,7 +353,9 @@ describeE2E("E2E Inventory Tests", () => {
       );
 
       // Give iron helmet with Protection IV — should replace
-      await giveEnchantedItem(bot, "iron_helmet", [{ id: 0, lvl: 4 }]);
+      await giveEnchantedItem(bot, "iron_helmet", [
+        { id: 0, key: "minecraft:protection", lvl: 4 },
+      ]);
       await getInv(bot).equipArmor();
       const upgradedItem = getEquippedItem(bot, "head");
       expect(upgradedItem!.name).toBe("iron_helmet");
@@ -443,14 +403,18 @@ describeE2E("E2E Inventory Tests", () => {
       // Give wooden sword with Sharpness V
       // DPS = 4 * 1.6 + (5 * 1.25 * 1.6) = 6.4 + 10.0 = 16.4
       // This outscores iron sword (9.6)
-      await giveEnchantedItem(bot, "wooden_sword", [{ id: 16, lvl: 5 }]);
+      await giveEnchantedItem(bot, "wooden_sword", [
+        { id: 16, key: "minecraft:sharpness", lvl: 5 },
+      ]);
       await getInv(bot).equipWeapon();
       expect(getEquippedItem(bot, "hand")!.name).toBe("wooden_sword");
     });
 
     test("higher sharpness level wins within same weapon", async () => {
       // Give iron sword with Sharpness I
-      await giveEnchantedItem(bot, "iron_sword", [{ id: 16, lvl: 1 }]);
+      await giveEnchantedItem(bot, "iron_sword", [
+        { id: 16, key: "minecraft:sharpness", lvl: 1 },
+      ]);
       await getInv(bot).equipWeapon();
       const handItem = getEquippedItem(bot, "hand");
       expect(handItem!.name).toBe("iron_sword");
@@ -461,7 +425,9 @@ describeE2E("E2E Inventory Tests", () => {
       );
 
       // Give iron sword with Sharpness V — should replace
-      await giveEnchantedItem(bot, "iron_sword", [{ id: 16, lvl: 5 }]);
+      await giveEnchantedItem(bot, "iron_sword", [
+        { id: 16, key: "minecraft:sharpness", lvl: 5 },
+      ]);
       await getInv(bot).equipWeapon();
       const upgradedItem = getEquippedItem(bot, "hand");
       expect(upgradedItem!.name).toBe("iron_sword");
@@ -501,6 +467,19 @@ describeE2E("E2E Inventory Tests", () => {
 
   describe("Utility equip selection", () => {
     test("equipGapple picks enchanted golden apple over regular", async () => {
+      if (isModernVersion(VERSION)) {
+        // 1.13+: regular and enchanted gapples are distinct items.
+        await giveItem(bot, "golden_apple", 1);
+        await getInv(bot).equipGapple(false);
+        expect(getEquippedItem(bot, "off-hand")!.name).toBe("golden_apple");
+
+        await giveItem(bot, "enchanted_golden_apple", 1);
+        await getInv(bot).equipGapple(false);
+        expect(getEquippedItem(bot, "off-hand")!.name).toBe(
+          "enchanted_golden_apple",
+        );
+        return;
+      }
       // Give regular golden apple (metadata 0)
       await giveItem(bot, "golden_apple", 1, 0);
       await getInv(bot).equipGapple(false);
@@ -519,7 +498,10 @@ describeE2E("E2E Inventory Tests", () => {
 
     test("equipGapple skips activation when regeneration is active", async () => {
       // Apply regeneration effect
-      sendCommand(bot, "effect @p regeneration 30 1");
+      await sendCommand(
+        bot,
+        effectGiveCmd("@p", "regeneration", 30, 1, VERSION),
+      );
       await bot.waitForTicks!(3);
 
       // Give golden apple — equipGapple should skip entirely
@@ -551,38 +533,47 @@ describeE2E("E2E Inventory Tests", () => {
     });
 
     test("equipBuff prefers strong_strength over regular strength", async () => {
-      // Give regular strength potion (Potion: minecraft:strength)
-      await giveItem(
-        bot,
-        "potion",
-        1,
-        undefined,
-        '{Potion:"minecraft:strength"}',
-      );
-      // Give strong strength potion (Potion: minecraft:strong_strength)
-      await giveItem(
-        bot,
-        "potion",
-        1,
-        undefined,
-        '{Potion:"minecraft:strong_strength"}',
-      );
+      // Potion drinking only takes effect in survival; restore creative after.
+      await getInv(bot).setGamemode(0);
+      try {
+        // Give regular strength potion (Potion: minecraft:strength)
+        await giveItem(
+          bot,
+          "potion",
+          1,
+          undefined,
+          '{Potion:"minecraft:strength"}',
+          '{Potion:"minecraft:strength"}',
+        );
+        // Give strong strength potion (Potion: minecraft:strong_strength)
+        await giveItem(
+          bot,
+          "potion",
+          1,
+          undefined,
+          '{Potion:"minecraft:strong_strength"}',
+          '{Potion:"minecraft:strong_strength"}',
+        );
 
-      // Verify both potions are in inventory before equipBuff
-      const invItems = bot.inventory
-        .items()
-        .filter((i: any) => i.name === "potion");
-      expect(invItems.length).toBe(2);
+        // Verify both potions are in inventory before equipBuff
+        const invItems = bot.inventory
+          .items()
+          .filter((i: any) => i.name === "potion");
+        expect(invItems.length).toBe(2);
 
-      await getInv(bot).equipBuff();
+        await getInv(bot).equipBuff();
 
-      // Wait for potion to be consumed
-      await bot.waitForTicks!(10);
-
-      // The strong_strength potion should have been consumed (off-hand is null)
-      // proving that equipBuff selected and drank it.
-      const offHandItem = getEquippedItem(bot, "off-hand");
-      expect(offHandItem).toBeNull();
+        // Wait for potion to be consumed
+        await pollUntil(
+          bot,
+          () => getEquippedItem(bot, "off-hand") === null,
+          100,
+          "strength potion to be consumed",
+        );
+      } finally {
+        await getInv(bot).setGamemode(1);
+        await bot.waitForTicks!(2);
+      }
     });
   });
 
@@ -669,35 +660,32 @@ describeE2E("E2E Inventory Tests", () => {
       await getInv(bot).setGamemode(0);
       await bot.waitForTicks!(2);
 
-      // Set up preconditions: clear effects
-      await clearEffects(bot);
+      try {
+        // Clear existing effects, then drain food so eating has an effect.
+        await clearEffects(bot);
+        await setBotFood(bot, 10);
+        const foodBefore = bot.food!;
+        expect(foodBefore).toBeLessThan(20);
 
-      // Give food item
-      await giveItem(bot, "cooked_beef", 1);
+        // Give food item
+        await giveItem(bot, "cooked_beef", 1);
 
-      // equipFood should equip the food to off-hand
-      await getInv(bot).equipFood();
+        // equipFood should equip and eat the food
+        await getInv(bot).equipFood();
 
-      // Wait for eating to complete (eating takes ~32 ticks)
-      await bot.waitForTicks!(40);
-
-      // Verify the food was equipped to off-hand (proves selection logic).
-      // Note: if food is full (20), equipFood skips eating but still equips.
-      // We verify the food item was handled (either consumed or equipped).
-      const offHandItem = getEquippedItem(bot, "off-hand");
-      // The food should be equipped (or was eaten if food wasn't full)
-      // Since we can't reliably drain food via effects/movement in test,
-      // we verify the food is either equipped or was consumed.
-      const foodInInv = bot.inventory
-        .items()
-        .filter((i: any) => i.name === "cooked_beef").length;
-      // Either the food is equipped, was consumed, or is in inventory
-      const foodHandled = offHandItem?.name === "cooked_beef" || foodInInv > 0;
-      expect(foodHandled).toBe(true);
-
-      // Restore creative mode
-      await getInv(bot).setGamemode(1);
-      await bot.waitForTicks!(2);
+        // Eating takes ~32 ticks; food level must rise.
+        await pollUntil(
+          bot,
+          () => bot.food! > foodBefore,
+          100,
+          "food to rise after eating",
+        );
+        expect(bot.food!).toBeGreaterThan(foodBefore);
+      } finally {
+        // Restore creative mode
+        await getInv(bot).setGamemode(1);
+        await bot.waitForTicks!(2);
+      }
     });
 
     test("equipBuff applies strength effect in survival", async () => {
@@ -705,32 +693,35 @@ describeE2E("E2E Inventory Tests", () => {
       await getInv(bot).setGamemode(0);
       await bot.waitForTicks!(2);
 
-      // Clear existing effects
-      await clearEffects(bot);
+      try {
+        // Clear existing effects
+        await clearEffects(bot);
 
-      // Give strength potion
-      await giveItem(
-        bot,
-        "potion",
-        1,
-        undefined,
-        '{Potion:"minecraft:strength"}',
-      );
+        // Give strength potion
+        await giveItem(
+          bot,
+          "potion",
+          1,
+          undefined,
+          '{Potion:"minecraft:strength"}',
+          '{Potion:"minecraft:strength"}',
+        );
 
-      // equipBuff should equip and drink the potion
-      await getInv(bot).equipBuff();
+        // equipBuff should equip and drink the potion
+        await getInv(bot).equipBuff();
 
-      // Wait for potion to be consumed
-      await bot.waitForTicks!(10);
-
-      // Verify the potion was consumed (off-hand is null)
-      // proving equipBuff selected and drank the strength potion.
-      const offHandItem = getEquippedItem(bot, "off-hand");
-      expect(offHandItem).toBeNull();
-
-      // Restore creative mode
-      await getInv(bot).setGamemode(1);
-      await bot.waitForTicks!(2);
+        // Wait for potion to be consumed
+        await pollUntil(
+          bot,
+          () => getEquippedItem(bot, "off-hand") === null,
+          100,
+          "strength potion to be consumed",
+        );
+      } finally {
+        // Restore creative mode
+        await getInv(bot).setGamemode(1);
+        await bot.waitForTicks!(2);
+      }
     });
 
     test("equipGapple skips eating in creative mode", async () => {
