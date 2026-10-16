@@ -25,9 +25,12 @@ import {
   getSessionPosition,
   getSessionSuffix,
   getUsername,
+  ensureOp,
   logSuiteStart,
   pollUntil,
   resetBotState,
+  serverCommand,
+  tpBot,
 } from "./setup";
 
 // ── E2E configuration ───────────────────────────────────────────────
@@ -70,7 +73,7 @@ describeE2E("E2E Jump Tests", () => {
     // Run before each test
     if (bot && bot.entity) {
       try {
-        bot.chat!(`/tp ${POSITION.x} ${POSITION.y} ${POSITION.z}`);
+        await tpBot(bot, POSITION.x, POSITION.y, POSITION.z);
         await bot.waitForChunksToLoad!();
         await bot.waitForTicks!(5);
         await resetBotState(bot);
@@ -86,6 +89,17 @@ describeE2E("E2E Jump Tests", () => {
       try {
         bot.quit!();
         bot.end!();
+        // Wait for the socket to actually close so no bot activity leaks
+        // into the next suite file (stale packets + lazy requires crash
+        // workers with post-teardown require errors).
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, 5000);
+          bot.once("end", () => {
+            clearTimeout(timer);
+            resolve();
+          });
+        });
+        await new Promise((resolve) => setTimeout(resolve, 500));
       } catch (error) {
         logger.error(error, "Movement");
       }
@@ -132,7 +146,7 @@ describeE2E("E2E Jump Tests", () => {
       [];
 
     beforeEach(async () => {
-      bot.chat!(`/tp ${POSITION.x} ${POSITION.y} ${POSITION.z}`);
+      await tpBot(bot, POSITION.x, POSITION.y, POSITION.z);
       await bot.waitForTicks!(5);
     }, TIMEOUT_MS);
 
@@ -195,7 +209,7 @@ describeE2E("E2E Jump Tests", () => {
       [];
 
     beforeEach(async () => {
-      bot.chat!(`/tp ${POSITION.x} ${POSITION.y} ${POSITION.z}`);
+      await tpBot(bot, POSITION.x, POSITION.y, POSITION.z);
       await bot.waitForTicks!(5);
     }, TIMEOUT_MS);
 
@@ -292,23 +306,32 @@ describeE2E("E2E Jump Tests", () => {
       const az = Math.floor(POSITION.z);
       const floorY = 100;
       const airY = 101;
-      bot.chat!(
+      const fillCmds = [
         `/fill ${ax - 5} ${floorY} ${az - 1} ${ax + 1} ${floorY} ${az + 1} stone`,
-      );
-      bot.chat!(
         `/fill ${ax - 5} ${airY} ${az - 1} ${ax + 1} ${airY + 3} ${az + 1} air`,
-      );
-      await pollUntil(
-        bot,
-        () => {
-          const f = bot.blockAt(new Vec3(ax, floorY, az));
-          const a = bot.blockAt(new Vec3(ax, airY, az));
-          return !!f && f.boundingBox !== 'empty' && (!a || a.boundingBox === 'empty');
-        },
-        60,
-        'sky platform to be ready',
-      );
-      bot.chat!(`/tp ${ax} ${airY} ${az}`);
+      ];
+      const platformReady = () => {
+        const f = bot.blockAt(new Vec3(ax, floorY, az));
+        const a = bot.blockAt(new Vec3(ax, airY, az));
+        return (
+          !!f && f.boundingBox !== 'empty' && (!a || a.boundingBox === 'empty')
+        );
+      };
+      for (let attempt = 0; attempt < 2; attempt++) {
+        for (const cmd of fillCmds) await serverCommand(bot, cmd);
+        try {
+          await pollUntil(bot, platformReady, 60, 'sky platform to be ready');
+          break;
+        } catch {
+          if (attempt === 0) {
+            logger.info('Platform setup unverified; healing OP and retrying', 'Movement');
+            await ensureOp(bot);
+          } else {
+            throw new Error('Sky platform did not materialize');
+          }
+        }
+      }
+      await tpBot(bot, ax, airY, az);
       await bot.waitForChunksToLoad!();
       await bot.combatManager._waitUntilSettled();
       const source = bot.entity.position.clone();
@@ -320,7 +343,8 @@ describeE2E("E2E Jump Tests", () => {
           await bot.waitForTicks!(5);
           for (const o of scenario.blocks) {
             const obstaclePos = source.offset(o.dx, o.dy, o.dz);
-            bot.chat!(
+            await serverCommand(
+              bot,
               `/setblock ${Math.floor(obstaclePos.x)} ${Math.floor(obstaclePos.y)} ${Math.floor(obstaclePos.z)} emerald_block`,
             );
             placed.push(obstaclePos);
@@ -355,7 +379,8 @@ describeE2E("E2E Jump Tests", () => {
 
           for (let i = 0; i < scenario.blocks.length; i++) {
             const obstaclePos = placed.pop()!;
-            bot.chat!(
+            await serverCommand(
+              bot,
               `/setblock ${Math.floor(obstaclePos.x)} ${Math.floor(obstaclePos.y)} ${Math.floor(obstaclePos.z)} air`,
             );
           }
@@ -363,15 +388,17 @@ describeE2E("E2E Jump Tests", () => {
         }
       } finally {
         for (const obstaclePos of placed) {
-          bot.chat!(
+          await serverCommand(
+            bot,
             `/setblock ${Math.floor(obstaclePos.x)} ${Math.floor(obstaclePos.y)} ${Math.floor(obstaclePos.z)} air`,
           );
         }
         // Tear down the sky platform and return to the suite position.
-        bot.chat!(
+        await serverCommand(
+          bot,
           `/fill ${ax - 5} ${floorY} ${az - 1} ${ax + 1} ${airY + 3} ${az + 1} air`,
         );
-        bot.chat!(`/tp ${POSITION.x} ${POSITION.y} ${POSITION.z}`);
+        await tpBot(bot, POSITION.x, POSITION.y, POSITION.z);
         if (placed.length > 0) await bot.waitForTicks!(3);
       }
     },

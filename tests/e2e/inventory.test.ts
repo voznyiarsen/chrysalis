@@ -23,6 +23,7 @@ import { logger } from "../../src/logger";
 import { Constants } from "../../src/constants";
 import {
   buildGiveCmd,
+  buildServerGiveCmd,
   createBot,
   e2eTimeoutMs,
   e2eVersion,
@@ -30,15 +31,20 @@ import {
   effectGiveCmd,
   enchNbt,
   ensureHostiles,
+  ensureOp,
   ensureReady,
   getSessionPosition,
   getUsername,
   isModernVersion,
   logSuiteStart,
+  ensureSurvival,
   pollUntil,
   resetBotState,
   restoreDifficulty,
+  sendCommandVerified,
+  serverCommand,
   setDifficulty,
+  tpBot,
   type EnchantSpec,
 } from "./setup";
 
@@ -111,15 +117,35 @@ async function giveItem(
   nbt?: string,
   modernNbt?: string,
 ): Promise<void> {
-  bot.chat!(
-    buildGiveCmd(itemName, { count, metadata, nbt }, VERSION, modernNbt),
+  const cmd = buildServerGiveCmd(
+    bot.username,
+    itemName,
+    { count, metadata, nbt },
+    VERSION,
+    modernNbt,
   );
-  await pollUntil(
-    bot,
-    () => bot.inventoryManager.getItemCount(itemName) >= count,
-    60,
-    `${count}x ${itemName} in inventory after /give`,
-  );
+  // Mid-test deops defeat single-shot verification: heal OP once and retry.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await serverCommand(bot, cmd);
+    try {
+      await pollUntil(
+        bot,
+        () => bot.inventoryManager.getItemCount(itemName) >= count,
+        60,
+        `${count}x ${itemName} in inventory after /give (attempt ${attempt + 1})`,
+      );
+      break;
+    } catch {
+      if (attempt === 0) {
+        logger.info("Give unverified; healing OP and retrying", "Inventory");
+        await ensureOp(bot);
+      } else {
+        throw new Error(
+          `Timed out waiting for ${count}x ${itemName} in inventory after /give`,
+        );
+      }
+    }
+  }
   await bot.waitForTicks!(Constants.TIMING.EQUIP_TICKS);
 }
 
@@ -153,10 +179,13 @@ function supportsNetherite(): boolean {
  * Always awaited: fire-and-forget /commands are the top flake source.
  */
 async function sendCommand(bot: Bot, command: string): Promise<void> {
-  bot.chat!(`/${command}`);
+  await serverCommand(bot, command);
   await bot.waitForTicks!(Constants.TIMING.EQUIP_TICKS);
 }
 
+
+/**
+ * Reduce the bot
 /**
  * Reduce the bot's health to at most `target` using controlled falls.
  * Magic-damage effects are unreliable across servers (observed: confirmed
@@ -166,14 +195,27 @@ async function sendCommand(bot: Bot, command: string): Promise<void> {
  * hurt cooldown; fast natural regen just costs extra iterations.
  */
 async function setBotHealth(bot: Bot, health: number): Promise<void> {
+  // Survival is required for falls to hurt; verify (heals OP on failure).
+  await ensureSurvival(bot);
   if (health >= 20) {
-    // Heal path (harmless no-op when already full).
-    await sendCommand(
-      bot,
-      effectGiveCmd("@p", "instant_health", 1, 255, VERSION),
-    );
-    await pollUntil(bot, () => (bot.health ?? 0) >= 20, 40, "full health");
-    return;
+    // Heal path (harmless no-op when already full). Retry once with OP
+    // heal: a deopped instant_health silently leaves the bot hurt.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await sendCommand(
+        bot,
+        effectGiveCmd(bot.username, "instant_health", 1, 255, VERSION),
+      );
+      try {
+        await pollUntil(bot, () => (bot.health ?? 0) >= 20, 40, "full health");
+        return;
+      } catch {
+        if (attempt === 0) {
+          logger.info("Heal unverified; healing OP and retrying", "Inventory");
+          await ensureOp(bot);
+        }
+      }
+    }
+    throw new Error(`Timed out waiting for full health (at ${bot.health})`);
   }
   if (health < 10) {
     throw new Error(
@@ -185,7 +227,9 @@ async function setBotHealth(bot: Bot, health: number): Promise<void> {
   // natural regen outpaces ~1-damage falls. Guard keeps every fall lethal-safe.
   for (let attempt = 0; attempt < 12 && bot.health! > health; attempt++) {
     if (bot.health! < 9) break;
-    bot.chat(`/tp @p ${p.x} ${p.y + 8} ${p.z}`);
+    // tpBot verifies arrival (heals OP on failure); the rise confirms
+    // the teleport executed, then wait out the landing.
+    await tpBot(bot, p.x, p.y + 8, p.z);
     await pollUntil(bot, () => !bot.entity.onGround, 40, "leaving ground");
     await pollUntil(bot, () => bot.entity.onGround, 200, "landing after fall");
     await bot.waitForTicks!(11); // clear hurt cooldown before next fall
@@ -206,14 +250,14 @@ async function setBotHealth(bot: Bot, health: number): Promise<void> {
 let foodDrainable: boolean | null = null;
 async function canDrainFood(bot: Bot): Promise<boolean> {
   if (foodDrainable !== null) return foodDrainable;
-  await sendCommand(bot, effectGiveCmd("@p", "hunger", 300, 5, VERSION));
+  await sendEffect(bot, "hunger", 300, 5, "17");
   await bot.waitForTicks!(300);
   // Require two sub-20 reads a minute apart: single transient dips have
   // been observed on servers that otherwise pin food at 20.
   const first = bot.food! < 20;
   await bot.waitForTicks!(60);
   foodDrainable = first && bot.food! < 20;
-  await sendCommand(bot, effectClearCmd("@p", VERSION));
+  await sendCommand(bot, effectClearCmd(bot.username, VERSION));
   if (!foodDrainable) {
     logger.warning(
       "Food does not drain on this server (peaceful-like). Food-drain tests will skip.",
@@ -229,7 +273,7 @@ async function canDrainFood(bot: Bot): Promise<boolean> {
  */
 async function setBotFood(bot: Bot, food: number): Promise<void> {
   if (food < 20) {
-    await sendCommand(bot, effectGiveCmd("@p", "hunger", 300, 5, VERSION));
+    await sendEffect(bot, "hunger", 300, 5, "17");
     // Drain with stall recovery: if food stops dropping, the server may
     // have reverted to peaceful mid-test — re-assert normal and continue.
     // Bounded at ~900 ticks total.
@@ -253,20 +297,40 @@ async function setBotFood(bot: Bot, food: number): Promise<void> {
         `Timed out waiting for food <= ${food} (at ${bot.food})`,
       );
     }
-    await sendCommand(bot, effectClearCmd("@p", VERSION));
+    await sendCommand(bot, effectClearCmd(bot.username, VERSION));
     await bot.waitForTicks!(2);
   } else {
-    await sendCommand(bot, effectGiveCmd("@p", "saturation", 5, 1, VERSION));
+    await sendEffect(bot, "saturation", 5, 1, "23");
     await pollUntil(bot, () => bot.food! >= 20, 100, "full food");
-    await sendCommand(bot, effectClearCmd("@p", VERSION));
+    await sendCommand(bot, effectClearCmd(bot.username, VERSION));
     await bot.waitForTicks!(2);
   }
 }
 
 /** Remove all effects from the bot. */
 async function clearEffects(bot: Bot): Promise<void> {
-  await sendCommand(bot, effectClearCmd("@p", VERSION));
+  await sendCommand(bot, effectClearCmd(bot.username, VERSION));
   await bot.waitForTicks!(3);
+}
+
+/**
+ * Apply an effect and verify it landed (presence in bot.entity.effects),
+ * healing OP via RCON and retrying once on failure. Unverified fire-and-
+ * forget /effect is the top source of phantom test failures.
+ */
+async function sendEffect(
+  bot: Bot,
+  effect: string,
+  seconds: number,
+  amplifier: number,
+  effectId: string,
+): Promise<void> {
+  await sendCommandVerified(
+    bot,
+    effectGiveCmd(bot.username, effect, seconds, amplifier, VERSION),
+    () => bot.entity.effects[effectId as any] !== undefined,
+    `${effect} effect present`,
+  );
 }
 
 // ── E2E test suite ──────────────────────────────────────────────────
@@ -297,7 +361,7 @@ describeE2E("E2E Inventory Tests", () => {
     // Run before each test
     if (bot && bot.entity) {
       try {
-        bot.chat!(`/tp ${POSITION.x} ${POSITION.y} ${POSITION.z}`);
+        await tpBot(bot, POSITION.x, POSITION.y, POSITION.z);
         await bot.waitForChunksToLoad!();
         await bot.waitForTicks!(1);
         await resetState(bot);
@@ -316,8 +380,17 @@ describeE2E("E2E Inventory Tests", () => {
         if (diffToken) await restoreDifficulty(bot, diffToken);
         bot.quit!();
         bot.end!();
-        // Give extra time for cleanup
-        await new Promise((resolve) => setTimeout(resolve, 1000));
+        // Wait for the socket to actually close so no bot activity leaks
+        // into the next suite file (stale packets + lazy requires crash
+        // workers with post-teardown require errors).
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, 5000);
+          bot.once("end", () => {
+            clearTimeout(timer);
+            resolve();
+          });
+        });
+        await new Promise((resolve) => setTimeout(resolve, 500));
       } catch (error) {
         logger.error(error, "Inventory");
       }
@@ -557,12 +630,8 @@ describeE2E("E2E Inventory Tests", () => {
     });
 
     test("equipGapple skips activation when regeneration is active", async () => {
-      // Apply regeneration effect
-      await sendCommand(
-        bot,
-        effectGiveCmd("@p", "regeneration", 30, 1, VERSION),
-      );
-      await bot.waitForTicks!(3);
+      // Apply regeneration effect (verified present, not fire-and-forget).
+      await sendEffect(bot, "regeneration", 30, 1, "10");
 
       // Give golden apple — equipGapple should skip entirely
       // because regeneration (effect ID 10) is already active.
@@ -594,7 +663,7 @@ describeE2E("E2E Inventory Tests", () => {
 
     test("equipBuff prefers strong_strength over regular strength", async () => {
       // Potion drinking only takes effect in survival; restore creative after.
-      await getInv(bot).setGamemode(0);
+      await ensureSurvival(bot);
       try {
         // Give regular strength potion (Potion: minecraft:strength)
         await giveItem(
@@ -621,15 +690,27 @@ describeE2E("E2E Inventory Tests", () => {
           .filter((i: any) => i.name === "potion");
         expect(invItems.length).toBe(2);
 
-        await getInv(bot).equipBuff();
-
-        // Wait for potion to be consumed
-        await pollUntil(
-          bot,
-          () => getEquippedItem(bot, "off-hand") === null,
-          100,
-          "strength potion to be consumed",
-        );
+        // Drinking can miss server-side under load (no effect registered);
+        // retry the drink while a potion remains unequipped.
+        let consumed = false;
+        for (let attempt = 0; attempt < 3 && !consumed; attempt++) {
+          await getInv(bot).equipBuff();
+          try {
+            await pollUntil(
+              bot,
+              () => getEquippedItem(bot, "off-hand") === null,
+              100,
+              `strength potion to be consumed (attempt ${attempt + 1})`,
+            );
+            consumed = true;
+          } catch {
+            logger.info(
+              `Buff drink attempt ${attempt + 1} did not consume, retrying`,
+              "Inventory",
+            );
+          }
+        }
+        expect(consumed).toBe(true);
       } finally {
         await getInv(bot).setGamemode(1);
         await bot.waitForTicks!(2);
@@ -669,7 +750,7 @@ describeE2E("E2E Inventory Tests", () => {
 
     test("hurt bot: equipTotem equips totem to off-hand", async () => {
       // Falls only hurt in survival; beforeEach leaves creative mode.
-      await getInv(bot).setGamemode(0);
+      await ensureSurvival(bot);
       try {
         // Hurt the bot via falls (magic damage is server-dependent). Note:
         // equipTotem itself does not check health — health gating lives in the
@@ -700,7 +781,7 @@ describeE2E("E2E Inventory Tests", () => {
   describe("Use utilities in survival gamemode", () => {
     test("equipGapple activates regeneration in survival", async () => {
       // Switch to survival
-      await getInv(bot).setGamemode(0);
+      await ensureSurvival(bot);
       await bot.waitForTicks!(2);
 
       // Set up preconditions: clear effects, ensure health not full
@@ -736,7 +817,7 @@ describeE2E("E2E Inventory Tests", () => {
         return;
       }
       // Switch to survival
-      await getInv(bot).setGamemode(0);
+      await ensureSurvival(bot);
       await bot.waitForTicks!(2);
 
       try {
@@ -772,7 +853,7 @@ describeE2E("E2E Inventory Tests", () => {
 
     test("equipBuff applies strength effect in survival", async () => {
       // Switch to survival
-      await getInv(bot).setGamemode(0);
+      await ensureSurvival(bot);
       await bot.waitForTicks!(2);
 
       try {

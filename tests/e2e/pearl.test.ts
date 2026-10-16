@@ -21,6 +21,7 @@ import { logger } from "../../src/logger";
 import { Constants } from "../../src/constants";
 import {
   buildGiveCmd,
+  buildServerGiveCmd,
   createBot,
   e2eTimeoutMs,
   ensureReady,
@@ -28,8 +29,11 @@ import {
   getUsername,
   killMobsCmd,
   logSuiteStart,
+  ensureOp,
   pollUntil,
+  serverCommand,
   resetBotState,
+  tpBot,
 } from "./setup";
 
 // ── E2E configuration ───────────────────────────────────────────────
@@ -57,13 +61,28 @@ describeE2E("E2E Pearl Tests", () => {
    * Give ender pearls and wait until they are in inventory.
    */
   async function givePearls(count: number): Promise<void> {
-    bot.chat!(buildGiveCmd("ender_pearl", { count }));
-    await pollUntil(
-      bot,
-      () => bot.inventoryManager.getItemCount("ender_pearl") >= count,
-      60,
-      `${count} ender pearls in inventory`,
-    );
+    const cmd = buildServerGiveCmd(bot.username, "ender_pearl", { count });
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await serverCommand(bot, cmd);
+      try {
+        await pollUntil(
+          bot,
+          () => bot.inventoryManager.getItemCount("ender_pearl") >= count,
+          60,
+          `${count} ender pearls in inventory (attempt ${attempt + 1})`,
+        );
+        return;
+      } catch {
+        if (attempt === 0) {
+          logger.info("Give unverified; healing OP and retrying", "Combat");
+          await ensureOp(bot);
+        } else {
+          throw new Error(
+            `Timed out waiting for ${count} ender pearls in inventory`,
+          );
+        }
+      }
+    }
   }
 
   /**
@@ -95,7 +114,7 @@ describeE2E("E2E Pearl Tests", () => {
         // Teleport FIRST, then clear strays at the suite position: killing
         // before teleporting misses leftovers near POSITION (e.g. in-flight
         // pearls from a previous run landing mid-test).
-        bot.chat!(`/tp ${POSITION.x} ${POSITION.y} ${POSITION.z}`);
+        await tpBot(bot, POSITION.x, POSITION.y, POSITION.z);
         await bot.waitForChunksToLoad!();
         await bot.waitForTicks!(1);
         // Remove stray in-flight pearls from the previous test so they
@@ -181,6 +200,56 @@ describeE2E("E2E Pearl Tests", () => {
     return false;
   }
 
+  /**
+   * Measured throw with stray-teleport retry. A landing dozens of blocks
+   * from both start and target cannot come from our pearl (frozen strays
+   * from previous runs resume when chunks load); re-anchor and retry once
+   * instead of failing on another pearl's landing.
+   */
+  async function measuredThrow(arc: "low" | "high", tolerance: number): Promise<void> {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const startPos = bot.entity.position.clone();
+      const targetPos = startPos.offset(20, 0, 0);
+
+      const consumed = await throwAndWaitForConsumption(targetPos, arc);
+      expect(consumed).toBe(true);
+
+      // Wait for the pearl to land (teleport) if it hasn't yet.
+      try {
+        await pollUntil(
+          bot,
+          () => bot.entity.position.distanceTo(startPos) > tolerance,
+          200,
+          "pearl to teleport the bot",
+        );
+      } catch {
+        logger.info("Pearl consumed but no teleport observed", "Combat");
+      }
+
+      const remaining = targetPos.distanceTo(bot.entity.position);
+      logger.info(
+        `${arc} arc 20 blocks: ${remaining.toFixed(2)}b from target (attempt ${attempt + 1})`,
+        "Combat",
+      );
+      if (remaining > 50) {
+        logger.warning(
+          `Implausible landing ${remaining.toFixed(0)}b out (stray pearl?); re-anchoring and retrying`,
+          "Combat",
+        );
+        await tpBot(bot, POSITION.x, POSITION.y, POSITION.z);
+        await bot.waitForChunksToLoad!();
+        await bot.waitForTicks!(5);
+        continue;
+      }
+      // If the pearl teleported the bot, the landing must be near target.
+      if (bot.entity.position.distanceTo(startPos) > tolerance) {
+        expect(remaining).toBeLessThanOrEqual(tolerance);
+      }
+      return;
+    }
+    throw new Error("Measured throw landed implausibly far twice in a row");
+  }
+
   describe("measured throws - low arc", () => {
     const TOLERANCE = 3.0;
 
@@ -188,33 +257,7 @@ describeE2E("E2E Pearl Tests", () => {
       "pearl lands within tolerance of a 20-block target",
       async () => {
         await inSurvival(async () => {
-          const startPos = bot.entity.position.clone();
-          const targetPos = startPos.offset(20, 0, 0);
-
-          const consumed = await throwAndWaitForConsumption(targetPos, "low");
-          expect(consumed).toBe(true);
-
-          // Wait for the pearl to land (teleport) if it hasn't yet.
-          try {
-            await pollUntil(
-              bot,
-              () => bot.entity.position.distanceTo(startPos) > TOLERANCE,
-              200,
-              "pearl to teleport the bot",
-            );
-          } catch {
-            logger.info("Pearl consumed but no teleport observed", "Combat");
-          }
-
-          const remaining = targetPos.distanceTo(bot.entity.position);
-          logger.info(
-            `Low arc 20 blocks: ${remaining.toFixed(2)}b from target`,
-            "Combat",
-          );
-          // If the pearl teleported the bot, the landing must be near target.
-          if (bot.entity.position.distanceTo(startPos) > TOLERANCE) {
-            expect(remaining).toBeLessThanOrEqual(TOLERANCE);
-          }
+          await measuredThrow("low", TOLERANCE);
         });
       },
       TIMEOUT_MS,
@@ -228,31 +271,7 @@ describeE2E("E2E Pearl Tests", () => {
       "pearl lands within tolerance of a 20-block target",
       async () => {
         await inSurvival(async () => {
-          const startPos = bot.entity.position.clone();
-          const targetPos = startPos.offset(20, 0, 0);
-
-          const consumed = await throwAndWaitForConsumption(targetPos, "high");
-          expect(consumed).toBe(true);
-
-          try {
-            await pollUntil(
-              bot,
-              () => bot.entity.position.distanceTo(startPos) > TOLERANCE,
-              200,
-              "pearl to teleport the bot",
-            );
-          } catch {
-            logger.info("Pearl consumed but no teleport observed", "Combat");
-          }
-
-          const remaining = targetPos.distanceTo(bot.entity.position);
-          logger.info(
-            `High arc 20 blocks: ${remaining.toFixed(2)}b from target`,
-            "Combat",
-          );
-          if (bot.entity.position.distanceTo(startPos) > TOLERANCE) {
-            expect(remaining).toBeLessThanOrEqual(TOLERANCE);
-          }
+          await measuredThrow("high", TOLERANCE);
         });
       },
       TIMEOUT_MS,

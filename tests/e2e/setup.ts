@@ -7,6 +7,17 @@
  * server-command syntax and lifecycle handling stay in one place.
  */
 
+// Surface async crashes with full stacks: several E2E flakes turned out to
+// be unhandled rejections surfacing as bare "Test suite failed to run".
+process.on("unhandledRejection", (reason) => {
+  // eslint-disable-next-line no-console
+  console.error(`[e2e-setup] unhandledRejection: ${reason}`);
+});
+process.on("uncaughtException", (error) => {
+  // eslint-disable-next-line no-console
+  console.error(`[e2e-setup] uncaughtException: ${error}`);
+});
+
 import mineflayer, { Bot } from "mineflayer";
 import { pathfinder } from "mineflayer-pathfinder";
 import { Vec3 } from "vec3";
@@ -54,6 +65,35 @@ async function rcon(
     );
     return null;
   }
+}
+
+let rconUnavailableWarned = false;
+
+/**
+ * Run a server command, preferring RCON (server-console privileges, immune
+ * to player OP flaps) with in-game chat fallback. `cmd` has no leading
+ * slash. Returns the server response (RCON) or "" (chat fallback).
+ *
+ * NOTE: position-relative selectors (~) and radius selectors (r=,
+ * distance=) only resolve for in-game executors. Callers needing them must
+ * either pass absolute coordinates/usernames (preferred) or use bot.chat
+ * directly.
+ */
+export async function serverCommand(bot: Bot, cmd: string): Promise<string> {
+  const clean = cmd.startsWith("/") ? cmd.slice(1) : cmd;
+  if (process.env.RCON_PASS && rconCommands) {
+    const out = await rcon([clean]);
+    if (out) return out[0] ?? "";
+    // RCON failed despite configured password; fall through to chat.
+  } else if (!rconUnavailableWarned) {
+    rconUnavailableWarned = true;
+    logger.warning(
+      "E2E: RCON_PASS unset, falling back to in-game commands (flakier under OP loss)",
+      "Command",
+    );
+  }
+  bot.chat!(`/${clean}`);
+  return "";
 }
 import { PVPManager } from "../../src/pvp";
 import { attachInventory } from "../../src/inventory";
@@ -226,13 +266,14 @@ export function buildGiveCmd(
   opts: GiveOpts = {},
   version: string = e2eVersion(),
   modernNbt?: string,
+  target: string = "@p",
 ): string {
   const count = opts.count ?? 1;
   if (isModernVersion(version)) {
     const tag = modernNbt ?? opts.nbt ?? "";
-    return `/give @p ${itemName}${tag} ${count}`;
+    return `/give ${target} ${itemName}${tag} ${count}`;
   }
-  let args = `@p ${itemName}`;
+  let args = `${target} ${itemName}`;
   const hasExtra = opts.metadata !== undefined || opts.nbt !== undefined;
   if (count !== 1 || hasExtra) args += ` ${count}`;
   if (opts.metadata !== undefined) {
@@ -243,6 +284,23 @@ export function buildGiveCmd(
   }
   if (opts.nbt) args += ` ${opts.nbt}`;
   return `/give ${args}`;
+}
+
+/**
+ * `/give` command for RCON/chat-agnostic sending: no leading slash and an
+ * explicit player (RCON has no @p context).
+ */
+export function buildServerGiveCmd(
+  username: string,
+  itemName: string,
+  opts: GiveOpts = {},
+  version: string = e2eVersion(),
+  modernNbt?: string,
+): string {
+  return buildGiveCmd(itemName, opts, version, modernNbt, username).replace(
+    /^\//,
+    "",
+  );
 }
 
 export interface EnchantSpec {
@@ -335,11 +393,15 @@ export async function pollUntil(
   ticks: number,
   desc: string,
 ): Promise<void> {
+  const t0 = Date.now();
   for (let i = 0; i < ticks; i++) {
     if (condition()) return;
     await bot.waitForTicks!(1);
   }
-  throw new Error(`Timed out after ${ticks} ticks waiting for: ${desc}`);
+  const wallMs = Date.now() - t0;
+  throw new Error(
+    `Timed out after ${ticks} ticks (${wallMs}ms wall) waiting for: ${desc}`,
+  );
 }
 
 /**
@@ -348,16 +410,15 @@ export async function pollUntil(
  * every E2E suite requires OP for `/give`, `/tp`, `/effect`, etc.
  */
 export async function ensureOp(bot: Bot, ticks: number = 40): Promise<void> {
-  // Proactive grant: server ops are revoked at unpredictable times, so
-  // (re-)grant via RCON up front when available. Verification below still
-  // proves the final state; this just makes the common case one round.
+  // Grant via RCON up front when available: server ops are revoked at
+  // unpredictable times, and starting opped makes verification one round.
   if (process.env.RCON_PASS) {
     logger.info(`E2E: ensuring OP for '${bot.username}' via RCON`, "Command");
     await rcon([`op ${bot.username}`]);
   }
-  // Two rounds: verify, and (if RCON can re-grant) heal-then-verify.
+  // Two rounds: verify, and heal-then-verify.
   for (let round = 0; round < 2; round++) {
-    bot.chat!("/gamemode creative");
+    await serverCommand(bot, "gamemode creative");
     try {
       await pollUntil(
         bot,
@@ -365,27 +426,11 @@ export async function ensureOp(bot: Bot, ticks: number = 40): Promise<void> {
         ticks,
         "creative gamemode (OP check)",
       );
-    } catch {
-      // Fall through to the OP proof / heal below.
-    }
-    // Prove OP with an OP-only action: gameMode alone is insufficient —
-    // a deopped bot can sit in creative while /give silently fails.
-    bot.chat!(`/give ${bot.username} dirt`);
-    try {
-      await pollUntil(
-        bot,
-        () => bot.inventoryManager.getItemCount("dirt") >= 1,
-        40,
-        "dirt after /give (OP proof)",
-      );
-      // Cleanup the probe item; inventories are empty at reset points.
-      await bot.inventoryManager.clearInventory();
       return;
     } catch {
       // Fall through to the OP heal below.
     }
-    // Server ops are unstable (observed revoked mid-run). With RCON_PASS
-    // set, re-grant OP to self and re-verify instead of failing the suite.
+    // Re-grant (covers mid-run revocation) and retry once.
     if (!process.env.RCON_PASS) break;
     logger.info(
       `E2E: OP lost for '${bot.username}', re-granting via RCON`,
@@ -394,7 +439,7 @@ export async function ensureOp(bot: Bot, ticks: number = 40): Promise<void> {
     await rcon([`op ${bot.username}`]);
   }
   throw new Error(
-    `E2E bot '${bot.username}' lacks operator permission: /give had no effect. ` +
+    `E2E bot '${bot.username}' lacks operator permission: /gamemode creative had no effect. ` +
       `Grant OP first: \`npm run e2e:op\` (with RCON_PASS set) or ` +
       `\`/op ${bot.username}\` on the server console, then re-run.`,
   );
@@ -423,6 +468,32 @@ export async function setDifficulty(
   }
   bot.chat!(`/difficulty ${level}`);
   await bot.waitForTicks!(10);
+}
+
+/**
+ * Send a server command and verify its effect, healing OP once via RCON on
+ * failure. Fire-and-forget /commands are the top E2E flake source: the
+ * server silently drops them when the bot is (often transiently) deopped.
+ */
+export async function sendCommandVerified(
+  bot: Bot,
+  command: string,
+  verify: () => boolean,
+  desc: string,
+  ticks: number = 60,
+): Promise<void> {
+  const full = command.startsWith("/") ? command.slice(1) : command;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await serverCommand(bot, full);
+    try {
+      await pollUntil(bot, verify, ticks, `${desc} (attempt ${attempt + 1})`);
+      return;
+    } catch {
+      logger.info(`E2E: '${desc}' unverified, re-granting OP and retrying`, "Command");
+      await rcon([`op ${bot.username}`]);
+    }
+  }
+  throw new Error(`E2E: '${desc}' unverified after 2 attempts`);
 }
 
 /**
@@ -479,6 +550,34 @@ export async function restoreDifficulty(
 }
 
 /**
+ * Enter survival, verifying the switch (heals OP once on failure: a
+ * deopped bot silently stays creative, where falls and eating do nothing).
+ */
+export async function ensureSurvival(bot: Bot): Promise<void> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await serverCommand(bot, `gamemode survival ${bot.username}`);
+    try {
+      await pollUntil(
+        bot,
+        () => bot.game.gameMode === "survival",
+        40,
+        `survival gamemode (attempt ${attempt + 1})`,
+      );
+      return;
+    } catch {
+      if (attempt === 0) {
+        logger.info(
+          "Survival switch unverified; healing OP and retrying",
+          "Command",
+        );
+        await ensureOp(bot);
+      }
+    }
+  }
+  throw new Error("Could not enter survival gamemode");
+}
+
+/**
  * Ready a bot for tests: teleport to position, wait for chunks, verify OP.
  * Call once in `beforeAll`; `beforeEach` only needs re-teleport + reset.
  */
@@ -509,6 +608,37 @@ export async function resetBotState(bot: Bot): Promise<void> {
     );
   }
   await bot.waitForTicks!(2);
+}
+
+/**
+ * Teleport with arrival verification (heals OP once on failure: a deopped
+ * /tp silently leaves the bot behind, invalidating everything after it).
+ */
+export async function tpBot(
+  bot: Bot,
+  x: number,
+  y: number,
+  z: number,
+): Promise<void> {
+  const target = new Vec3(x, y, z);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await serverCommand(bot, `tp ${bot.username} ${x} ${y} ${z}`);
+    try {
+      await pollUntil(
+        bot,
+        () => bot.entity.position.distanceTo(target) < 1.0,
+        60,
+        `teleport to ${x} ${y} ${z} (attempt ${attempt + 1})`,
+      );
+      return;
+    } catch {
+      if (attempt === 0) {
+        logger.info("Teleport unverified; healing OP and retrying", "Command");
+        await ensureOp(bot);
+      }
+    }
+  }
+  throw new Error(`Teleport to ${x} ${y} ${z} unverified after 2 attempts`);
 }
 
 /** Log a skip-safe suite header describing live-server assumptions. */

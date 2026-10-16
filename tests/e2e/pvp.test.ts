@@ -22,6 +22,7 @@ import { Constants } from "../../src/constants";
 import {
   createBot,
   e2eTimeoutMs,
+  ensureOp,
   effectGiveCmd,
   ensureHostiles,
   ensureReady,
@@ -31,9 +32,12 @@ import {
   isModernVersion,
   killMobsCmd,
   logSuiteStart,
+  ensureSurvival,
   pollUntil,
   resetBotState,
   restoreDifficulty,
+  serverCommand,
+  tpBot,
   summonTarget,
   summonZombieCmd,
   targetTypeSelector,
@@ -67,23 +71,38 @@ async function killNearbyEntities(
       before.set(parseInt(idStr, 10), eAny);
     }
   }
-  bot.chat!(`/${killMobsCmd(radius, VERSION)}`);
+  const kill = () => bot.chat!(`/${killMobsCmd(radius, VERSION)}`);
+  kill();
   // Settle the kill before any test summons: a lagged server-side /kill
   // landing after the summon would remove the fresh target and clear
   // tracking via entityGone, failing the test for infrastructure reasons.
-  await pollUntil(
-    bot,
-    () =>
-      ![...before.keys()].some(
-        (id) =>
-          bot.entities[id] !== undefined &&
-          (bot.entities[id] as any).position.distanceTo(
-            bot.entity.position,
-          ) <= radius,
-      ),
-    60,
-    `area (r=${radius}) to be clear of entities after /kill`,
-  );
+  // Heal OP once if the kill does not register (deop breaks /kill too).
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      await pollUntil(
+        bot,
+        () =>
+          ![...before.keys()].some(
+            (id) =>
+              bot.entities[id] !== undefined &&
+              (bot.entities[id] as any).position.distanceTo(
+                bot.entity.position,
+              ) <= radius,
+          ),
+        60,
+        `area (r=${radius}) to be clear of entities after /kill (attempt ${attempt + 1})`,
+      );
+      break;
+    } catch {
+      if (attempt === 0) {
+        logger.info("Kill unsettled; healing OP and retrying", "Combat");
+        await ensureOp(bot);
+        kill();
+      } else {
+        throw new Error(`Kill did not settle within r=${radius}`);
+      }
+    }
+  }
   await bot.waitForTicks!(3);
 }
 
@@ -95,28 +114,35 @@ async function killNearbyEntities(
 let hostilesOk = false;
 let diffToken: { hostiles: boolean; bumped: boolean } | null = null;
 async function summonMob(bot: Bot): Promise<any> {
-  if (hostilesOk) {
-    const before = new Set(
-      Object.keys(bot.entities).map((k) => parseInt(k, 10)),
-    );
-    bot.chat!(`/${summonZombieCmd(VERSION)}`);
-    for (let i = 0; i < 60; i++) {
-      await bot.waitForTicks!(1);
-      for (const [idStr, entity] of Object.entries(bot.entities)) {
-        if (before.has(parseInt(idStr, 10))) continue;
-        const e = entity as any;
-        if (e.position && e.type !== "player") return e;
-      }
-    }
-    return null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const found = hostilesOk ? await summonZombie(bot) : await summonTarget(bot);
+    if (found) return found;
+    // A deop mid-test makes /summon silently fail; heal and retry once.
+    logger.info("Summon produced nothing; healing OP and retrying", "Combat");
+    await ensureOp(bot);
   }
-  return summonTarget(bot);
+  return null;
 }
 
-/** Teleport to an absolute position (correct template interpolation). */
+async function summonZombie(bot: Bot): Promise<any> {
+  const before = new Set(
+    Object.keys(bot.entities).map((k) => parseInt(k, 10)),
+  );
+  bot.chat!(`/${summonZombieCmd(VERSION)}`);
+  for (let i = 0; i < 60; i++) {
+    await bot.waitForTicks!(1);
+    for (const [idStr, entity] of Object.entries(bot.entities)) {
+      if (before.has(parseInt(idStr, 10))) continue;
+      const e = entity as any;
+      if (e.position && e.type !== "player") return e;
+    }
+  }
+  return null;
+}
+
+/** Teleport to an absolute position (verified arrival). */
 async function tpTo(bot: Bot, x: number, y: number, z: number): Promise<void> {
-  bot.chat!(`/tp ${x} ${y} ${z}`);
-  await bot.waitForTicks!(2);
+  await tpBot(bot, x, y, z);
 }
 
 // ── E2E test suite ──────────────────────────────────────────────────
@@ -183,13 +209,27 @@ describeE2E("E2E PvP Tests", () => {
    * Give an item and wait until it arrives (fire-and-forget is flaky).
    */
   async function giveAndWait(item: string): Promise<void> {
-    bot.chat!(`/give @p ${item} 1`);
-    await pollUntil(
-      bot,
-      () => bot.inventoryManager.getItemCount(item) >= 1,
-      60,
-      `${item} in inventory after /give`,
-    );
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await serverCommand(bot, `give ${bot.username} ${item} 1`);
+      try {
+        await pollUntil(
+          bot,
+          () => bot.inventoryManager.getItemCount(item) >= 1,
+          60,
+          `${item} in inventory after /give (attempt ${attempt + 1})`,
+        );
+        return;
+      } catch {
+        if (attempt === 0) {
+          logger.info("Give unverified; healing OP and retrying", "Combat");
+          await ensureOp(bot);
+        } else {
+          throw new Error(
+            `Timed out waiting for ${item} in inventory after /give`,
+          );
+        }
+      }
+    }
   }
 
   jest.setTimeout(TIMEOUT_MS * 5);
@@ -215,11 +255,20 @@ describeE2E("E2E PvP Tests", () => {
         // teleporting misses leftovers near POSITION, and a lagged kill
         // landing after the summon removes the fresh target (settled
         // inside killNearbyEntities).
-        bot.chat!(`/tp ${POSITION.x} ${POSITION.y} ${POSITION.z}`);
+        await tpBot(bot, POSITION.x, POSITION.y, POSITION.z);
         await bot.waitForChunksToLoad!();
         await bot.waitForTicks!(1);
         await killNearbyEntities(bot, 130);
         await resetBotState(bot);
+        // Decision tests give gear every test; without a verified clear it
+        // accumulates run over run until /give spills onto the ground.
+        await bot.inventoryManager.clearInventory();
+        await pollUntil(
+          bot,
+          () => bot.inventory.items().length === 0,
+          40,
+          "inventory to be empty after clear",
+        );
         bot.combatManager.setMode(0);
       } catch (error) {
         logger.error(error, "Combat");
@@ -234,8 +283,17 @@ describeE2E("E2E PvP Tests", () => {
         if (diffToken) await restoreDifficulty(bot, diffToken);
         bot.quit!();
         bot.end!();
-        // Give extra time for cleanup
-        await new Promise((resolve) => setTimeout(resolve, 1000));
+        // Wait for the socket to actually close so no bot activity leaks
+        // into the next suite file (stale packets + lazy requires crash
+        // workers with post-teardown require errors).
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, 5000);
+          bot.once("end", () => {
+            clearTimeout(timer);
+            resolve();
+          });
+        });
+        await new Promise((resolve) => setTimeout(resolve, 500));
       } catch (error) {
         logger.error(error, "Combat");
       }
@@ -450,6 +508,20 @@ describeE2E("E2E PvP Tests", () => {
   // Category 5: Fall Protection
   // ══════════════════════════════════════════════════════════════════
 
+  /**
+   * Wait until the bot is actually falling: getFallProtectionStatus returns
+   * safe unless velocity.y < 0 and airborne, which takes a few ticks after
+   * a teleport (stale onGround reads true initially).
+   */
+  async function pollFalling(bot: Bot): Promise<void> {
+    await pollUntil(
+      bot,
+      () => bot.entity.velocity.y < 0 && !bot.entity.onGround,
+      40,
+      "bot to be falling",
+    );
+  }
+
   describe("Fall Protection", () => {
     // NOTE: safe-on-ground is covered in tests/unit/pvp.test.ts.
     test(
@@ -472,9 +544,10 @@ describeE2E("E2E PvP Tests", () => {
       async () => {
         const cm = getCm();
 
-        await bot.inventoryManager.setGamemode(0);
+        await ensureSurvival(bot);
         try {
           await tpTo(bot, POSITION.x, POSITION.y + 50, POSITION.z);
+          await pollFalling(bot);
 
           const status = cm.getFallProtectionStatus();
           expect(status.isDangerous).toBe(true);
@@ -491,9 +564,10 @@ describeE2E("E2E PvP Tests", () => {
       async () => {
         const cm = getCm();
 
-        await bot.inventoryManager.setGamemode(0);
+        await ensureSurvival(bot);
         try {
           await tpTo(bot, POSITION.x, POSITION.y + 50, POSITION.z);
+          await pollFalling(bot);
 
           const status = cm.getFallProtectionStatus();
           expect(status.isDangerous).toBe(true);
