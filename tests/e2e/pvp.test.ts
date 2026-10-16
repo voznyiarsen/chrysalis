@@ -22,9 +22,7 @@ import { Constants } from "../../src/constants";
 import {
   createBot,
   e2eTimeoutMs,
-  ensureOp,
   effectGiveCmd,
-  ensureHostiles,
   ensureReady,
   ensureTestEnvironment,
   e2eVersion,
@@ -33,16 +31,16 @@ import {
   isModernVersion,
   killMobsCmd,
   logSuiteStart,
+  requireRcon,
   ensureSurvival,
+  ensureCreative,
   pollUntil,
   resetBotState,
-  restoreDifficulty,
   restoreTestEnvironment,
   serverCommand,
   tpBot,
   summonTarget,
-  summonZombieCmd,
-  targetTypeSelector,
+  summonNear,
 } from "./setup";
 
 // ── E2E configuration ───────────────────────────────────────────────
@@ -73,78 +71,48 @@ async function killNearbyEntities(
       before.set(parseInt(idStr, 10), eAny);
     }
   }
-  const kill = () => bot.chat!(`/${killMobsCmd(radius, VERSION)}`);
-  kill();
+  const pos = bot.entity.position;
+  await serverCommand(
+    bot,
+    killMobsCmd(radius, pos.x, pos.y, pos.z, VERSION),
+  );
   // Settle the kill before any test summons: a lagged server-side /kill
   // landing after the summon would remove the fresh target and clear
   // tracking via entityGone, failing the test for infrastructure reasons.
-  // Heal OP once if the kill does not register (deop breaks /kill too).
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      await pollUntil(
-        bot,
-        () =>
-          ![...before.keys()].some(
-            (id) =>
-              bot.entities[id] !== undefined &&
-              (bot.entities[id] as any).position.distanceTo(
-                bot.entity.position,
-              ) <= radius,
-          ),
-        60,
-        `area (r=${radius}) to be clear of entities after /kill (attempt ${attempt + 1})`,
-      );
-      break;
-    } catch {
-      if (attempt === 0) {
-        logger.info("Kill unsettled; healing OP and retrying", "Combat");
-        await ensureOp(bot);
-        kill();
-      } else {
-        throw new Error(`Kill did not settle within r=${radius}`);
-      }
-    }
-  }
+  await pollUntil(
+    bot,
+    () =>
+      ![...before.keys()].some(
+        (id) =>
+          bot.entities[id] !== undefined &&
+          (bot.entities[id] as any).position.distanceTo(
+            bot.entity.position,
+          ) <= radius,
+      ),
+    90,
+    `area (r=${radius}) to be clear of entities after /kill`,
+  );
   await bot.waitForTicks!(3);
 }
 
 /**
  * Summon a combat target: zombies when the server keeps hostiles alive,
  * otherwise passive pigs (peaceful-like servers clear hostiles on spawn).
- * See setup.ts ensureHostiles. Set in beforeAll.
+ * See setup.ts ensureTestEnvironment. Set in beforeAll.
  */
 let hostilesOk = false;
-let diffToken: { hostiles: boolean; bumped: boolean } | null = null;
 let envToken: {
   difficultyBumped: boolean;
   timeFrozen: boolean;
   hostiles: boolean;
 } | null = null;
 async function summonMob(bot: Bot): Promise<any> {
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const found = hostilesOk ? await summonZombie(bot) : await summonTarget(bot);
-    if (found) return found;
-    // A deop mid-test makes /summon silently fail; heal and retry once.
-    logger.info("Summon produced nothing; healing OP and retrying", "Combat");
-    await ensureOp(bot);
-  }
-  return null;
+  const found = hostilesOk ? await summonZombie(bot) : await summonTarget(bot);
+  return found;
 }
 
 async function summonZombie(bot: Bot): Promise<any> {
-  const before = new Set(
-    Object.keys(bot.entities).map((k) => parseInt(k, 10)),
-  );
-  bot.chat!(`/${summonZombieCmd(VERSION)}`);
-  for (let i = 0; i < 60; i++) {
-    await bot.waitForTicks!(1);
-    for (const [idStr, entity] of Object.entries(bot.entities)) {
-      if (before.has(parseInt(idStr, 10))) continue;
-      const e = entity as any;
-      if (e.position && e.type !== "player") return e;
-    }
-  }
-  return null;
+  return summonNear(bot, "Zombie");
 }
 
 /** Teleport to an absolute position (verified arrival). */
@@ -182,8 +150,15 @@ describeE2E("E2E PvP Tests", () => {
       logger.info("Target not acquired on first pass, retrying", "Combat");
       await updateTargetAndSettle();
     }
-    expect(getPvp().target).toBeDefined();
-    expect(getPvp().target.id).toBe(mob.id);
+    const target = getPvp().target;
+    if (target !== undefined && target.id !== mob.id) {
+      logger.warning(
+        `Target mismatch: tracking ${target.name ?? "?"}#${target.id}, expected ${mob.name ?? "?"}#${mob.id}`,
+        "Combat",
+      );
+    }
+    expect(target).toBeDefined();
+    expect(target.id).toBe(mob.id);
   }
 
   /**
@@ -191,10 +166,10 @@ describeE2E("E2E PvP Tests", () => {
    * Targets any non-player: the suite clears the area first, so only the
    * summoned target (pig or zombie) is in range.
    */
-  function mobSelector(radius: number): string {
+  function mobSelector(x: number, y: number, z: number, radius: number): string {
     return isModernVersion(VERSION)
-      ? `@e[type=!player,distance=..${radius}]`
-      : `@e[type=!Player,r=${radius}]`;
+      ? `@e[type=!player,x=${x},y=${y},z=${z},distance=..${radius}]`
+      : `@e[type=!Player,x=${x},y=${y},z=${z},r=${radius}]`;
   }
 
   /**
@@ -204,10 +179,16 @@ describeE2E("E2E PvP Tests", () => {
    * (entityGone clears tracking via the PVPManager handler).
    */
   async function pinTarget(bot: Bot): Promise<void> {
-    bot.chat!(`/entitydata ${mobSelector(30)} {NoAI:1}`);
+    const p = bot.entity.position;
+    const sel = mobSelector(p.x, p.y, p.z, 30);
+    const noai = await serverCommand(bot, `entitydata ${sel} {NoAI:1}`);
+    if (/no entity|unknown|incorrect|error/i.test(noai)) {
+      throw new Error(`pinTarget entitydata rejected: ${noai}`);
+    }
     await bot.waitForTicks!(2);
-    bot.chat!(
-      `/${effectGiveCmd(mobSelector(30), "resistance", 300, 255, VERSION)}`,
+    await serverCommand(
+      bot,
+      effectGiveCmd(sel, "resistance", 300, 255, VERSION),
     );
     await bot.waitForTicks!(3);
   }
@@ -216,49 +197,33 @@ describeE2E("E2E PvP Tests", () => {
    * Give an item and wait until it arrives (fire-and-forget is flaky).
    */
   async function giveAndWait(item: string): Promise<void> {
-    for (let attempt = 0; attempt < 2; attempt++) {
-      await serverCommand(bot, `give ${bot.username} ${item} 1`);
-      try {
-        await pollUntil(
-          bot,
-          () => bot.inventoryManager.getItemCount(item) >= 1,
-          60,
-          `${item} in inventory after /give (attempt ${attempt + 1})`,
-        );
-        return;
-      } catch {
-        if (attempt === 0) {
-          logger.info("Give unverified; healing OP and retrying", "Combat");
-          await ensureOp(bot);
-        } else {
-          throw new Error(
-            `Timed out waiting for ${item} in inventory after /give`,
-          );
-        }
-      }
-    }
+    await serverCommand(bot, `give ${bot.username} ${item} 1`);
+    await pollUntil(
+      bot,
+      () => bot.inventoryManager.getItemCount(item) >= 1,
+      120,
+      `${item} in inventory after /give`,
+    );
   }
 
   jest.setTimeout(TIMEOUT_MS * 5);
 
   beforeAll(async () => {
-    // Run before all tests
+    // Phase 0: RCON channel (fail fast — every setup command needs it).
+    requireRcon();
     logSuiteStart("E2E PvP Tests", USERNAME);
+    // Phase 1: bot setup, pure client-side (connect + attach managers).
     bot = await createBot({ username: USERNAME, timeoutMs: TIMEOUT_MS });
     try {
+      // Phase 2: environment setup via RCON — normal difficulty (hostiles
+      // survive) plus frozen night (no zombie burn, deterministic mobs).
+      // Zombies preferred; pigs stand in when hostiles are unavailable.
       await ensureReady(bot, POSITION);
-      // Authoritative environment: normal difficulty (hostiles survive)
-      // plus frozen night (no zombie burn, deterministic mob behavior).
-      // Falls back to pigs when the environment cannot provide hostiles.
       envToken = await ensureTestEnvironment(bot, {
         difficulty: "normal",
         freezeNight: true,
       });
       hostilesOk = envToken.hostiles;
-      if (!hostilesOk) {
-        diffToken = await ensureHostiles(bot);
-        hostilesOk = diffToken.hostiles;
-      }
     } catch (error) {
       logger.error(error, "Combat");
       throw error;
@@ -298,7 +263,6 @@ describeE2E("E2E PvP Tests", () => {
     if (bot) {
       try {
         if (envToken) await restoreTestEnvironment(bot, envToken);
-        else if (diffToken) await restoreDifficulty(bot, diffToken);
         bot.quit!();
         bot.end!();
         // Wait for the socket to actually close so no bot activity leaks
@@ -571,7 +535,7 @@ describeE2E("E2E PvP Tests", () => {
           expect(status.isDangerous).toBe(true);
         } finally {
           await tpTo(bot, POSITION.x, POSITION.y, POSITION.z);
-          await bot.inventoryManager.setGamemode(1);
+          await ensureCreative(bot);
         }
       },
       TIMEOUT_MS,
@@ -593,7 +557,7 @@ describeE2E("E2E PvP Tests", () => {
           expect(status.predictedDamage).toBeGreaterThan(0);
         } finally {
           await tpTo(bot, POSITION.x, POSITION.y, POSITION.z);
-          await bot.inventoryManager.setGamemode(1);
+          await ensureCreative(bot);
         }
       },
       TIMEOUT_MS,
@@ -700,21 +664,26 @@ describeE2E("E2E PvP Tests", () => {
         // Move the target 60 blocks away; the pearl decision caps at 50.
         // Branch entity-selector syntax by version (1.13 flattened IDs),
         // and by animal (zombies only exist when hostiles survive).
+        // Positioned selector (explicit x/y/z) so RCON can resolve it;
+        // the area holds exactly one target, so no count limit is needed.
+        const bp = bot.entity.position;
         const typeSel = hostilesOk
           ? isModernVersion(VERSION)
-            ? "type=zombie"
-            : "type=Zombie"
-          : targetTypeSelector(VERSION);
-        if (isModernVersion(VERSION)) {
-          bot.chat!(
-            `/tp @e[${typeSel},limit=1,sort=nearest] ${POSITION.x + 60} ${POSITION.y} ${POSITION.z}`,
-          );
-        } else {
-          bot.chat!(
-            `/tp @e[${typeSel},r=100] ${POSITION.x + 60} ${POSITION.y} ${POSITION.z}`,
-          );
-        }
-        await bot.waitForTicks!(5);
+            ? `type=zombie,x=${bp.x},y=${bp.y},z=${bp.z},r=100`
+            : `type=Zombie,x=${bp.x},y=${bp.y},z=${bp.z},r=100`
+          : isModernVersion(VERSION)
+            ? `type=pig,x=${bp.x},y=${bp.y},z=${bp.z},r=100`
+            : `type=Pig,x=${bp.x},y=${bp.y},z=${bp.z},r=100`;
+        await serverCommand(
+          bot,
+          `tp @e[${typeSel}] ${POSITION.x + 60} ${POSITION.y} ${POSITION.z}`,
+        );
+        await pollUntil(
+          bot,
+          () => zombie.position.distanceTo(bot.entity.position) > 50,
+          60,
+          "target to be moved 60 blocks away",
+        );
 
         const eyePos = bot.entity.position.offset(
           0,

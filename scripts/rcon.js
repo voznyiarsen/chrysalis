@@ -28,7 +28,7 @@ function packet(id, type, body) {
  * Run RCON commands sequentially. Resolves with response strings.
  * Rejects on auth failure, socket error, or timeout.
  */
-function rconCommands(host, port, password, commands, timeoutMs = 15000) {
+function rconCommands(host, port, password, commands, timeoutMs = 30000) {
   return new Promise((resolve, reject) => {
     const sock = net.createConnection(port, host, () => {
       sock.write(packet(1, 3, password));

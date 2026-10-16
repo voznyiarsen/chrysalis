@@ -2,9 +2,12 @@
  * @fileoverview Shared E2E setup for Pupa integration tests.
  *
  * Provides session identity (concurrent-safe usernames/positions), bot
- * creation, OP probing, polling helpers, and 1.12.2 vs 1.13+ command
- * branching. All `tests/e2e/*.test.ts` files build on these helpers so
- * server-command syntax and lifecycle handling stay in one place.
+ * creation, polling helpers, and 1.12.2 vs 1.13+ command branching.
+ *
+ * Design: environment setup goes EXCLUSIVELY through RCON (server-console
+ * privileges — bots never need OP), bot setup is pure client-side, and
+ * test execution only plays the game. All `tests/e2e/*.test.ts` files
+ * build on these helpers so server-command syntax stays in one place.
  */
 
 // Surface async crashes with full stacks: several E2E flakes turned out to
@@ -64,33 +67,61 @@ async function rcon(cmds: string[]): Promise<string[] | null> {
       return null;
     }
   }
-  try {
-    return await rconCommands(
-      rconHostCache,
-      parseInt(process.env.RCON_PORT || "25575", 10),
-      process.env.RCON_PASS,
-      cmds,
-    );
-  } catch (error) {
-    logger.warning(
-      `E2E: RCON failed (${(error as Error).message})`,
-      "Command",
-    );
-    return null;
+  // Retry with backoff: the server thread occasionally stalls 10s+
+  // (RCON timeouts observed), then recovers. A failed transport here must
+  // not silently degrade into an unauthenticated fallback.
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) {
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+    }
+    try {
+      return await rconCommands(
+        rconHostCache,
+        parseInt(process.env.RCON_PORT || "25575", 10),
+        process.env.RCON_PASS,
+        cmds,
+      );
+    } catch (error) {
+      lastError = error;
+      logger.warning(
+        `E2E: RCON attempt ${attempt + 1} failed (${(error as Error).message})`,
+        "Command",
+      );
+    }
   }
+  logger.warning(
+    `E2E: RCON failed after retries (${(lastError as Error)?.message})`,
+    "Command",
+  );
+  return null;
 }
 
 let rconUnavailableWarned = false;
 
 /**
- * Run a server command, preferring RCON (server-console privileges, immune
- * to player OP flaps) with in-game chat fallback. `cmd` has no leading
- * slash. Returns the server response (RCON) or "" (chat fallback).
+ * Require RCON for E2E environment setup. Throws a clear error when
+ * RCON_PASS is unset so suites fail fast instead of flaking on
+ * permission-dependent commands.
+ */
+export function requireRcon(): void {
+  if (!process.env.RCON_PASS || !rconCommands) {
+    throw new Error(
+      "E2E requires RCON_PASS (RCON_HOST/RCON_PORT optional). " +
+        "Set it in .env — see .env.example. Bots themselves need no OP.",
+    );
+  }
+}
+
+/**
+ * Run a server command, preferring RCON (server-console privileges; bots
+ * never need OP) with in-game chat fallback. `cmd` has no leading slash.
+ * Returns the server response (RCON) or "" (chat fallback).
  *
  * NOTE: position-relative selectors (~) and radius selectors (r=,
  * distance=) only resolve for in-game executors. Callers needing them must
  * either pass absolute coordinates/usernames (preferred) or use bot.chat
- * directly.
+ * directly (last resort — untestable without OP).
  */
 export async function serverCommand(bot: Bot, cmd: string): Promise<string> {
   const clean = cmd.startsWith("/") ? cmd.slice(1) : cmd;
@@ -105,11 +136,17 @@ export async function serverCommand(bot: Bot, cmd: string): Promise<string> {
       }
       return response;
     }
-    // RCON failed despite configured password; fall through to chat.
-  } else if (!rconUnavailableWarned) {
+    // RCON was configured but unreachable even after retries: falling back
+    // to unauthenticated chat would silently fail every privileged command,
+    // so fail loudly instead.
+    throw new Error(
+      `E2E RCON transport failed for '${clean}' (see warnings above)`,
+    );
+  }
+  if (!rconUnavailableWarned) {
     rconUnavailableWarned = true;
     logger.warning(
-      "E2E: RCON_PASS unset, falling back to in-game commands (flakier under OP loss)",
+      "E2E: RCON_PASS unset, falling back to in-game commands (requires OP, flakier)",
       "Command",
     );
   }
@@ -195,19 +232,20 @@ export function isModernVersion(version: string = e2eVersion()): boolean {
 }
 
 /** `/summon` command for a zombie above the bot (no leading slash). */
-export function summonZombieCmd(version: string = e2eVersion()): string {
-  return isModernVersion(version)
-    ? "summon zombie ~ ~1 ~"
-    : "summon Zombie ~ ~1 ~";
-}
-
 /**
- * `/summon` command for a passive test animal (no leading slash).
- * Passive mobs survive on peaceful-like servers where hostiles are cleared
- * on spawn, so combat E2E uses pigs instead of zombies.
+ * `/summon` command with absolute coordinates (no leading slash), suitable
+ * for RCON (console has no ~ context). `name` is version-appropriate
+ * ("Zombie"/"Pig" legacy, lowercase modern).
  */
-export function summonTargetCmd(version: string = e2eVersion()): string {
-  return isModernVersion(version) ? "summon pig ~ ~1 ~" : "summon Pig ~ ~1 ~";
+export function summonCmd(
+  name: string,
+  x: number,
+  y: number,
+  z: number,
+  version: string = e2eVersion(),
+): string {
+  const id = isModernVersion(version) ? name.toLowerCase() : name;
+  return `summon ${id} ${x} ${y} ${z}`;
 }
 
 /** Entity type selector for the test animal, branched by version. */
@@ -220,30 +258,76 @@ export function targetTypeSelector(version: string = e2eVersion()): string {
  * Matches by entity id (snapshot before summon) so no version-specific name
  * strings are needed. Returns null on timeout (~60 ticks).
  */
+/**
+ * Summon a passive test animal one block above the bot via RCON and wait
+ * for it to appear in bot entities. Matches by entity id (snapshot before
+ * summon) so no version-specific name strings are needed. Returns null on
+ * timeout (~60 ticks).
+ */
 export async function summonTarget(bot: Bot): Promise<any> {
+  return summonNear(bot, "Pig");
+}
+
+/**
+ * Summon a mob one block above the bot via RCON and return the new entity
+ * CLOSEST to the bot. First-found matching is racy: a natural spawn packet
+ * arriving in the same window would be picked instead. Our summon lands at
+ * the bot's feet while natural spawns occur 24+ blocks out, so closest wins.
+ */
+export async function summonNear(bot: Bot, name: string): Promise<any> {
   const before = new Set(Object.keys(bot.entities).map((k) => parseInt(k, 10)));
-  bot.chat!(`/${summonTargetCmd()}`);
+  const p = bot.entity.position;
+  await serverCommand(bot, summonCmd(name, p.x, p.y + 1, p.z));
+  let seen = false;
   for (let i = 0; i < 60; i++) {
     await bot.waitForTicks!(1);
     for (const [idStr, entity] of Object.entries(bot.entities)) {
       const id = parseInt(idStr, 10);
       if (before.has(id)) continue;
       const e = entity as any;
-      // A freshly summoned creature: has position, is not a player.
-      if (e.position && e.type !== "player") return e;
+      if (e.position && e.type !== "player") {
+        seen = true;
+        break;
+      }
+    }
+    if (seen) break;
+  }
+  if (!seen) return null;
+  // Settle a few ticks so same-window natural spawns also arrive, then pick
+  // the closest: our summon lands at the bot's feet while natural spawns
+  // occur 24+ blocks out.
+  await bot.waitForTicks!(3);
+  let best: any = null;
+  let bestDist = Number.MAX_VALUE;
+  for (const [idStr, entity] of Object.entries(bot.entities)) {
+    const id = parseInt(idStr, 10);
+    if (before.has(id)) continue;
+    const e = entity as any;
+    if (!e.position || e.type === "player") continue;
+    const d = e.position.distanceTo(bot.entity.position);
+    if (d < bestDist) {
+      bestDist = d;
+      best = e;
     }
   }
-  return null;
+  return best;
 }
 
-/** `/kill` command for all non-player entities within radius. */
+/**
+ * `/kill` command for all non-player entities within radius of an explicit
+ * position (no leading slash). Positioned selectors resolve from RCON;
+ * bare radius selectors only work for in-game executors.
+ */
 export function killMobsCmd(
   radius: number,
+  x: number,
+  y: number,
+  z: number,
   version: string = e2eVersion(),
 ): string {
   return isModernVersion(version)
-    ? `kill @e[type=!player,distance=..${radius}]`
-    : `kill @e[type=!Player,r=${radius}]`;
+    ? `kill @e[type=!player,x=${x},y=${y},z=${z},distance=..${radius}]`
+    : `kill @e[type=!Player,x=${x},y=${y},z=${z},r=${radius}]`;
 }
 
 /** `/effect` give command (no leading slash). */
@@ -426,83 +510,23 @@ export async function pollUntil(
 }
 
 /**
- * Verify the bot has operator permission by switching to creative and
- * polling `gameMode`. Throws a fail-fast error naming the `/op` fix;
- * every E2E suite requires OP for `/give`, `/tp`, `/effect`, etc.
- */
-export async function ensureOp(bot: Bot, ticks: number = 40): Promise<void> {
-  // Grant via RCON up front when available: server ops are revoked at
-  // unpredictable times, and starting opped makes verification one round.
-  if (process.env.RCON_PASS) {
-    logger.info(`E2E: ensuring OP for '${bot.username}' via RCON`, "Command");
-    await rcon([`op ${bot.username}`]);
-  }
-  // Three rounds with wall-clock breathers: transient stalls (server or
-  // worker event-loop freezes of ~1min have been observed) look exactly
-  // like missing OP; spacing rounds lets them pass instead of failing.
-  for (let round = 0; round < 3; round++) {
-    if (round > 0) {
-      await new Promise((resolve) => setTimeout(resolve, 20000));
-    }
-    // NOTE: explicit username is required — a targetless /gamemode has no
-    // meaning from the RCON console and fails (this broke every fresh user
-    // while saved-creative veterans passed trivially).
-    await serverCommand(bot, `gamemode creative ${bot.username}`);
-    try {
-      await pollUntil(
-        bot,
-        () => bot.game.gameMode === "creative",
-        ticks,
-        "creative gamemode (OP check)",
-      );
-      return;
-    } catch {
-      // Fall through to the OP heal below.
-    }
-    // Re-grant (covers mid-run revocation) and retry once.
-    if (!process.env.RCON_PASS) break;
-    logger.info(
-      `E2E: OP lost for '${bot.username}', re-granting via RCON`,
-      "Command",
-    );
-    await rcon([`op ${bot.username}`]);
-  }
-  throw new Error(
-    `E2E bot '${bot.username}' lacks operator permission: /gamemode creative had no effect. ` +
-      `Grant OP first: \`npm run e2e:op\` (with RCON_PASS set) or ` +
-      `\`/op ${bot.username}\` on the server console, then re-run.`,
-  );
-}
-
-/**
- * Set server difficulty, preferring RCON (works even when the bot's OP was
- * revoked mid-run) with in-game chat fallback. Never throws for the chat
- * path — callers poll functionally afterwards.
+ * Set server difficulty via RCON (environment setup never depends on
+ * player OP). Callers verify functionally afterwards (e.g. probeHostiles).
  */
 export async function setDifficulty(
-  bot: Bot,
   level: "normal" | "peaceful",
 ): Promise<void> {
-  if (process.env.RCON_PASS) {
-    try {
-      await rcon([`difficulty ${level}`]);
-      logger.info(`E2E: difficulty ${level} via RCON`, "Command");
-      return;
-    } catch (error) {
-      logger.warning(
-        `E2E: RCON difficulty ${level} failed (${(error as Error).message}), falling back to chat`,
-        "Command",
-      );
-    }
+  const out = await rcon([`difficulty ${level}`]);
+  if (!out) {
+    throw new Error("E2E: RCON unavailable for setDifficulty");
   }
-  bot.chat!(`/difficulty ${level}`);
-  await bot.waitForTicks!(10);
+  logger.info(`E2E: difficulty ${level} via RCON`, "Command");
 }
 
 /**
- * Send a server command and verify its effect, healing OP once via RCON on
- * failure. Fire-and-forget /commands are the top E2E flake source: the
- * server silently drops them when the bot is (often transiently) deopped.
+ * Send a server command (RCON-first) and verify its effect with a generous
+ * poll. Single send: RCON executes synchronously server-side, so a missing
+ * effect is a real anomaly, not a permission flap — fail loudly.
  */
 export async function sendCommandVerified(
   bot: Bot,
@@ -512,17 +536,8 @@ export async function sendCommandVerified(
   ticks: number = 60,
 ): Promise<void> {
   const full = command.startsWith("/") ? command.slice(1) : command;
-  for (let attempt = 0; attempt < 2; attempt++) {
-    await serverCommand(bot, full);
-    try {
-      await pollUntil(bot, verify, ticks, `${desc} (attempt ${attempt + 1})`);
-      return;
-    } catch {
-      logger.info(`E2E: '${desc}' unverified, re-granting OP and retrying`, "Command");
-      await rcon([`op ${bot.username}`]);
-    }
-  }
-  throw new Error(`E2E: '${desc}' unverified after 2 attempts`);
+  await serverCommand(bot, full);
+  await pollUntil(bot, verify, ticks, desc);
 }
 
 /**
@@ -532,7 +547,8 @@ export async function sendCommandVerified(
  */
 export async function probeHostiles(bot: Bot): Promise<boolean> {
   const before = new Set(Object.keys(bot.entities).map((k) => parseInt(k, 10)));
-  bot.chat!(`/${summonZombieCmd()}`);
+  const p = bot.entity.position;
+  await serverCommand(bot, summonCmd("Zombie", p.x, p.y + 1, p.z));
   for (let i = 0; i < 40; i++) {
     await bot.waitForTicks!(1);
     for (const [idStr, entity] of Object.entries(bot.entities)) {
@@ -542,40 +558,6 @@ export async function probeHostiles(bot: Bot): Promise<boolean> {
     }
   }
   return false;
-}
-
-export interface DifficultyToken {
-  /** Hostiles survive (either natively or after our bump). */
-  hostiles: boolean;
-  /** We changed the difficulty and the caller should restore it. */
-  bumped: boolean;
-}
-
-/**
- * Ensure hostiles survive for combat E2E, bumping difficulty to normal when
- * the server runs peaceful-like. Per project policy the suite sets the
- * difficulty its tests require; call restoreDifficulty in afterAll.
- */
-export async function ensureHostiles(bot: Bot): Promise<DifficultyToken> {
-  if (await probeHostiles(bot)) return { hostiles: true, bumped: false };
-  logger.info("E2E: no hostiles (peaceful-like); setting difficulty normal", "Command");
-  await setDifficulty(bot, "normal");
-  await bot.waitForTicks!(20);
-  for (let round = 0; round < 3; round++) {
-    if (await probeHostiles(bot)) return { hostiles: true, bumped: true };
-  }
-  logger.warning("E2E: hostiles still cleared; falling back to passive targets", "Command");
-  return { hostiles: false, bumped: true };
-}
-
-/** Restore peaceful difficulty if ensureHostiles bumped it. */
-export async function restoreDifficulty(
-  bot: Bot,
-  token: DifficultyToken,
-): Promise<void> {
-  if (!token.bumped) return;
-  logger.info("E2E: restoring difficulty peaceful", "Command");
-  await setDifficulty(bot, "peaceful");
 }
 
 export interface EnvToken {
@@ -686,69 +668,45 @@ export async function restoreTestEnvironment(
 }
 
 /**
- * Enter survival, verifying the switch (heals OP once on failure: a
- * deopped bot silently stays creative, where falls and eating do nothing).
+ * Enter survival via RCON, verifying the switch (a deopped-chat fallback
+ * would silently stay creative, where falls and eating do nothing).
  */
 export async function ensureSurvival(bot: Bot): Promise<void> {
-  for (let attempt = 0; attempt < 2; attempt++) {
-    await serverCommand(bot, `gamemode survival ${bot.username}`);
-    try {
-      await pollUntil(
-        bot,
-        () => bot.game.gameMode === "survival",
-        40,
-        `survival gamemode (attempt ${attempt + 1})`,
-      );
-      return;
-    } catch {
-      if (attempt === 0) {
-        logger.info(
-          "Survival switch unverified; healing OP and retrying",
-          "Command",
-        );
-        await ensureOp(bot);
-      }
-    }
-  }
-  throw new Error("Could not enter survival gamemode");
+  await serverCommand(bot, `gamemode survival ${bot.username}`);
+  await pollUntil(bot, () => bot.game.gameMode === "survival", 60, "survival gamemode");
 }
 
 /**
- * Ready a bot for tests: teleport to position, wait for chunks, verify OP.
- * Call once in `beforeAll`; `beforeEach` only needs re-teleport + reset.
+ * Ready a bot for tests: teleport to position and set creative, all via
+ * RCON. Call once in `beforeAll`; `beforeEach` only needs re-teleport +
+ * reset. No OP needed at any point.
  */
 export async function ensureReady(bot: Bot, position: Vec3): Promise<void> {
-  bot.chat!(`/tp ${position.x} ${position.y} ${position.z}`);
+  await tpBot(bot, position.x, position.y, position.z);
   await bot.waitForChunksToLoad!();
   await bot.waitForTicks!(1);
-  await ensureOp(bot);
-  bot.chat!(`/tp ${position.x} ${position.y} ${position.z}`);
+  await serverCommand(bot, `gamemode creative ${bot.username}`);
+  await pollUntil(bot, () => bot.game.gameMode === "creative", 60, "creative gamemode");
+  await tpBot(bot, position.x, position.y, position.z);
   await bot.waitForChunksToLoad!();
   await bot.waitForTicks!(1);
 }
 
-/** Common reset between tests: stop movement, clear entities state, creative. */
+/**
+ * Common reset between tests: pure client-side (stop movement, clear
+ * pathfinder/PVP goals). Gamemode and inventory are managed explicitly by
+ * each suite via RCON; this function sends no server commands.
+ */
 export async function resetBotState(bot: Bot): Promise<void> {
   bot.clearControlStates();
   bot.pathfinder?.stop();
   bot.pvp?.forceStop();
-  // ensureOp (not bare setGamemode): server ops are revoked mid-run, and
-  // this re-grants via RCON when RCON_PASS is set. Never throws here —
-  // beforeAll already proved OP once; a later loss surfaces per-test.
-  try {
-    await ensureOp(bot, 40);
-  } catch (error) {
-    logger.warning(
-      `resetBotState: ${(error as Error).message}`,
-      "Command",
-    );
-  }
   await bot.waitForTicks!(2);
 }
 
 /**
- * Teleport with arrival verification (heals OP once on failure: a deopped
- * /tp silently leaves the bot behind, invalidating everything after it).
+ * Teleport via RCON with arrival verification. RCON executes synchronously
+ * server-side, so a missing arrival is a real anomaly — fail loudly.
  */
 export async function tpBot(
   bot: Bot,
@@ -757,24 +715,22 @@ export async function tpBot(
   z: number,
 ): Promise<void> {
   const target = new Vec3(x, y, z);
-  for (let attempt = 0; attempt < 2; attempt++) {
-    await serverCommand(bot, `tp ${bot.username} ${x} ${y} ${z}`);
-    try {
-      await pollUntil(
-        bot,
-        () => bot.entity.position.distanceTo(target) < 1.0,
-        60,
-        `teleport to ${x} ${y} ${z} (attempt ${attempt + 1})`,
-      );
-      return;
-    } catch {
-      if (attempt === 0) {
-        logger.info("Teleport unverified; healing OP and retrying", "Command");
-        await ensureOp(bot);
-      }
-    }
-  }
-  throw new Error(`Teleport to ${x} ${y} ${z} unverified after 2 attempts`);
+  await serverCommand(bot, `tp ${bot.username} ${x} ${y} ${z}`);
+  await pollUntil(
+    bot,
+    () => bot.entity.position.distanceTo(target) < 1.0,
+    90,
+    `teleport to ${x} ${y} ${z}`,
+  );
+}
+
+/**
+ * Enter creative via RCON, verifying the switch. Companion to
+ * ensureSurvival for tests that must leave survival reliably.
+ */
+export async function ensureCreative(bot: Bot): Promise<void> {
+  await serverCommand(bot, `gamemode creative ${bot.username}`);
+  await pollUntil(bot, () => bot.game.gameMode === "creative", 60, "creative gamemode");
 }
 
 /** Log a skip-safe suite header describing live-server assumptions. */

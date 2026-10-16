@@ -30,18 +30,17 @@ import {
   effectClearCmd,
   effectGiveCmd,
   enchNbt,
-  ensureHostiles,
   ensureTestEnvironment,
-  ensureOp,
   ensureReady,
   getSessionPosition,
   getUsername,
   isModernVersion,
   logSuiteStart,
+  requireRcon,
+  ensureCreative,
   ensureSurvival,
   pollUntil,
   resetBotState,
-  restoreDifficulty,
   restoreTestEnvironment,
   sendCommandVerified,
   serverCommand,
@@ -96,7 +95,7 @@ async function resetState(bot: Bot): Promise<void> {
 
 /** Clear the bot's entire inventory via creative mode. */
 async function clearInventory(bot: Bot): Promise<void> {
-  await bot.inventoryManager.setGamemode(1);
+  await ensureCreative(bot);
   await getInv(bot).clearInventory();
   await pollUntil(
     bot,
@@ -126,28 +125,15 @@ async function giveItem(
     VERSION,
     modernNbt,
   );
-  // Mid-test deops defeat single-shot verification: heal OP once and retry.
-  for (let attempt = 0; attempt < 2; attempt++) {
-    await serverCommand(bot, cmd);
-    try {
-      await pollUntil(
-        bot,
-        () => bot.inventoryManager.getItemCount(itemName) >= count,
-        60,
-        `${count}x ${itemName} in inventory after /give (attempt ${attempt + 1})`,
-      );
-      break;
-    } catch {
-      if (attempt === 0) {
-        logger.info("Give unverified; healing OP and retrying", "Inventory");
-        await ensureOp(bot);
-      } else {
-        throw new Error(
-          `Timed out waiting for ${count}x ${itemName} in inventory after /give`,
-        );
-      }
-    }
-  }
+  // RCON executes synchronously server-side; a generous poll covers
+  // client sync lag, then fail loudly (no permission concept to heal).
+  await serverCommand(bot, cmd);
+  await pollUntil(
+    bot,
+    () => bot.inventoryManager.getItemCount(itemName) >= count,
+    120,
+    `${count}x ${itemName} in inventory after /give`,
+  );
   await bot.waitForTicks!(Constants.TIMING.EQUIP_TICKS);
 }
 
@@ -197,30 +183,19 @@ async function sendCommand(bot: Bot, command: string): Promise<void> {
  * hurt cooldown; fast natural regen just costs extra iterations.
  */
 async function setBotHealth(bot: Bot, health: number): Promise<void> {
-  // Survival is required for falls to hurt; verify (heals OP on failure).
+  // Survival is required for falls to hurt; verified below.
   await ensureSurvival(bot);
   // Clear stale effects first: a leaked hunger effect starves the bot,
   // outpacing heals and invalidating every health assertion below.
   await clearEffects(bot);
   if (health >= 20) {
-    // Heal path (harmless no-op when already full). Retry once with OP
-    // heal: a deopped instant_health silently leaves the bot hurt.
-    for (let attempt = 0; attempt < 2; attempt++) {
-      await sendCommand(
-        bot,
-        effectGiveCmd(bot.username, "instant_health", 1, 255, VERSION),
-      );
-      try {
-        await pollUntil(bot, () => (bot.health ?? 0) >= 20, 40, "full health");
-        return;
-      } catch {
-        if (attempt === 0) {
-          logger.info("Heal unverified; healing OP and retrying", "Inventory");
-          await ensureOp(bot);
-        }
-      }
-    }
-    throw new Error(`Timed out waiting for full health (at ${bot.health})`);
+    // Heal path (harmless no-op when already full).
+    await sendCommand(
+      bot,
+      effectGiveCmd(bot.username, "instant_health", 1, 255, VERSION),
+    );
+    await pollUntil(bot, () => (bot.health ?? 0) >= 20, 60, "full health");
+    return;
   }
   if (health < 10) {
     throw new Error(
@@ -232,7 +207,7 @@ async function setBotHealth(bot: Bot, health: number): Promise<void> {
   // natural regen outpaces ~1-damage falls. Guard keeps every fall lethal-safe.
   for (let attempt = 0; attempt < 12 && bot.health! > health; attempt++) {
     if (bot.health! < 9) break;
-    // tpBot verifies arrival (heals OP on failure); the rise confirms
+    // tpBot verifies arrival; the rise confirms
     // the teleport executed, then wait out the landing.
     await tpBot(bot, p.x, p.y + 8, p.z);
     await pollUntil(bot, () => !bot.entity.onGround, 40, "leaving ground");
@@ -294,7 +269,7 @@ async function setBotFood(bot: Bot, food: number): Promise<void> {
         stall = 0;
         // Stall recovery via RCON when available (survives OP loss),
         // else in-game chat (needs OP).
-        await setDifficulty(bot, "normal");
+        await setDifficulty("normal");
       }
     }
     if (bot.food! > food) {
@@ -314,24 +289,13 @@ async function setBotFood(bot: Bot, food: number): Promise<void> {
 
 /** Remove all effects from the bot (verified: leaked hunger starves the bot). */
 async function clearEffects(bot: Bot): Promise<void> {
-  for (let attempt = 0; attempt < 2; attempt++) {
-    await sendCommand(bot, effectClearCmd(bot.username, VERSION));
-    try {
-      await pollUntil(
-        bot,
-        () => Object.keys(bot.entity.effects || {}).length === 0,
-        30,
-        `effects cleared (attempt ${attempt + 1})`,
-      );
-      return;
-    } catch {
-      if (attempt === 0) {
-        logger.info("Clear unverified; healing OP and retrying", "Inventory");
-        await ensureOp(bot);
-      }
-    }
-  }
-  throw new Error("Could not clear bot effects");
+  await sendCommand(bot, effectClearCmd(bot.username, VERSION));
+  await pollUntil(
+    bot,
+    () => Object.keys(bot.entity.effects || {}).length === 0,
+    60,
+    "effects cleared",
+  );
 }
 
 /**
@@ -358,8 +322,7 @@ async function sendEffect(
 
 describeE2E("E2E Inventory Tests", () => {
   let bot: Bot;
-  let diffToken: { hostiles: boolean; bumped: boolean } | null = null;
-  let envToken: {
+    let envToken: {
     difficultyBumped: boolean;
     timeFrozen: boolean;
     hostiles: boolean;
@@ -370,17 +333,16 @@ describeE2E("E2E Inventory Tests", () => {
   jest.setTimeout(TIMEOUT_MS * 5);
 
   beforeAll(async () => {
+    // Phase 0: RCON channel (fail fast — every setup command needs it).
+    requireRcon();
     logSuiteStart("E2E Inventory Tests", USERNAME);
+    // Phase 1: bot setup, pure client-side (connect + attach managers).
     bot = await createBot({ username: USERNAME, timeoutMs: TIMEOUT_MS });
     try {
+      // Phase 2: environment setup via RCON — normal difficulty so food
+      // drain mechanics work (restored afterAll).
       await ensureReady(bot, POSITION);
-      // Food drain needs non-peaceful mechanics: manage the environment
-      // authoritatively via RCON (restored afterAll). Without RCON the
-      // food tests fall back to the canDrainFood skip gate below.
       envToken = await ensureTestEnvironment(bot, { difficulty: "normal" });
-      if (!envToken.hostiles && !process.env.RCON_PASS) {
-        diffToken = await ensureHostiles(bot);
-      }
     } catch (error) {
       logger.error(error, "Inventory");
       throw error;
@@ -408,7 +370,6 @@ describeE2E("E2E Inventory Tests", () => {
     if (bot) {
       try {
         if (envToken) await restoreTestEnvironment(bot, envToken);
-        else if (diffToken) await restoreDifficulty(bot, diffToken);
         bot.quit!();
         bot.end!();
         // Wait for the socket to actually close so no bot activity leaks
@@ -743,7 +704,7 @@ describeE2E("E2E Inventory Tests", () => {
         }
         expect(consumed).toBe(true);
       } finally {
-        await getInv(bot).setGamemode(1);
+        await ensureCreative(bot);
         await bot.waitForTicks!(2);
       }
     });
@@ -799,7 +760,7 @@ describeE2E("E2E Inventory Tests", () => {
       await getInv(bot).equipTotem();
       expect(getEquippedItem(bot, "off-hand")!.name).toBe("totem_of_undying");
       } finally {
-        await getInv(bot).setGamemode(1);
+        await ensureCreative(bot);
         await bot.waitForTicks!(2);
       }
     });
@@ -833,7 +794,7 @@ describeE2E("E2E Inventory Tests", () => {
       expect(hasRegen).toBe(true);
 
       // Restore creative mode
-      await getInv(bot).setGamemode(1);
+      await ensureCreative(bot);
       await bot.waitForTicks!(2);
     });
 
@@ -877,7 +838,7 @@ describeE2E("E2E Inventory Tests", () => {
         expect(bot.food!).toBeGreaterThan(foodBefore);
       } finally {
         // Restore creative mode
-        await getInv(bot).setGamemode(1);
+        await ensureCreative(bot);
         await bot.waitForTicks!(2);
       }
     });
@@ -913,14 +874,14 @@ describeE2E("E2E Inventory Tests", () => {
         );
       } finally {
         // Restore creative mode
-        await getInv(bot).setGamemode(1);
+        await ensureCreative(bot);
         await bot.waitForTicks!(2);
       }
     });
 
     test("equipGapple skips eating in creative mode", async () => {
       // Ensure creative mode
-      await getInv(bot).setGamemode(1);
+      await ensureCreative(bot);
       await bot.waitForTicks!(2);
       await clearEffects(bot);
 

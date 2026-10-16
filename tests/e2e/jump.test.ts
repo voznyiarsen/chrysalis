@@ -25,8 +25,8 @@ import {
   getSessionPosition,
   getSessionSuffix,
   getUsername,
-  ensureOp,
   logSuiteStart,
+  requireRcon,
   pollUntil,
   resetBotState,
   serverCommand,
@@ -58,10 +58,13 @@ describeE2E("E2E Jump Tests", () => {
   jest.setTimeout(TIMEOUT_MS * 5);
 
   beforeAll(async () => {
-    // Run before all tests
+    // Phase 0: RCON channel (fail fast — every setup command needs it).
+    requireRcon();
     logSuiteStart("E2E Jump Tests", USERNAME);
+    // Phase 1: bot setup, pure client-side (connect + attach managers).
     bot = await createBot({ username: USERNAME, timeoutMs: TIMEOUT_MS });
     try {
+      // Phase 2: environment setup via RCON (position + creative).
       await ensureReady(bot, POSITION);
     } catch (error) {
       logger.error(error, "Movement");
@@ -317,20 +320,8 @@ describeE2E("E2E Jump Tests", () => {
           !!f && f.boundingBox !== 'empty' && (!a || a.boundingBox === 'empty')
         );
       };
-      for (let attempt = 0; attempt < 2; attempt++) {
-        for (const cmd of fillCmds) await serverCommand(bot, cmd);
-        try {
-          await pollUntil(bot, platformReady, 60, 'sky platform to be ready');
-          break;
-        } catch {
-          if (attempt === 0) {
-            logger.info('Platform setup unverified; healing OP and retrying', 'Movement');
-            await ensureOp(bot);
-          } else {
-            throw new Error('Sky platform did not materialize');
-          }
-        }
-      }
+      for (const cmd of fillCmds) await serverCommand(bot, cmd);
+      await pollUntil(bot, platformReady, 90, 'sky platform to be ready');
       await tpBot(bot, ax, airY, az);
       await bot.waitForChunksToLoad!();
       await bot.combatManager._waitUntilSettled();

@@ -9,8 +9,7 @@
     "test": "node --no-deprecation -r dotenv/config node_modules/jest/bin/jest.js",
     "test:e2e": "node --no-deprecation -r dotenv/config node_modules/jest/bin/jest.js tests/e2e --runInBand",
     "lint": "eslint .",
-    "format": "prettier --write .",
-    "e2e:op": "node scripts/op-e2e.js"
+    "format": "prettier --write ."
   },
   "keywords": [],
   "author": "",

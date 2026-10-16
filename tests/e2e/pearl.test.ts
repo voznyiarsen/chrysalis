@@ -29,7 +29,9 @@ import {
   getUsername,
   killMobsCmd,
   logSuiteStart,
-  ensureOp,
+  requireRcon,
+  ensureCreative,
+  ensureSurvival,
   pollUntil,
   serverCommand,
   resetBotState,
@@ -60,29 +62,24 @@ describeE2E("E2E Pearl Tests", () => {
   /**
    * Give ender pearls and wait until they are in inventory.
    */
+  /**
+   * Remove stray entities (e.g. in-flight pearls from a previous test)
+   * around the bot via positioned RCON kill.
+   */
+  async function killStrays(bot: Bot, radius: number): Promise<void> {
+    const p = bot.entity.position;
+    await serverCommand(bot, killMobsCmd(radius, p.x, p.y, p.z));
+  }
+
   async function givePearls(count: number): Promise<void> {
     const cmd = buildServerGiveCmd(bot.username, "ender_pearl", { count });
-    for (let attempt = 0; attempt < 2; attempt++) {
-      await serverCommand(bot, cmd);
-      try {
-        await pollUntil(
-          bot,
-          () => bot.inventoryManager.getItemCount("ender_pearl") >= count,
-          60,
-          `${count} ender pearls in inventory (attempt ${attempt + 1})`,
-        );
-        return;
-      } catch {
-        if (attempt === 0) {
-          logger.info("Give unverified; healing OP and retrying", "Combat");
-          await ensureOp(bot);
-        } else {
-          throw new Error(
-            `Timed out waiting for ${count} ender pearls in inventory`,
-          );
-        }
-      }
-    }
+    await serverCommand(bot, cmd);
+    await pollUntil(
+      bot,
+      () => bot.inventoryManager.getItemCount("ender_pearl") >= count,
+      120,
+      `${count} ender pearls in inventory`,
+    );
   }
 
   /**
@@ -96,10 +93,13 @@ describeE2E("E2E Pearl Tests", () => {
   jest.setTimeout(TIMEOUT_MS * 5);
 
   beforeAll(async () => {
-    // Run before all tests
+    // Phase 0: RCON channel (fail fast — every setup command needs it).
+    requireRcon();
     logSuiteStart("E2E Pearl Tests", USERNAME);
+    // Phase 1: bot setup, pure client-side (connect + attach managers).
     bot = await createBot({ username: USERNAME, timeoutMs: TIMEOUT_MS });
     try {
+      // Phase 2: environment setup via RCON (position + creative).
       await ensureReady(bot, POSITION);
     } catch (error) {
       logger.error(error, "Combat");
@@ -119,7 +119,7 @@ describeE2E("E2E Pearl Tests", () => {
         await bot.waitForTicks!(1);
         // Remove stray in-flight pearls from the previous test so they
         // cannot teleport the bot mid-test.
-        bot.chat!(`/${killMobsCmd(100)}`);
+        await killStrays(bot, 100);
         await bot.waitForTicks!(3);
         await resetState();
       } catch (error) {
@@ -134,7 +134,7 @@ describeE2E("E2E Pearl Tests", () => {
       try {
         // Clear strays and let in-flight pearls land so the next run's
         // first test cannot be teleported by our leftovers.
-        bot.chat!(`/${killMobsCmd(200)}`);
+        await killStrays(bot, 200);
         await bot.waitForTicks!(100);
         bot.quit!();
         bot.end!();
@@ -156,11 +156,11 @@ describeE2E("E2E Pearl Tests", () => {
    * survival; in creative the count never drops). Restores creative after.
    */
   async function inSurvival(fn: () => Promise<void>): Promise<void> {
-    await bot.inventoryManager.setGamemode(0);
+    await ensureSurvival(bot);
     try {
       await fn();
     } finally {
-      await bot.inventoryManager.setGamemode(1);
+      await ensureCreative(bot);
       await bot.waitForTicks!(2);
     }
   }
