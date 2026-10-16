@@ -197,6 +197,9 @@ async function sendCommand(bot: Bot, command: string): Promise<void> {
 async function setBotHealth(bot: Bot, health: number): Promise<void> {
   // Survival is required for falls to hurt; verify (heals OP on failure).
   await ensureSurvival(bot);
+  // Clear stale effects first: a leaked hunger effect starves the bot,
+  // outpacing heals and invalidating every health assertion below.
+  await clearEffects(bot);
   if (health >= 20) {
     // Heal path (harmless no-op when already full). Retry once with OP
     // heal: a deopped instant_health silently leaves the bot hurt.
@@ -250,7 +253,7 @@ async function setBotHealth(bot: Bot, health: number): Promise<void> {
 let foodDrainable: boolean | null = null;
 async function canDrainFood(bot: Bot): Promise<boolean> {
   if (foodDrainable !== null) return foodDrainable;
-  await sendEffect(bot, "hunger", 300, 5, "17");
+  await sendEffect(bot, "hunger", 120, 5, "17");
   await bot.waitForTicks!(300);
   // Require two sub-20 reads a minute apart: single transient dips have
   // been observed on servers that otherwise pin food at 20.
@@ -273,7 +276,7 @@ async function canDrainFood(bot: Bot): Promise<boolean> {
  */
 async function setBotFood(bot: Bot, food: number): Promise<void> {
   if (food < 20) {
-    await sendEffect(bot, "hunger", 300, 5, "17");
+    await sendEffect(bot, "hunger", 120, 5, "17");
     // Drain with stall recovery: if food stops dropping, the server may
     // have reverted to peaceful mid-test — re-assert normal and continue.
     // Bounded at ~900 ticks total.
@@ -307,10 +310,26 @@ async function setBotFood(bot: Bot, food: number): Promise<void> {
   }
 }
 
-/** Remove all effects from the bot. */
+/** Remove all effects from the bot (verified: leaked hunger starves the bot). */
 async function clearEffects(bot: Bot): Promise<void> {
-  await sendCommand(bot, effectClearCmd(bot.username, VERSION));
-  await bot.waitForTicks!(3);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await sendCommand(bot, effectClearCmd(bot.username, VERSION));
+    try {
+      await pollUntil(
+        bot,
+        () => Object.keys(bot.entity.effects || {}).length === 0,
+        30,
+        `effects cleared (attempt ${attempt + 1})`,
+      );
+      return;
+    } catch {
+      if (attempt === 0) {
+        logger.info("Clear unverified; healing OP and retrying", "Inventory");
+        await ensureOp(bot);
+      }
+    }
+  }
+  throw new Error("Could not clear bot effects");
 }
 
 /**

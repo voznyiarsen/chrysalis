@@ -416,8 +416,13 @@ export async function ensureOp(bot: Bot, ticks: number = 40): Promise<void> {
     logger.info(`E2E: ensuring OP for '${bot.username}' via RCON`, "Command");
     await rcon([`op ${bot.username}`]);
   }
-  // Two rounds: verify, and heal-then-verify.
-  for (let round = 0; round < 2; round++) {
+  // Three rounds with wall-clock breathers: transient stalls (server or
+  // worker event-loop freezes of ~1min have been observed) look exactly
+  // like missing OP; spacing rounds lets them pass instead of failing.
+  for (let round = 0; round < 3; round++) {
+    if (round > 0) {
+      await new Promise((resolve) => setTimeout(resolve, 20000));
+    }
     await serverCommand(bot, "gamemode creative");
     try {
       await pollUntil(
