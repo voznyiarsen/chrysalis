@@ -19,7 +19,7 @@ export default [
   pluginJs.configs.recommended,
   configPrettier,
   {
-    files: ["*.js", "tests/**/*.js"],
+    files: ["*.js", "tests/**/*.js", "scripts/**/*.js"],
     languageOptions: {
       sourceType: "commonjs",
       globals: {

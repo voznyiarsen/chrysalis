@@ -92,13 +92,16 @@ describeE2E("E2E Pearl Tests", () => {
     // Run before each test
     if (bot && bot.entity) {
       try {
+        // Teleport FIRST, then clear strays at the suite position: killing
+        // before teleporting misses leftovers near POSITION (e.g. in-flight
+        // pearls from a previous run landing mid-test).
+        bot.chat!(`/tp ${POSITION.x} ${POSITION.y} ${POSITION.z}`);
+        await bot.waitForChunksToLoad!();
+        await bot.waitForTicks!(1);
         // Remove stray in-flight pearls from the previous test so they
         // cannot teleport the bot mid-test.
         bot.chat!(`/${killMobsCmd(100)}`);
         await bot.waitForTicks!(3);
-        bot.chat!(`/tp ${POSITION.x} ${POSITION.y} ${POSITION.z}`);
-        await bot.waitForChunksToLoad!();
-        await bot.waitForTicks!(1);
         await resetState();
       } catch (error) {
         logger.error(error, "Combat");
@@ -110,6 +113,10 @@ describeE2E("E2E Pearl Tests", () => {
     // Run after all tests
     if (bot) {
       try {
+        // Clear strays and let in-flight pearls land so the next run's
+        // first test cannot be teleported by our leftovers.
+        bot.chat!(`/${killMobsCmd(200)}`);
+        await bot.waitForTicks!(100);
         bot.quit!();
         bot.end!();
         // Give extra time for cleanup

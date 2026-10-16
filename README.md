@@ -321,11 +321,13 @@ session identity, and 1.12.2 vs 1.13+ command branching live in
 - `tests/e2e/inventory.test.ts` — Inventory management E2E tests
 - `tests/e2e/pvp.test.ts` — PvP combat E2E tests
 
-E2E requires operator permission: each suite checks OP in `beforeAll` and
-fails fast naming the `/op <username>` command to run on the server console.
+E2E requires operator permission: run `npm run e2e:op` first (uses RCON
+when `RCON_PASS` is set, otherwise relays through the Pupa bot).
 Concurrent runs need a distinct `E2E_SUFFIX` per session (usernames become
 `inv|jmp|prl|pvp_<suffix>` with per-session positions), and each session's
-bot must be OPed.
+bot must be OPed. Suites run serialized (`--runInBand`): difficulty is
+server-global, and suites that need hostiles or food-drain set
+`/difficulty normal` in `beforeAll` and restore peaceful in `afterAll`.
 
 Run all tests:
 

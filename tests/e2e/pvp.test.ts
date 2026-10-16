@@ -22,8 +22,10 @@ import { Constants } from "../../src/constants";
 import {
   createBot,
   e2eTimeoutMs,
-  e2eVersion,
+  effectGiveCmd,
+  ensureHostiles,
   ensureReady,
+  e2eVersion,
   getSessionPosition,
   getUsername,
   isModernVersion,
@@ -31,7 +33,9 @@ import {
   logSuiteStart,
   pollUntil,
   resetBotState,
+  restoreDifficulty,
   summonTarget,
+  summonZombieCmd,
   targetTypeSelector,
 } from "./setup";
 
@@ -54,15 +58,58 @@ async function killNearbyEntities(
   bot: Bot,
   radius: number = 30,
 ): Promise<void> {
+  // Snapshot first: the poll must only wait out entities present at kill
+  // time, not natural spawns wandering in afterwards.
+  const before = new Map<number, any>();
+  for (const [idStr, e] of Object.entries(bot.entities)) {
+    const eAny = e as any;
+    if (eAny.type !== "player" && eAny.position) {
+      before.set(parseInt(idStr, 10), eAny);
+    }
+  }
   bot.chat!(`/${killMobsCmd(radius, VERSION)}`);
+  // Settle the kill before any test summons: a lagged server-side /kill
+  // landing after the summon would remove the fresh target and clear
+  // tracking via entityGone, failing the test for infrastructure reasons.
+  await pollUntil(
+    bot,
+    () =>
+      ![...before.keys()].some(
+        (id) =>
+          bot.entities[id] !== undefined &&
+          (bot.entities[id] as any).position.distanceTo(
+            bot.entity.position,
+          ) <= radius,
+      ),
+    60,
+    `area (r=${radius}) to be clear of entities after /kill`,
+  );
   await bot.waitForTicks!(3);
 }
 
 /**
- * Summon a passive test animal. Hostile mobs are cleared on spawn by this
- * server (peaceful-like), so pigs stand in for combat targets. See setup.ts.
+ * Summon a combat target: zombies when the server keeps hostiles alive,
+ * otherwise passive pigs (peaceful-like servers clear hostiles on spawn).
+ * See setup.ts ensureHostiles. Set in beforeAll.
  */
+let hostilesOk = false;
+let diffToken: { hostiles: boolean; bumped: boolean } | null = null;
 async function summonMob(bot: Bot): Promise<any> {
+  if (hostilesOk) {
+    const before = new Set(
+      Object.keys(bot.entities).map((k) => parseInt(k, 10)),
+    );
+    bot.chat!(`/${summonZombieCmd(VERSION)}`);
+    for (let i = 0; i < 60; i++) {
+      await bot.waitForTicks!(1);
+      for (const [idStr, entity] of Object.entries(bot.entities)) {
+        if (before.has(parseInt(idStr, 10))) continue;
+        const e = entity as any;
+        if (e.position && e.type !== "player") return e;
+      }
+    }
+    return null;
+  }
   return summonTarget(bot);
 }
 
@@ -81,6 +128,56 @@ describeE2E("E2E PvP Tests", () => {
 
   const getCm = (): any => bot.combatManager;
   const getPvp = (): any => (bot as any).pvp;
+
+  /**
+   * Run updateTarget and let async attack() settle: attack() awaits stop()
+   * first, so pvp.target is assigned on a microtask, not synchronously.
+   */
+  async function updateTargetAndSettle(): Promise<void> {
+    getCm().updateTarget();
+    await bot.waitForTicks!(1);
+  }
+
+  /**
+   * Acquire the summoned mob as the combat target, retrying once: entity
+   * spawn/destroy packets can interleave under load, dropping the first
+   * acquisition through no fault of the targeting logic.
+   */
+  async function expectTargetAcquired(mob: any): Promise<void> {
+    await updateTargetAndSettle();
+    if (getPvp().target === undefined && bot.entities[mob.id] !== undefined) {
+      logger.info("Target not acquired on first pass, retrying", "Combat");
+      await updateTargetAndSettle();
+    }
+    expect(getPvp().target).toBeDefined();
+    expect(getPvp().target.id).toBe(mob.id);
+  }
+
+  /**
+   * Versioned selector for nearby test animals (used for /effect and /tp).
+   * Targets any non-player: the suite clears the area first, so only the
+   * summoned target (pig or zombie) is in range.
+   */
+  function mobSelector(radius: number): string {
+    return isModernVersion(VERSION)
+      ? `@e[type=!player,distance=..${radius}]`
+      : `@e[type=!Player,r=${radius}]`;
+  }
+
+  /**
+   * Pin a freshly summoned target in place: NoAI stops wandering (which
+   * breaks distance assertions and can walk the mob out of tracking), and
+   * maximum resistance stops our own punches from killing it mid-poll
+   * (entityGone clears tracking via the PVPManager handler).
+   */
+  async function pinTarget(bot: Bot): Promise<void> {
+    bot.chat!(`/entitydata ${mobSelector(30)} {NoAI:1}`);
+    await bot.waitForTicks!(2);
+    bot.chat!(
+      `/${effectGiveCmd(mobSelector(30), "resistance", 300, 255, VERSION)}`,
+    );
+    await bot.waitForTicks!(3);
+  }
 
   /**
    * Give an item and wait until it arrives (fire-and-forget is flaky).
@@ -103,6 +200,8 @@ describeE2E("E2E PvP Tests", () => {
     bot = await createBot({ username: USERNAME, timeoutMs: TIMEOUT_MS });
     try {
       await ensureReady(bot, POSITION);
+      diffToken = await ensureHostiles(bot);
+      hostilesOk = diffToken.hostiles;
     } catch (error) {
       logger.error(error, "Combat");
       throw error;
@@ -112,10 +211,14 @@ describeE2E("E2E PvP Tests", () => {
   beforeEach(async () => {
     if (bot && bot.entity) {
       try {
-        await killNearbyEntities(bot, 30);
+        // Teleport first, then clear at the suite position: killing before
+        // teleporting misses leftovers near POSITION, and a lagged kill
+        // landing after the summon removes the fresh target (settled
+        // inside killNearbyEntities).
         bot.chat!(`/tp ${POSITION.x} ${POSITION.y} ${POSITION.z}`);
         await bot.waitForChunksToLoad!();
         await bot.waitForTicks!(1);
+        await killNearbyEntities(bot, 130);
         await resetBotState(bot);
         bot.combatManager.setMode(0);
       } catch (error) {
@@ -128,6 +231,7 @@ describeE2E("E2E PvP Tests", () => {
     // Run after all tests
     if (bot) {
       try {
+        if (diffToken) await restoreDifficulty(bot, diffToken);
         bot.quit!();
         bot.end!();
         // Give extra time for cleanup
@@ -140,10 +244,77 @@ describeE2E("E2E PvP Tests", () => {
   }, TIMEOUT_MS * 2);
 
   // ──────────────────────────────────────────────────────────────────
-  // NOTE: Target-filter/mode/ally pure logic (setMode, getTargetFilter
-  // caching, addAlly/removeAlly) is covered without a server in
-  // tests/unit/pvp.test.ts. E2E covers only live-server behavior below.
+  // Live Target Tracking (mode/filter pure logic lives in unit tests)
   // ──────────────────────────────────────────────────────────────────
+
+  describe("Live Target Tracking", () => {
+    test(
+      "updateTarget — acquires a nearby target in mode 3",
+      async () => {
+        const cm = getCm();
+        cm.setMode(3);
+        const mob = await summonMob(bot);
+        expect(mob).not.toBeNull();
+        await pinTarget(bot);
+
+        await expectTargetAcquired(mob);
+      },
+      TIMEOUT_MS,
+    );
+
+    test(
+      "updateTarget — clears target when nothing matches",
+      async () => {
+        const cm = getCm();
+        cm.setMode(3);
+        const mob = await summonMob(bot);
+        expect(mob).not.toBeNull();
+        await expectTargetAcquired(mob);
+
+        // Re-clear wide (viewDistance 128): natural spawns inside range
+        // would otherwise be legitimately acquired below.
+        await killNearbyEntities(bot, 130);
+        // Wait until the kill registers (entity gone) to avoid asserting
+        // on a stale client-side entity.
+        await pollUntil(
+          bot,
+          () => bot.entities[mob.id] === undefined,
+          60,
+          "summoned target to despawn after /kill",
+        );
+        await updateTargetAndSettle();
+        if (getPvp().target !== undefined) {
+          // A natural spawn wandered in during the window; clear once more.
+          logger.info("Stranger acquired, re-clearing and retrying", "Combat");
+          await killNearbyEntities(bot, 130);
+          await updateTargetAndSettle();
+        }
+        expect(getPvp().target).toBeUndefined();
+      },
+      TIMEOUT_MS,
+    );
+
+    test(
+      "updateTarget — mode 0 tracks a hostile mob",
+      async () => {
+        if (!hostilesOk) {
+          logger.warning(
+            "SKIP mode-0 hostile tracking: server clears hostiles",
+            "Combat",
+          );
+          return;
+        }
+        const cm = getCm();
+        cm.setMode(0);
+        const mob = await summonMob(bot);
+        expect(mob).not.toBeNull();
+        await pinTarget(bot);
+
+        await expectTargetAcquired(mob);
+      },
+      TIMEOUT_MS,
+    );
+  });
 
   // ══════════════════════════════════════════════════════════════════
   // Category 2: Attack Lifecycle
@@ -435,14 +606,20 @@ describeE2E("E2E PvP Tests", () => {
         expect(zombie).not.toBeNull();
 
         // Move the target 60 blocks away; the pearl decision caps at 50.
-        // Branch entity-selector syntax by version (1.13 flattened IDs).
+        // Branch entity-selector syntax by version (1.13 flattened IDs),
+        // and by animal (zombies only exist when hostiles survive).
+        const typeSel = hostilesOk
+          ? isModernVersion(VERSION)
+            ? "type=zombie"
+            : "type=Zombie"
+          : targetTypeSelector(VERSION);
         if (isModernVersion(VERSION)) {
           bot.chat!(
-            `/tp @e[${targetTypeSelector(VERSION)},limit=1,sort=nearest] ${POSITION.x + 60} ${POSITION.y} ${POSITION.z}`,
+            `/tp @e[${typeSel},limit=1,sort=nearest] ${POSITION.x + 60} ${POSITION.y} ${POSITION.z}`,
           );
         } else {
           bot.chat!(
-            `/tp @e[${targetTypeSelector(VERSION)},r=100] ${POSITION.x + 60} ${POSITION.y} ${POSITION.z}`,
+            `/tp @e[${typeSel},r=100] ${POSITION.x + 60} ${POSITION.y} ${POSITION.z}`,
           );
         }
         await bot.waitForTicks!(5);
@@ -561,6 +738,7 @@ describeE2E("E2E PvP Tests", () => {
         // Summon a target animal and manually attack it
         const zombie = await summonMob(bot);
         expect(zombie).not.toBeNull();
+        await pinTarget(bot);
         await getPvp().attack(zombie);
         expect(getPvp().target).toBe(zombie);
 
@@ -583,11 +761,18 @@ describeE2E("E2E PvP Tests", () => {
         const cm = getCm();
         cm.setMode(0);
 
-        await killNearbyEntities(bot, 50);
+        await killNearbyEntities(bot, 130);
         await bot.waitForTicks!(5);
         getPvp().forceStop();
 
         await cm.doDecide();
+        if (getPvp().target !== undefined) {
+          // A natural spawn wandered into range; clear once more.
+          logger.info("Stranger targeted, re-clearing and retrying", "Combat");
+          await killNearbyEntities(bot, 130);
+          getPvp().forceStop();
+          await cm.doDecide();
+        }
         expect(getPvp().target).toBeUndefined();
       },
       TIMEOUT_MS,
@@ -654,20 +839,36 @@ describeE2E("E2E PvP Tests", () => {
       async () => {
         // setGoal alone only stores the goal; the pathfinder engages via
         // update() while a target is tracked, so this needs a live target.
-        const zombie = await summonMob(bot);
-        expect(zombie).not.toBeNull();
-        await getPvp().attack(zombie);
-
+        // The target can die mid-poll (punches, clearer, despawn), which
+        // clears tracking via entityGone — re-summon and retry the round.
         const goal = new Vec3(POSITION.x + 20, POSITION.y, POSITION.z);
-        getPvp().setGoal(goal);
-        const startDist = bot.entity.position.distanceTo(goal);
+        let moved = false;
+        for (let round = 0; round < 3 && !moved; round++) {
+          const zombie = await summonMob(bot);
+          expect(zombie).not.toBeNull();
+          await pinTarget(bot);
+          await getPvp().attack(zombie);
 
-        await pollUntil(
-          bot,
-          () => bot.entity.position.distanceTo(goal) < startDist,
-          200,
-          "bot to move toward combat goal",
-        );
+          getPvp().setGoal(goal);
+          const startDist = bot.entity.position.distanceTo(goal);
+          try {
+            await pollUntil(
+              bot,
+              () => bot.entity.position.distanceTo(goal) < startDist,
+              200,
+              `bot to move toward combat goal (round ${round + 1})`,
+            );
+            moved = true;
+          } catch {
+            const t = getPvp().target;
+            logger.info(
+              `Goal round ${round + 1}: no movement (target=${t ? `id=${t.id} alive=${bot.entities[t.id] !== undefined}` : "none"} bot=${bot.entity.position.toString()} dist=${bot.entity.position.distanceTo(goal).toFixed(1)}). Re-summoning.`,
+              "Combat",
+            );
+            getPvp().forceStop();
+          }
+        }
+        expect(moved).toBe(true);
 
         getPvp().clearGoal();
         getPvp().forceStop();

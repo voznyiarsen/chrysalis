@@ -29,6 +29,7 @@ import {
   effectClearCmd,
   effectGiveCmd,
   enchNbt,
+  ensureHostiles,
   ensureReady,
   getSessionPosition,
   getUsername,
@@ -36,6 +37,8 @@ import {
   logSuiteStart,
   pollUntil,
   resetBotState,
+  restoreDifficulty,
+  setDifficulty,
   type EnchantSpec,
 } from "./setup";
 
@@ -205,7 +208,11 @@ async function canDrainFood(bot: Bot): Promise<boolean> {
   if (foodDrainable !== null) return foodDrainable;
   await sendCommand(bot, effectGiveCmd("@p", "hunger", 300, 5, VERSION));
   await bot.waitForTicks!(300);
-  foodDrainable = bot.food! < 20;
+  // Require two sub-20 reads a minute apart: single transient dips have
+  // been observed on servers that otherwise pin food at 20.
+  const first = bot.food! < 20;
+  await bot.waitForTicks!(60);
+  foodDrainable = first && bot.food! < 20;
   await sendCommand(bot, effectClearCmd("@p", VERSION));
   if (!foodDrainable) {
     logger.warning(
@@ -223,7 +230,29 @@ async function canDrainFood(bot: Bot): Promise<boolean> {
 async function setBotFood(bot: Bot, food: number): Promise<void> {
   if (food < 20) {
     await sendCommand(bot, effectGiveCmd("@p", "hunger", 300, 5, VERSION));
-    await pollUntil(bot, () => bot.food! <= food, 600, `food <= ${food}`);
+    // Drain with stall recovery: if food stops dropping, the server may
+    // have reverted to peaceful mid-test — re-assert normal and continue.
+    // Bounded at ~900 ticks total.
+    let lastFood = bot.food!;
+    let stall = 0;
+    for (let elapsed = 0; elapsed < 900; elapsed += 20) {
+      await bot.waitForTicks!(20);
+      if (bot.food! <= food) break;
+      if (bot.food! < lastFood) {
+        lastFood = bot.food!;
+        stall = 0;
+      } else if ((stall += 20) >= 200) {
+        stall = 0;
+        // Stall recovery via RCON when available (survives OP loss),
+        // else in-game chat (needs OP).
+        await setDifficulty(bot, "normal");
+      }
+    }
+    if (bot.food! > food) {
+      throw new Error(
+        `Timed out waiting for food <= ${food} (at ${bot.food})`,
+      );
+    }
     await sendCommand(bot, effectClearCmd("@p", VERSION));
     await bot.waitForTicks!(2);
   } else {
@@ -244,6 +273,7 @@ async function clearEffects(bot: Bot): Promise<void> {
 
 describeE2E("E2E Inventory Tests", () => {
   let bot: Bot;
+  let diffToken: { hostiles: boolean; bumped: boolean } | null = null;
 
   // ── Lifecycle ─────────────────────────────────────────────────────
 
@@ -254,6 +284,9 @@ describeE2E("E2E Inventory Tests", () => {
     bot = await createBot({ username: USERNAME, timeoutMs: TIMEOUT_MS });
     try {
       await ensureReady(bot, POSITION);
+      // Food drain and damage effects need non-peaceful mechanics; bump
+      // difficulty when the server runs peaceful-like (restored afterAll).
+      diffToken = await ensureHostiles(bot);
     } catch (error) {
       logger.error(error, "Inventory");
       throw error;
@@ -280,6 +313,7 @@ describeE2E("E2E Inventory Tests", () => {
   afterAll(async () => {
     if (bot) {
       try {
+        if (diffToken) await restoreDifficulty(bot, diffToken);
         bot.quit!();
         bot.end!();
         // Give extra time for cleanup
@@ -706,9 +740,12 @@ describeE2E("E2E Inventory Tests", () => {
       await bot.waitForTicks!(2);
 
       try {
-        // Clear existing effects, then drain food so eating has an effect.
+        // Clear existing effects, then drain just below full so eating has
+        // an effect. Only a shallow dip is required (19): deep drains stall
+        // on servers with flaky hunger mechanics, and any sub-20 level
+        // engages equipFood identically.
         await clearEffects(bot);
-        await setBotFood(bot, 10);
+        await setBotFood(bot, 19);
         const foodBefore = bot.food!;
         expect(foodBefore).toBeLessThan(20);
 

@@ -106,8 +106,8 @@ DEBUG-level logs are suppressed by default. Toggle at runtime via the `debug` co
 ## Testing
 
 - **Unit tests**: `tests/unit/` — use mocked bot instances, no server required.
-- **E2E tests**: `tests/e2e/` — connect to a real Minecraft server; automatically skipped when `E2E_HOST` is not set. Require operator permission: each suite fails fast in `beforeAll` telling you which `/op <username>` to run on the server console. Shared lifecycle lives in `tests/e2e/setup.ts` (session usernames via `E2E_SUFFIX`, version branching for 1.12.2 vs 1.13+ command syntax).
-- **Run**: `npm test` (all), `npm test -- tests/unit` (unit only), `npm run test:e2e` (e2e only). For unit-only locally despite `.env`: `E2E_HOST= npm test -- tests/unit`.
+- **E2E tests**: `tests/e2e/` — connect to a real Minecraft server; automatically skipped when `E2E_HOST` is not set. Require operator permission: grant via `npm run e2e:op` (RCON when `RCON_PASS` is set, else Pupa relay) before running. Shared lifecycle lives in `tests/e2e/setup.ts` (session usernames via `E2E_SUFFIX`, version branching for 1.12.2 vs 1.13+ command syntax, per-suite difficulty management: suites needing hostiles/food-drain set `/difficulty normal` in `beforeAll` and restore peaceful in `afterAll`).
+- **Run**: `npm test` (all), `npm test -- tests/unit` (unit only), `npm run test:e2e` (e2e only, serialized with `--runInBand` since difficulty is server-global). For unit-only locally despite `.env`: `E2E_HOST= npm test -- tests/unit`.
 - **Concurrent sessions**: set a distinct `E2E_SUFFIX` per run (usernames become `inv|jmp|prl|pvp_<suffix>`, positions offset per session). Each session's bot must be OPed.
 - **Headless mode**: `npm start -- --headless --bot "command"` for automated testing without a TUI.
 

@@ -76,6 +76,16 @@ export class PVPManager {
   viewDistance: number = Constants.COMBAT.VIEW_DISTANCE;
   movements: Movements;
   goal: Vec3 | null = null;
+  /**
+   * Key of the last combat goal handed to the pathfinder. checkRange runs
+   * every tick: re-issuing setGoal unconditionally resets pathfinding state
+   * (verified live: per-tick setGoal freezes the bot, single setGoal walks
+   * fine), so the goal is issued once per key and re-issued only when the
+   * pathfinder holds no goal (external stop, arrival, or failed path).
+   * NOTE: do NOT gate on isMoving() — it reads false while a path is still
+   * being computed, which re-triggers the same storm.
+   */
+  private _pfGoalKey: string | null = null;
 
   constructor(bot: Bot) {
     this.bot = bot;
@@ -92,6 +102,9 @@ export class PVPManager {
     this.target = target;
     this.timeToNextAttack = 0;
     if (!this.target) return;
+    // Following a live entity now; the static combat goal (if any) no
+    // longer describes the pathfinder state.
+    this._pfGoalKey = null;
     const pf = this.bot.pathfinder;
     if (pf) {
       pf.setMovements(this.movements);
@@ -104,6 +117,7 @@ export class PVPManager {
     if (this.target == null) return;
     this.target = undefined;
     this.goal = null;
+    this._pfGoalKey = null;
     this._clearExplosionTimeout();
     this._clearShieldReequipTimeout();
     const pathfinder = this.bot.pathfinder;
@@ -129,6 +143,7 @@ export class PVPManager {
     if (this.target == null) return;
     this.target = undefined;
     this.goal = null;
+    this._pfGoalKey = null;
     this._clearExplosionTimeout();
     this._clearShieldReequipTimeout();
     const pathfinder = this.bot.pathfinder;
@@ -145,10 +160,13 @@ export class PVPManager {
 
   setGoal(pos: Vec3 | null): void {
     this.goal = pos;
+    // Invalidate so checkRange issues the new goal even mid-path.
+    this._pfGoalKey = null;
   }
 
   clearGoal(): void {
     this.goal = null;
+    this._pfGoalKey = null;
     const pf = this.bot.pathfinder;
     if (pf) pf.setGoal(null);
   }
@@ -181,11 +199,27 @@ export class PVPManager {
       const pf = this.bot.pathfinder;
       if (distToGoal > this.attackRange + 1) {
         if (pf) {
-          pf.setMovements(this.movements);
-          pf.setGoal(new goals.GoalNearXZ(this.goal.x, this.goal.z, 1));
+          const key = `${Math.round(this.goal.x)}:${Math.round(this.goal.z)}`;
+          // setGoal/setMovements both reset path state AND clear control
+          // states, so re-issuing them every tick freezes the bot mid-path.
+          // Issue once per goal; re-issue only when the pathfinder holds no
+          // goal (external stop, arrival, failed path) or movements changed.
+          if (
+            this._pfGoalKey !== key ||
+            !pf.goal ||
+            pf.movements !== this.movements
+          ) {
+            pf.setMovements(this.movements);
+            pf.setGoal(
+              new goals.GoalNearXZ(this.goal.x, this.goal.z, 1),
+              true,
+            );
+            this._pfGoalKey = key;
+          }
         }
       } else if (inRange) {
         if (pf) pf.setGoal(null);
+        this._pfGoalKey = null;
       }
     }
   }

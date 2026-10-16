@@ -10,6 +10,51 @@
 import mineflayer, { Bot } from "mineflayer";
 import { pathfinder } from "mineflayer-pathfinder";
 import { Vec3 } from "vec3";
+import { createRequire } from "node:module";
+
+type RconFn = (
+  host: string,
+  port: number,
+  pass: string,
+  cmds: string[],
+) => Promise<string[]>;
+
+/**
+ * Eagerly load the plain-JS RCON client at module load: lazy require() from
+ * a dangling async continuation can fire after Jest tears the environment
+ * down ("require after teardown"), failing the whole suite file.
+ */
+let rconCommands: RconFn | null = null;
+try {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const nodeRequire = createRequire(__filename);
+  rconCommands =
+    (nodeRequire("../../scripts/rcon") as { rconCommands: RconFn })
+      .rconCommands ?? null;
+} catch {
+  rconCommands = null;
+}
+
+/** RCON command runner, or null when unavailable (logs the reason once). */
+async function rcon(
+  cmds: string[],
+): Promise<string[] | null> {
+  if (!process.env.RCON_PASS || !rconCommands) return null;
+  try {
+    return await rconCommands(
+      process.env.RCON_HOST || process.env.E2E_HOST || "localhost",
+      parseInt(process.env.RCON_PORT || "25575", 10),
+      process.env.RCON_PASS,
+      cmds,
+    );
+  } catch (error) {
+    logger.warning(
+      `E2E: RCON failed (${(error as Error).message})`,
+      "Command",
+    );
+    return null;
+  }
+}
 import { PVPManager } from "../../src/pvp";
 import { attachInventory } from "../../src/inventory";
 import { attachCombat } from "../../src/pvp";
@@ -303,21 +348,134 @@ export async function pollUntil(
  * every E2E suite requires OP for `/give`, `/tp`, `/effect`, etc.
  */
 export async function ensureOp(bot: Bot, ticks: number = 40): Promise<void> {
-  bot.chat!("/gamemode creative");
-  try {
-    await pollUntil(
-      bot,
-      () => bot.game.gameMode === "creative",
-      ticks,
-      "creative gamemode (OP check)",
-    );
-  } catch {
-    throw new Error(
-      `E2E bot '${bot.username}' lacks operator permission: /gamemode creative had no effect. ` +
-        `Run \`/op ${bot.username}\` on the server console and re-run. ` +
-        `Note: RCON (nibble.internal:25575) refused connection, so OP must be granted via console.`,
-    );
+  // Proactive grant: server ops are revoked at unpredictable times, so
+  // (re-)grant via RCON up front when available. Verification below still
+  // proves the final state; this just makes the common case one round.
+  if (process.env.RCON_PASS) {
+    logger.info(`E2E: ensuring OP for '${bot.username}' via RCON`, "Command");
+    await rcon([`op ${bot.username}`]);
   }
+  // Two rounds: verify, and (if RCON can re-grant) heal-then-verify.
+  for (let round = 0; round < 2; round++) {
+    bot.chat!("/gamemode creative");
+    try {
+      await pollUntil(
+        bot,
+        () => bot.game.gameMode === "creative",
+        ticks,
+        "creative gamemode (OP check)",
+      );
+    } catch {
+      // Fall through to the OP proof / heal below.
+    }
+    // Prove OP with an OP-only action: gameMode alone is insufficient —
+    // a deopped bot can sit in creative while /give silently fails.
+    bot.chat!(`/give ${bot.username} dirt`);
+    try {
+      await pollUntil(
+        bot,
+        () => bot.inventoryManager.getItemCount("dirt") >= 1,
+        40,
+        "dirt after /give (OP proof)",
+      );
+      // Cleanup the probe item; inventories are empty at reset points.
+      await bot.inventoryManager.clearInventory();
+      return;
+    } catch {
+      // Fall through to the OP heal below.
+    }
+    // Server ops are unstable (observed revoked mid-run). With RCON_PASS
+    // set, re-grant OP to self and re-verify instead of failing the suite.
+    if (!process.env.RCON_PASS) break;
+    logger.info(
+      `E2E: OP lost for '${bot.username}', re-granting via RCON`,
+      "Command",
+    );
+    await rcon([`op ${bot.username}`]);
+  }
+  throw new Error(
+    `E2E bot '${bot.username}' lacks operator permission: /give had no effect. ` +
+      `Grant OP first: \`npm run e2e:op\` (with RCON_PASS set) or ` +
+      `\`/op ${bot.username}\` on the server console, then re-run.`,
+  );
+}
+
+/**
+ * Set server difficulty, preferring RCON (works even when the bot's OP was
+ * revoked mid-run) with in-game chat fallback. Never throws for the chat
+ * path — callers poll functionally afterwards.
+ */
+export async function setDifficulty(
+  bot: Bot,
+  level: "normal" | "peaceful",
+): Promise<void> {
+  if (process.env.RCON_PASS) {
+    try {
+      await rcon([`difficulty ${level}`]);
+      logger.info(`E2E: difficulty ${level} via RCON`, "Command");
+      return;
+    } catch (error) {
+      logger.warning(
+        `E2E: RCON difficulty ${level} failed (${(error as Error).message}), falling back to chat`,
+        "Command",
+      );
+    }
+  }
+  bot.chat!(`/difficulty ${level}`);
+  await bot.waitForTicks!(10);
+}
+
+/**
+ * Whether hostile mobs survive on this server. Peaceful-like servers clear
+ * hostiles on spawn (1.12.2 has no readable difficulty command, so probe
+ * functionally: summon a zombie and check it is still alive after 40 ticks).
+ */
+export async function probeHostiles(bot: Bot): Promise<boolean> {
+  const before = new Set(Object.keys(bot.entities).map((k) => parseInt(k, 10)));
+  bot.chat!(`/${summonZombieCmd()}`);
+  for (let i = 0; i < 40; i++) {
+    await bot.waitForTicks!(1);
+    for (const [idStr, entity] of Object.entries(bot.entities)) {
+      if (before.has(parseInt(idStr, 10))) continue;
+      const e = entity as any;
+      if (e.position && e.type !== "player") return true;
+    }
+  }
+  return false;
+}
+
+export interface DifficultyToken {
+  /** Hostiles survive (either natively or after our bump). */
+  hostiles: boolean;
+  /** We changed the difficulty and the caller should restore it. */
+  bumped: boolean;
+}
+
+/**
+ * Ensure hostiles survive for combat E2E, bumping difficulty to normal when
+ * the server runs peaceful-like. Per project policy the suite sets the
+ * difficulty its tests require; call restoreDifficulty in afterAll.
+ */
+export async function ensureHostiles(bot: Bot): Promise<DifficultyToken> {
+  if (await probeHostiles(bot)) return { hostiles: true, bumped: false };
+  logger.info("E2E: no hostiles (peaceful-like); setting difficulty normal", "Command");
+  await setDifficulty(bot, "normal");
+  await bot.waitForTicks!(20);
+  for (let round = 0; round < 3; round++) {
+    if (await probeHostiles(bot)) return { hostiles: true, bumped: true };
+  }
+  logger.warning("E2E: hostiles still cleared; falling back to passive targets", "Command");
+  return { hostiles: false, bumped: true };
+}
+
+/** Restore peaceful difficulty if ensureHostiles bumped it. */
+export async function restoreDifficulty(
+  bot: Bot,
+  token: DifficultyToken,
+): Promise<void> {
+  if (!token.bumped) return;
+  logger.info("E2E: restoring difficulty peaceful", "Command");
+  await setDifficulty(bot, "peaceful");
 }
 
 /**
@@ -339,7 +497,17 @@ export async function resetBotState(bot: Bot): Promise<void> {
   bot.clearControlStates();
   bot.pathfinder?.stop();
   bot.pvp?.forceStop();
-  await bot.inventoryManager.setGamemode(1);
+  // ensureOp (not bare setGamemode): server ops are revoked mid-run, and
+  // this re-grants via RCON when RCON_PASS is set. Never throws here —
+  // beforeAll already proved OP once; a later loss surfaces per-test.
+  try {
+    await ensureOp(bot, 40);
+  } catch (error) {
+    logger.warning(
+      `resetBotState: ${(error as Error).message}`,
+      "Command",
+    );
+  }
   await bot.waitForTicks!(2);
 }
 
