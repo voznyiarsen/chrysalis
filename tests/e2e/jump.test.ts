@@ -25,6 +25,7 @@ import {
   getSessionPosition,
   getSessionSuffix,
   getUsername,
+  isBotAlive,
   logSuiteStart,
   requireRcon,
   pollUntil,
@@ -57,15 +58,23 @@ describeE2E("E2E Jump Tests", () => {
   // Set overall suite timeout to 5 minutes (300 seconds)
   jest.setTimeout(TIMEOUT_MS * 5);
 
+  /**
+   * Full suite setup (Phases 1+2). Also used by beforeEach when the
+   * previous bot died (e.g. server restart mid-suite).
+   */
+  async function setupSuite(): Promise<void> {
+    // Phase 1: bot setup, pure client-side (connect + attach managers).
+    bot = await createBot({ username: USERNAME, timeoutMs: TIMEOUT_MS });
+    // Phase 2: environment setup via RCON (position + creative).
+    await ensureReady(bot, POSITION);
+  }
+
   beforeAll(async () => {
     // Phase 0: RCON channel (fail fast — every setup command needs it).
     requireRcon();
     logSuiteStart("E2E Jump Tests", USERNAME);
-    // Phase 1: bot setup, pure client-side (connect + attach managers).
-    bot = await createBot({ username: USERNAME, timeoutMs: TIMEOUT_MS });
     try {
-      // Phase 2: environment setup via RCON (position + creative).
-      await ensureReady(bot, POSITION);
+      await setupSuite();
     } catch (error) {
       logger.error(error, "Movement");
       throw error;
@@ -73,6 +82,17 @@ describeE2E("E2E Jump Tests", () => {
   }, TIMEOUT_MS);
 
   beforeEach(async () => {
+    if (!isBotAlive(bot)) {
+      logger.warning(
+        "Bot connection lost (likely server restart); rebuilding bot + environment",
+        "Movement",
+      );
+      try {
+        await setupSuite();
+      } catch (error) {
+        logger.error(error, "Movement");
+      }
+    }
     // Run before each test
     if (bot && bot.entity) {
       try {

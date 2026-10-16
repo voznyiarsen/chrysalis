@@ -130,8 +130,9 @@ export async function serverCommand(bot: Bot, cmd: string): Promise<string> {
     if (out) {
       const response = out[0] ?? "";
       // Fail fast on RCON error responses instead of polling to timeout:
-      // a targetless /gamemode or bad selector reports here, not in-game.
-      if (/unknown command|usage:|incorrect|error|failed|invalid|could not|no entity|not found/i.test(response)) {
+      // a targetless /gamemode, bad selector, or unloaded-chunk summon
+      // reports here, not in-game.
+      if (/unknown command|usage:|incorrect|error|failed|invalid|could not|cannot summon|no entity|not found/i.test(response)) {
         throw new Error(`E2E RCON '${clean}' rejected: ${response}`);
       }
       return response;
@@ -278,6 +279,7 @@ export async function summonNear(bot: Bot, name: string): Promise<any> {
   const before = new Set(Object.keys(bot.entities).map((k) => parseInt(k, 10)));
   const p = bot.entity.position;
   await serverCommand(bot, summonCmd(name, p.x, p.y + 1, p.z));
+  const nameRe = new RegExp(name, "i");
   let seen = false;
   for (let i = 0; i < 60; i++) {
     await bot.waitForTicks!(1);
@@ -285,7 +287,7 @@ export async function summonNear(bot: Bot, name: string): Promise<any> {
       const id = parseInt(idStr, 10);
       if (before.has(id)) continue;
       const e = entity as any;
-      if (e.position && e.type !== "player") {
+      if (e.position && e.type !== "player" && nameRe.test(e.name ?? "")) {
         seen = true;
         break;
       }
@@ -294,8 +296,8 @@ export async function summonNear(bot: Bot, name: string): Promise<any> {
   }
   if (!seen) return null;
   // Settle a few ticks so same-window natural spawns also arrive, then pick
-  // the closest: our summon lands at the bot's feet while natural spawns
-  // occur 24+ blocks out.
+  // the closest matching entity: our summon lands at the bot's feet while
+  // natural spawns occur 24+ blocks out.
   await bot.waitForTicks!(3);
   let best: any = null;
   let bestDist = Number.MAX_VALUE;
@@ -304,6 +306,7 @@ export async function summonNear(bot: Bot, name: string): Promise<any> {
     if (before.has(id)) continue;
     const e = entity as any;
     if (!e.position || e.type === "player") continue;
+    if (!nameRe.test(e.name ?? "")) continue;
     const d = e.position.distanceTo(bot.entity.position);
     if (d < bestDist) {
       bestDist = d;
@@ -485,7 +488,19 @@ export async function createBot(opts: CreateBotOpts): Promise<Bot> {
 
   logger.setDebugMode(true);
 
+  // Liveness flag for reconnect-resume: a server restart mid-suite kills
+  // the socket without failing the worker. beforeEach checks isBotAlive
+  // and rebuilds the bot + environment when set.
+  bot.once("end", () => {
+    (bot as any)._e2eDead = true;
+  });
+
   return bot;
+}
+
+/** False when the bot's connection died (e.g. server restart mid-suite). */
+export function isBotAlive(bot: Bot | undefined): bot is Bot {
+  return !!bot && !(bot as any)._e2eDead && bot.entity !== undefined;
 }
 
 /**
@@ -543,7 +558,9 @@ export async function sendCommandVerified(
 /**
  * Whether hostile mobs survive on this server. Peaceful-like servers clear
  * hostiles on spawn (1.12.2 has no readable difficulty command, so probe
- * functionally: summon a zombie and check it is still alive after 40 ticks).
+ * functionally: summon a zombie and check a zombie is still alive after 40
+ * ticks). Must match by NAME: accepting any new entity false-positives on
+ * wandering pigs/items, which silently disables every zombie test.
  */
 export async function probeHostiles(bot: Bot): Promise<boolean> {
   const before = new Set(Object.keys(bot.entities).map((k) => parseInt(k, 10)));
@@ -554,7 +571,7 @@ export async function probeHostiles(bot: Bot): Promise<boolean> {
     for (const [idStr, entity] of Object.entries(bot.entities)) {
       if (before.has(parseInt(idStr, 10))) continue;
       const e = entity as any;
-      if (e.position && e.type !== "player") return true;
+      if (e.position && /zombie/i.test(e.name ?? "")) return true;
     }
   }
   return false;
@@ -705,8 +722,10 @@ export async function resetBotState(bot: Bot): Promise<void> {
 }
 
 /**
- * Teleport via RCON with arrival verification. RCON executes synchronously
- * server-side, so a missing arrival is a real anomaly — fail loudly.
+ * Teleport via RCON with arrival verification. Client physics is frozen
+ * around the teleport: mineflayer keeps simulating locally, and a position
+ * packet sent from the stale prediction trips the server's "moved too
+ * quickly" check, rubber-banding the bot back (arrival poll then fails).
  */
 export async function tpBot(
   bot: Bot,
@@ -715,13 +734,18 @@ export async function tpBot(
   z: number,
 ): Promise<void> {
   const target = new Vec3(x, y, z);
-  await serverCommand(bot, `tp ${bot.username} ${x} ${y} ${z}`);
-  await pollUntil(
-    bot,
-    () => bot.entity.position.distanceTo(target) < 1.0,
-    90,
-    `teleport to ${x} ${y} ${z}`,
-  );
+  (bot as any).physicsEnabled = false;
+  try {
+    await serverCommand(bot, `tp ${bot.username} ${x} ${y} ${z}`);
+    await pollUntil(
+      bot,
+      () => bot.entity.position.distanceTo(target) < 1.0,
+      90,
+      `teleport to ${x} ${y} ${z}`,
+    );
+  } finally {
+    (bot as any).physicsEnabled = true;
+  }
 }
 
 /**
