@@ -22,6 +22,7 @@ import mineflayer, { Bot } from "mineflayer";
 import { pathfinder } from "mineflayer-pathfinder";
 import { Vec3 } from "vec3";
 import { createRequire } from "node:module";
+import * as dns from "node:dns";
 
 type RconFn = (
   host: string,
@@ -46,14 +47,26 @@ try {
   rconCommands = null;
 }
 
+let rconHostCache: string | null = null;
+
 /** RCON command runner, or null when unavailable (logs the reason once). */
-async function rcon(
-  cmds: string[],
-): Promise<string[] | null> {
+async function rcon(cmds: string[]): Promise<string[] | null> {
   if (!process.env.RCON_PASS || !rconCommands) return null;
+  // Cache the resolved IP: local DNS has been observed flapping mid-run
+  // (ENOTFOUND), which turns every per-call lookup into a failure.
+  if (!rconHostCache) {
+    try {
+      const r = await dns.promises.lookup(
+        process.env.RCON_HOST || process.env.E2E_HOST || "localhost",
+      );
+      rconHostCache = r.address;
+    } catch {
+      return null;
+    }
+  }
   try {
     return await rconCommands(
-      process.env.RCON_HOST || process.env.E2E_HOST || "localhost",
+      rconHostCache,
       parseInt(process.env.RCON_PORT || "25575", 10),
       process.env.RCON_PASS,
       cmds,
