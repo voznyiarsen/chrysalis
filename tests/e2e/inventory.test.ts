@@ -31,6 +31,7 @@ import {
   effectGiveCmd,
   enchNbt,
   ensureHostiles,
+  ensureTestEnvironment,
   ensureOp,
   ensureReady,
   getSessionPosition,
@@ -41,6 +42,7 @@ import {
   pollUntil,
   resetBotState,
   restoreDifficulty,
+  restoreTestEnvironment,
   sendCommandVerified,
   serverCommand,
   setDifficulty,
@@ -357,6 +359,11 @@ async function sendEffect(
 describeE2E("E2E Inventory Tests", () => {
   let bot: Bot;
   let diffToken: { hostiles: boolean; bumped: boolean } | null = null;
+  let envToken: {
+    difficultyBumped: boolean;
+    timeFrozen: boolean;
+    hostiles: boolean;
+  } | null = null;
 
   // ── Lifecycle ─────────────────────────────────────────────────────
 
@@ -367,9 +374,13 @@ describeE2E("E2E Inventory Tests", () => {
     bot = await createBot({ username: USERNAME, timeoutMs: TIMEOUT_MS });
     try {
       await ensureReady(bot, POSITION);
-      // Food drain and damage effects need non-peaceful mechanics; bump
-      // difficulty when the server runs peaceful-like (restored afterAll).
-      diffToken = await ensureHostiles(bot);
+      // Food drain needs non-peaceful mechanics: manage the environment
+      // authoritatively via RCON (restored afterAll). Without RCON the
+      // food tests fall back to the canDrainFood skip gate below.
+      envToken = await ensureTestEnvironment(bot, { difficulty: "normal" });
+      if (!envToken.hostiles && !process.env.RCON_PASS) {
+        diffToken = await ensureHostiles(bot);
+      }
     } catch (error) {
       logger.error(error, "Inventory");
       throw error;
@@ -396,7 +407,8 @@ describeE2E("E2E Inventory Tests", () => {
   afterAll(async () => {
     if (bot) {
       try {
-        if (diffToken) await restoreDifficulty(bot, diffToken);
+        if (envToken) await restoreTestEnvironment(bot, envToken);
+        else if (diffToken) await restoreDifficulty(bot, diffToken);
         bot.quit!();
         bot.end!();
         // Wait for the socket to actually close so no bot activity leaks
@@ -826,9 +838,9 @@ describeE2E("E2E Inventory Tests", () => {
     });
 
     test("equipFood equips and eats food in survival", async () => {
-      // Eating needs food < 20, which peaceful-like servers forbid (food
-      // pinned at 20, hunger effect inert). Skip loudly there.
-      if (!(await canDrainFood(bot))) {
+      // Eating needs food < 20. The suite manages difficulty via RCON,
+      // so draining must work; without RCON fall back to the skip gate.
+      if (!process.env.RCON_PASS && !(await canDrainFood(bot))) {
         logger.warning(
           "SKIP equipFood-eats: server pins food at 20",
           "Inventory",

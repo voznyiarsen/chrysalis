@@ -96,7 +96,15 @@ export async function serverCommand(bot: Bot, cmd: string): Promise<string> {
   const clean = cmd.startsWith("/") ? cmd.slice(1) : cmd;
   if (process.env.RCON_PASS && rconCommands) {
     const out = await rcon([clean]);
-    if (out) return out[0] ?? "";
+    if (out) {
+      const response = out[0] ?? "";
+      // Fail fast on RCON error responses instead of polling to timeout:
+      // a targetless /gamemode or bad selector reports here, not in-game.
+      if (/unknown command|usage:|incorrect|error|failed|invalid|could not|no entity|not found/i.test(response)) {
+        throw new Error(`E2E RCON '${clean}' rejected: ${response}`);
+      }
+      return response;
+    }
     // RCON failed despite configured password; fall through to chat.
   } else if (!rconUnavailableWarned) {
     rconUnavailableWarned = true;
@@ -436,7 +444,10 @@ export async function ensureOp(bot: Bot, ticks: number = 40): Promise<void> {
     if (round > 0) {
       await new Promise((resolve) => setTimeout(resolve, 20000));
     }
-    await serverCommand(bot, "gamemode creative");
+    // NOTE: explicit username is required — a targetless /gamemode has no
+    // meaning from the RCON console and fails (this broke every fresh user
+    // while saved-creative veterans passed trivially).
+    await serverCommand(bot, `gamemode creative ${bot.username}`);
     try {
       await pollUntil(
         bot,
@@ -565,6 +576,113 @@ export async function restoreDifficulty(
   if (!token.bumped) return;
   logger.info("E2E: restoring difficulty peaceful", "Command");
   await setDifficulty(bot, "peaceful");
+}
+
+export interface EnvToken {
+  /** Difficulty was bumped (caller should restore). */
+  difficultyBumped: boolean;
+  /** Daylight cycle was frozen (caller should unfreeze). */
+  timeFrozen: boolean;
+  /** Hostiles survive (functional probe). */
+  hostiles: boolean;
+}
+
+async function rconOrThrow(cmds: string[]): Promise<string[]> {
+  const out = await rcon(cmds);
+  if (!out) {
+    throw new Error(
+      "E2E environment setup requires RCON (RCON_PASS unset or unreachable)",
+    );
+  }
+  return out;
+}
+
+/**
+ * Authoritative E2E environment setup via RCON (server-console level,
+ * immune to player OP flaps):
+ * - difficulty normal (unless already survivable), verified by zombie probe
+ * - optionally frozen night (no zombie burn, deterministic mob behavior)
+ *
+ * Without RCON_PASS, degrades gracefully: probes current state and returns
+ * it, leaving adaptive fallbacks (pigs, skips) to the caller. Call
+ * restoreTestEnvironment in afterAll.
+ */
+export async function ensureTestEnvironment(
+  bot: Bot,
+  opts: { difficulty?: "normal"; freezeNight?: boolean } = {},
+): Promise<EnvToken> {
+  const token: EnvToken = {
+    difficultyBumped: false,
+    timeFrozen: false,
+    hostiles: false,
+  };
+  if (!process.env.RCON_PASS || !rconCommands) {
+    logger.warning(
+      "E2E: no RCON, probing environment instead of managing it",
+      "Command",
+    );
+    token.hostiles = await probeHostiles(bot);
+    return token;
+  }
+  if (opts.difficulty === "normal") {
+    if (!(await probeHostiles(bot))) {
+      logger.info("E2E: setting difficulty normal via RCON", "Command");
+      await rconOrThrow(["difficulty normal"]);
+      token.difficultyBumped = true;
+    }
+    for (let round = 0; round < 3; round++) {
+      if (await probeHostiles(bot)) {
+        token.hostiles = true;
+        break;
+      }
+    }
+    if (!token.hostiles) {
+      logger.warning(
+        "E2E: hostiles still cleared after difficulty normal",
+        "Command",
+      );
+    }
+  } else {
+    token.hostiles = await probeHostiles(bot);
+  }
+  if (opts.freezeNight) {
+    logger.info("E2E: freezing night via RCON", "Command");
+    await rconOrThrow(["time set 18000", "gamerule doDaylightCycle false"]);
+    await pollUntil(
+      bot,
+      () => bot.time.timeOfDay > 17500 && bot.time.timeOfDay < 18500,
+      40,
+      "night to hold after freeze",
+    );
+    token.timeFrozen = true;
+  }
+  return token;
+}
+
+/** Restore difficulty/time changes made by ensureTestEnvironment. */
+export async function restoreTestEnvironment(
+  bot: Bot,
+  token: EnvToken,
+): Promise<void> {
+  if (token.timeFrozen) {
+    logger.info("E2E: restoring daylight cycle", "Command");
+    try {
+      await rconOrThrow(["gamerule doDaylightCycle true"]);
+    } catch (error) {
+      logger.warning(`E2E: time restore failed: ${(error as Error).message}`, "Command");
+    }
+  }
+  if (token.difficultyBumped) {
+    logger.info("E2E: restoring difficulty peaceful", "Command");
+    try {
+      await rconOrThrow(["difficulty peaceful"]);
+    } catch (error) {
+      logger.warning(
+        `E2E: difficulty restore failed: ${(error as Error).message}`,
+        "Command",
+      );
+    }
+  }
 }
 
 /**

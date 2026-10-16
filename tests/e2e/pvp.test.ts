@@ -26,6 +26,7 @@ import {
   effectGiveCmd,
   ensureHostiles,
   ensureReady,
+  ensureTestEnvironment,
   e2eVersion,
   getSessionPosition,
   getUsername,
@@ -36,6 +37,7 @@ import {
   pollUntil,
   resetBotState,
   restoreDifficulty,
+  restoreTestEnvironment,
   serverCommand,
   tpBot,
   summonTarget,
@@ -113,6 +115,11 @@ async function killNearbyEntities(
  */
 let hostilesOk = false;
 let diffToken: { hostiles: boolean; bumped: boolean } | null = null;
+let envToken: {
+  difficultyBumped: boolean;
+  timeFrozen: boolean;
+  hostiles: boolean;
+} | null = null;
 async function summonMob(bot: Bot): Promise<any> {
   for (let attempt = 0; attempt < 2; attempt++) {
     const found = hostilesOk ? await summonZombie(bot) : await summonTarget(bot);
@@ -240,8 +247,18 @@ describeE2E("E2E PvP Tests", () => {
     bot = await createBot({ username: USERNAME, timeoutMs: TIMEOUT_MS });
     try {
       await ensureReady(bot, POSITION);
-      diffToken = await ensureHostiles(bot);
-      hostilesOk = diffToken.hostiles;
+      // Authoritative environment: normal difficulty (hostiles survive)
+      // plus frozen night (no zombie burn, deterministic mob behavior).
+      // Falls back to pigs when the environment cannot provide hostiles.
+      envToken = await ensureTestEnvironment(bot, {
+        difficulty: "normal",
+        freezeNight: true,
+      });
+      hostilesOk = envToken.hostiles;
+      if (!hostilesOk) {
+        diffToken = await ensureHostiles(bot);
+        hostilesOk = diffToken.hostiles;
+      }
     } catch (error) {
       logger.error(error, "Combat");
       throw error;
@@ -280,7 +297,8 @@ describeE2E("E2E PvP Tests", () => {
     // Run after all tests
     if (bot) {
       try {
-        if (diffToken) await restoreDifficulty(bot, diffToken);
+        if (envToken) await restoreTestEnvironment(bot, envToken);
+        else if (diffToken) await restoreDifficulty(bot, diffToken);
         bot.quit!();
         bot.end!();
         // Wait for the socket to actually close so no bot activity leaks
