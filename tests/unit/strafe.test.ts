@@ -243,3 +243,95 @@ describe("StrafeController.steerAroundTarget", () => {
     expect(velocity!.y).toBeCloseTo(0.42, 6);
   });
 });
+
+// ── Hazard-aware strafing ────────────────────────────────────────────────
+
+/** Lava/water: full block, damages/moves the bot. */
+const LIQUID = {
+  name: "lava",
+  boundingBox: "block",
+  shapes: [[0, 0, 0, 1, 0.99, 1]],
+};
+/** Cobweb: no collision shape but named "web". */
+const WEB = { name: "web", boundingBox: "empty", shapes: [] };
+const COBWEB = { name: "cobweb", boundingBox: "empty", shapes: [] };
+
+describe("StrafeController.steerAroundTarget (hazards)", () => {
+  test("avoids strafing over a cliff into void", () => {
+    // Ground exists only for x < 3; everything past that is a void drop
+    // (no solid floor within the fallback depth).
+    const world = (pos: Vec3) => {
+      if (pos.y <= 0 && pos.x < 3) return SOLID;
+      return AIR;
+    };
+    const controller = new StrafeController();
+    const target = new Vec3(0.5, 1, 3.5);
+
+    // Force the preferred direction toward +X (the cliff). The lookup in
+    // getStrafeYaw maps direction -1 to a +X heading, so the controller
+    // must reject that step and flip to the supported -X side.
+    controller["_direction"] = -1;
+    const velocity = controller.steerAroundTarget(
+      BOT,
+      target,
+      ZERO,
+      world,
+      false,
+      true,
+    );
+    expect(velocity).not.toBeNull();
+    expect(velocity!.x).toBeLessThan(0); // kept on the safe -X side
+  });
+
+  test("does not commit to a hop toward a lava surface", () => {
+    const world = flatWorld((pos: Vec3) =>
+      pos.x >= 1 && pos.y < 1 ? LIQUID : null,
+    );
+    const controller = new StrafeController();
+    const target = new Vec3(0.5, 1, 3.5);
+
+    // Direction -1 strafes toward +X, straight onto the lava. The controller
+    // must refuse that side and take the supported -X side instead, never
+    // returning a velocity that carries the bot into the lava.
+    controller["_direction"] = -1;
+    const velocity = controller.steerAroundTarget(
+      BOT,
+      target,
+      ZERO,
+      world,
+      false,
+      true,
+    );
+    expect(velocity).not.toBeNull();
+    expect(velocity!.x).toBeLessThan(0); // held back from the lava side
+  });
+
+  test("holds position when both orbit sides are webbed", () => {
+    const world = flatWorld((pos: Vec3) =>
+      pos.x <= -1 && pos.y === 0 ? WEB : pos.x >= 1 && pos.y === 0 ? COBWEB : null,
+    );
+    const controller = new StrafeController();
+    const target = new Vec3(0.5, 1, 3.5);
+
+    controller["_direction"] = 1;
+    const v1 = controller.steerAroundTarget(
+      BOT,
+      target,
+      ZERO,
+      world,
+      false,
+      true,
+    );
+    controller["_direction"] = -1;
+    const v2 = controller.steerAroundTarget(
+      BOT,
+      target,
+      ZERO,
+      world,
+      false,
+      true,
+    );
+    expect(v1).toBeNull();
+    expect(v2).toBeNull();
+  });
+});

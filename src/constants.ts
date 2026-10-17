@@ -152,6 +152,19 @@ export const Constants = {
     STRAFE_STRENGTH: 0.5,
     /** Lookahead distance used to validate each strafe step */
     STRAFE_PROBE_DISTANCE: 0.8,
+    /**
+     * Distance (blocks) along the strafe step over which the controller
+     * scans for terrain hazards (void drops, lava/water, cobwebs, cacti).
+     * Covers at least one full hop so the bot rejects an orbit step that
+     * would carry it into a cliff or fluid before committing the jump.
+     */
+    STRAFE_HAZARD_LOOKAHEAD: 4.0,
+    /**
+     * Largest vertical drop (blocks) the bot will voluntarily strafe into
+     * without stopping. Falls above this deal fall damage (damage starts
+     * at 3) and can kill, so the step is rejected instead.
+     */
+    STRAFE_HAZARD_MAX_DROP: 3.0,
   },
 
   // ============================================================================

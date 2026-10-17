@@ -8,7 +8,7 @@
 
 import { Vec3 } from "vec3";
 import { AABB, isPathClear } from "./collision-oracle";
-import { isJumpPathClear } from "./movement";
+import { isJumpPathClear, getGroundBelow } from "./movement";
 import { Constants } from "./constants";
 
 // ---------------------------------------------------------------------------
@@ -20,6 +20,8 @@ const STRAFE_MIN_SPACING = Constants.MOVEMENT.STRAFE_MIN_SPACING;
 const STRAFE_MIN_DISTANCE = Constants.MOVEMENT.STRAFE_MIN_DISTANCE;
 const STRAFE_GRID_RESOLUTION = Constants.MOVEMENT.STRAFE_GRID_RESOLUTION;
 const STRAFE_RADIUS = Constants.MOVEMENT.STRAFE_RADIUS;
+const STRAFE_HAZARD_LOOKAHEAD = Constants.MOVEMENT.STRAFE_HAZARD_LOOKAHEAD;
+const STRAFE_HAZARD_MAX_DROP = Constants.MOVEMENT.STRAFE_HAZARD_MAX_DROP;
 const MAX_AXIS_SPEED = Constants.MOVEMENT.MAX_AXIS_SPEED;
 const PLAYER_HALF_WIDTH = Constants.PHYSICS.PLAYER_OFFSET;
 const PLAYER_HEIGHT = Constants.PHYSICS.PLAYER_HEIGHT;
@@ -241,6 +243,97 @@ function isPathBlocked(source: Vec3, point: Vec3, obstacles: AABB[]): boolean {
     if (tFar < 1.0) return true;
   }
   return false;
+}
+
+// ---------------------------------------------------------------------------
+// Hazard-aware arc lookahead
+// ---------------------------------------------------------------------------
+//
+// The short ground probe below validates a 0.8-block step and the swept
+// volume to it, but the bot actually commits to a full hop that travels
+// several blocks. To stop strafing into death traps (cliff edges, lava,
+// water, cobwebs, cacti, fire, suffocating ceilings) we scan a short arc
+// along the strafe heading and reject the step if any cell along it cannot
+// safely support the bot's landing.
+
+// Reuse the project's "unwanted" block list (lava, water, web, cactus)
+// and add fire, which damages the bot but isn't in that list.
+const HAZARD_BLOCK_NAMES: ReadonlySet<string> = new Set([
+  ...Constants.BLOCK_DETECTION.UNWANTED_BLOCK_NAMES,
+  "fire",
+  "cobweb", // minecraft-data names it "web"; keep both for safety
+]);
+
+/** A block whose collision shape is a full 1x1x1 cube (impassable wall). */
+function isFullCube(block: any): boolean {
+  if (!block || !block.shapes || block.shapes.length === 0) return false;
+  return block.shapes.some(
+    (s: number[]) =>
+      s[0] === 0 && s[1] === 0 && s[2] === 0 &&
+      s[3] === 1 && s[4] === 1 && s[5] === 1,
+  );
+}
+
+/** True if the block is a named movement hazard / damage source. */
+function isHazardBlock(block: any): boolean {
+  if (!block) return false;
+  return HAZARD_BLOCK_NAMES.has(block.name);
+}
+
+/**
+ * Scan a straight arc (length = STRAFE_HAZARD_LOOKAHEAD) along the
+ * (dirX, dirZ) heading from `source` and return false if any cell holds
+ * ground the bot cannot safely stand on:
+ *   - no solid support beneath the feet within STRAFE_HAZARD_MAX_DROP
+ *     -> the bot would fall and take damage
+ *   - a hazard block (lava/water/cobweb/cactus/fire) at foot or head level
+ *   - a full-cube obstacle at foot level (a wall the bot can't pass)
+ *
+ * getGroundBelow finds the first solid surface beneath each column; if the
+ * drop from the bot's feet to that surface exceeds the safe threshold the
+ * step is rejected before the hop is committed.
+ */
+function isHazardFreeArc(
+  source: Vec3,
+  dirX: number,
+  dirZ: number,
+  blockAt: (pos: Vec3) => any,
+): boolean {
+  const len = Math.hypot(dirX, dirZ);
+  if (len < 1e-6) return true;
+  const ux = dirX / len;
+  const uz = dirZ / len;
+  const footY = Math.floor(source.y);
+  const headY = footY + 1;
+  const belowY = footY - 1; // block directly under the feet (landing support)
+
+  for (let t = 0; t <= STRAFE_HAZARD_LOOKAHEAD; t += STRAFE_GRID_RESOLUTION) {
+    const x = source.x + ux * t;
+    const z = source.z + uz * t;
+    const bx = Math.floor(x);
+    const bz = Math.floor(z);
+
+    // Full-height solid block at foot level = an impassable wall.
+    const feet = blockAt(new Vec3(bx, footY, bz));
+    if (isFullCube(feet)) return false;
+    if (isHazardBlock(feet)) return false;
+
+    // Hazard floating at / above head height (lava on a ledge, fire, webs).
+    const head = blockAt(new Vec3(bx, headY, bz));
+    if (isHazardBlock(head)) return false;
+
+    // The block directly beneath the feet is the landing support. If it's
+    // a hazard (lava/water pool, cobweb) the bot would sink or take damage.
+    const support = blockAt(new Vec3(bx, belowY, bz));
+    if (isHazardBlock(support)) return false;
+
+    // Solid ground must hold the landing. getGroundBelow finds the surface
+    // of the first solid block beneath the column; if the drop from the
+    // bot's feet exceeds the safe threshold the bot would fall.
+    const groundY = getGroundBelow(new Vec3(x, source.y, z), blockAt);
+    if (source.y - groundY > STRAFE_HAZARD_MAX_DROP) return false;
+  }
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -618,6 +711,11 @@ export class StrafeController {
     if (!isPathClear(source.offset(0, 0.01, 0), walkable.offset(0, 0.01, 0), blockAt)) {
       return false;
     }
+
+    // Hazard-aware arc lookahead: reject steps that carry the bot over a
+    // cliff into lava/water, through a cobweb, or off a lethal drop. This
+    // covers the full hop distance rather than the 0.8-block probe above.
+    if (!isHazardFreeArc(source, dirX, dirZ, blockAt)) return false;
 
     return true;
   }
