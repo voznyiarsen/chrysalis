@@ -1,13 +1,14 @@
 /**
- * @fileoverview Unit tests for the strafe controller's combat steering.
+ * @fileoverview Unit tests for the strafe controller's continuous orbit steering.
  *
  * Covers the continuous circle-strafe used by PVPManager (steerAroundTarget)
- * and the walkable-surface scan it depends on, using a mocked flat world.
+ * and the walkable-surface + hazard scan it depends on, using a mocked flat world.
  */
 
 import { Vec3 } from "vec3";
 import { StrafeController, findWalkableSurface } from "../../src/strafe";
 import { Constants } from "../../src/constants";
+import { AABB } from "../../src/utils";
 
 // ── Mock block world ────────────────────────────────────────────────
 
@@ -18,13 +19,51 @@ const SOLID = {
 };
 const AIR = { name: "air", boundingBox: "empty", shapes: [] };
 
-/** Flat floor with its walkable surface at y=1; overlay adds walls. */
+/** Flat floor with its walkable surface at y=1; overlay adds walls/hazards. */
 function flatWorld(overlay?: (pos: Vec3) => unknown): (pos: Vec3) => any {
   return (pos: Vec3) => {
     const over = overlay?.(pos);
     if (over) return over;
     return pos.y < 1 ? SOLID : AIR;
   };
+}
+
+/** Simple getCollisions for the mocked flat world. */
+function getCollisionsFlat(
+  aabb: AABB,
+  _minY: number,
+  blockAt: (pos: Vec3) => any,
+): AABB[] {
+  const collisions: AABB[] = [];
+  const minX = Math.floor(aabb.minX);
+  const maxX = Math.floor(aabb.maxX);
+  const minY = Math.floor(aabb.minY);
+  const maxY = Math.floor(aabb.maxY);
+  const minZ = Math.floor(aabb.minZ);
+  const maxZ = Math.floor(aabb.maxZ);
+
+  for (let x = minX; x <= maxX; x++) {
+    for (let y = minY; y <= maxY; y++) {
+      for (let z = minZ; z <= maxZ; z++) {
+        const block = blockAt(new Vec3(x, y, z));
+        if (block && block.shapes && block.shapes.length > 0) {
+          for (const shape of block.shapes) {
+            collisions.push(
+              new AABB(
+                x + shape[0],
+                y + shape[1],
+                z + shape[2],
+                x + shape[3],
+                y + shape[4],
+                z + shape[5],
+              ),
+            );
+          }
+        }
+      }
+    }
+  }
+  return collisions;
 }
 
 const BOT = new Vec3(0.5, 1, 0.5);
@@ -58,7 +97,7 @@ describe("findWalkableSurface", () => {
   });
 });
 
-describe("StrafeController.steerAroundTarget", () => {
+describe("StrafeController.steerAroundTarget (continuous orbit)", () => {
   test("returns mostly-lateral velocity around the target", () => {
     const controller = new StrafeController();
     const target = new Vec3(0.5, 1, 3.5); // 3 blocks away, within STRAFE_RADIUS
@@ -244,7 +283,7 @@ describe("StrafeController.steerAroundTarget", () => {
   });
 });
 
-// ── Hazard-aware strafing ────────────────────────────────────────────────
+// ── Hazard-aware strafing ────────────────────────────────────────────
 
 /** Lava/water: full block, damages/moves the bot. */
 const LIQUID = {
@@ -256,7 +295,7 @@ const LIQUID = {
 const WEB = { name: "web", boundingBox: "empty", shapes: [] };
 const COBWEB = { name: "cobweb", boundingBox: "empty", shapes: [] };
 
-describe("StrafeController.steerAroundTarget (hazards)", () => {
+describe("StrafeController.steerAroundTarget (hazard rejection)", () => {
   test("avoids strafing over a cliff into void", () => {
     // Ground exists only for x < 3; everything past that is a void drop
     // (no solid floor within the fallback depth).
@@ -333,5 +372,25 @@ describe("StrafeController.steerAroundTarget (hazards)", () => {
     );
     expect(v1).toBeNull();
     expect(v2).toBeNull();
+  });
+});
+
+describe("getStrafeYaw (utility)", () => {
+  const { getStrafeYaw } = require("../../src/strafe");
+
+  test("direction +1 strafes left of target", () => {
+    const player = new Vec3(0, 0, 0);
+    const target = new Vec3(0, 0, 3); // target at +Z
+    const yaw = getStrafeYaw(player, target, 1);
+    // +1 = left = +X direction (yaw π/2 from +Z in minecraft coords)
+    expect(yaw).toBeCloseTo(Math.PI / 2, 0.1);
+  });
+
+  test("direction -1 strafes right of target", () => {
+    const player = new Vec3(0, 0, 0);
+    const target = new Vec3(0, 0, 3);
+    const yaw = getStrafeYaw(player, target, -1);
+    // -1 = right = -X direction (yaw -π/2 from +Z in minecraft coords)
+    expect(yaw).toBeCloseTo(-Math.PI / 2, 0.1);
   });
 });

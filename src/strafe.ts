@@ -1,9 +1,9 @@
 /**
- * @fileoverview Strafe controller — 3D obstacle-aware strafe arcs.
+ * @fileoverview Strafe controller — continuous orbit hops with full landing validation.
  *
- * Re-introduces strafe movement using the CollisionOracle for
- * obstacle checks. The controller evaluates candidate strafe points
- * in 3D with the bot's full bounding box, never its center.
+ * The bot hops on every landing tick while applying a continuous orbit velocity
+ * (tangent + radius pullback) every tick. The step ahead is validated with a
+ * hazard-aware arc sweep (void drops, lava/water, cobwebs, cacti, fire, walls).
  */
 
 import { Vec3 } from "vec3";
@@ -249,7 +249,7 @@ function isPathBlocked(source: Vec3, point: Vec3, obstacles: AABB[]): boolean {
 // Hazard-aware arc lookahead
 // ---------------------------------------------------------------------------
 //
-// The short ground probe below validates a 0.8-block step and the swept
+// The short ground probe validates a 0.8-block step and the swept
 // volume to it, but the bot actually commits to a full hop that travels
 // several blocks. To stop strafing into death traps (cliff edges, lava,
 // water, cobwebs, cacti, fire, suffocating ceilings) we scan a short arc
@@ -322,8 +322,7 @@ function isHazardFreeArc(
     const head = blockAt(new Vec3(bx, headY, bz));
     if (isHazardBlock(head)) return false;
 
-    // The block directly beneath the feet is the landing support. If it's
-    // a hazard (lava/water pool, cobweb) the bot would sink or take damage.
+    // The block directly beneath the feet is the landing support.
     const support = blockAt(new Vec3(bx, belowY, bz));
     if (isHazardBlock(support)) return false;
 
@@ -411,7 +410,7 @@ export function findWalkableSurface(
 }
 
 // ---------------------------------------------------------------------------
-// Main: getStrafePoint
+// Main: getStrafePoint (point-to-point hop evaluator, kept for future use)
 // ---------------------------------------------------------------------------
 
 /**
@@ -494,7 +493,7 @@ export function getStrafePoint(
 }
 
 // ---------------------------------------------------------------------------
-// StrafeController — high-level strafe decision
+// StrafeController — high-level strafe decision (continuous orbit)
 // ---------------------------------------------------------------------------
 
 export class StrafeController {
@@ -520,6 +519,7 @@ export class StrafeController {
   /**
    * Compute and apply a strafe jump toward the target.
    * Returns the strafe point if a jump was applied, null otherwise.
+   * (Kept for potential future use; not wired to PVPManager.)
    */
   computeStrafe(
     source: Vec3,
@@ -598,9 +598,8 @@ export class StrafeController {
   /**
    * Continuous lateral steering for circling a nearby target (combat).
    *
-   * Unlike computeStrafe (point-to-point strafe hops), the step direction
-   * is re-aimed from the bot's current position every tick. A pure
-   * tangent step of length s widens the orbit to sqrt(r^2 + s^2), so the
+   * The step direction is re-aimed from the bot's current position every tick.
+   * A pure tangent step of length s widens the orbit to sqrt(r^2 + s^2), so the
    * tangent blend gets an exact pullback that lands the step back on the
    * STRAFE_RADIUS circle — including after a hop has pushed the bot in
    * or out. While grounded each step ahead is validated with the
@@ -689,6 +688,10 @@ export class StrafeController {
    * surface at the current level, reachable without clipping terrain.
    * Endpoints are lifted a hair above the floor so the feet-level sweep
    * does not graze the ground block under floating-point noise.
+   *
+   * Also runs a hazard-aware arc lookahead (STRAFE_HAZARD_LOOKAHEAD blocks)
+   * to reject steps that carry the bot over cliffs into lava/water/cobwebs
+   * or off lethal drops.
    */
   private _isStepClear(
     source: Vec3,
