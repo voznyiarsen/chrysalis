@@ -139,19 +139,84 @@ function resolveConfig(
   };
 }
 
-const tui = createTerminalUI();
 const registry = new BotRegistry();
 
 async function start(): Promise<void> {
+  const tui = await createTerminalUI();
+
+  tui.onInput((text: string, botNumber?: number) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+
+    const parsed = registry.parseBotPrefix(trimmed);
+    const allBots = registry.getAllBots();
+
+    const body = parsed ? parsed.command.trim() : trimmed;
+    // Explicit `botN,...` prefix wins; otherwise a specific TUI tab targets
+    // its bot; otherwise every bot receives the input.
+    const targets: number[] = parsed
+      ? parsed.botNumbers.filter((n) => registry.getBot(n))
+      : botNumber !== undefined
+        ? [botNumber]
+        : allBots.map(([n]) => n);
+
+    if (body.startsWith("/")) {
+      // Command: strip /, support ;-chaining, process per bot internally
+      const chained = body
+        .slice(1)
+        .split(";")
+        .map((c) => c.trim())
+        .filter(Boolean);
+      for (const botNum of targets) {
+        const bot = registry.getBot(botNum);
+        const cm = bot?.commandManager;
+        if (!cm) continue;
+        for (const c of chained) {
+          cm.query(c).catch((error: unknown) => {
+            const err = error as Error;
+            err.message = `Command execution on bot ${botNum} failed: ${err.message}`;
+            registry.getLogger(botNum).error(err, "Command");
+          });
+        }
+      }
+    } else {
+      // General text: sent as chat to each selected bot
+      for (const botNum of targets) {
+        const bot = registry.getBot(botNum);
+        if (!bot?.commandManager) continue;
+        bot.commandManager.handleInput(body).catch((error: unknown) => {
+          const err = error as Error;
+          err.message = `Chat send on bot ${botNum} failed: ${err.message}`;
+          registry.getLogger(botNum).error(err, "Command");
+        });
+      }
+    }
+  });
+
   const botDefs = parseBotDefinitions();
   registry.setDefinitions(botDefs);
+  // Per-bot window tabs in the TUI
+  tui.setBots(botDefs.map((d) => d.number));
 
   for (const def of botDefs) {
     const cfg = resolveConfig(def, def.number, botDefs);
     registry.configs.set(def.number, cfg);
 
     try {
-      await registry.createBot(def.number);
+      const bot = await registry.createBot(def.number);
+      // The CommandManager is attached on login (see BotRegistry listeners),
+      // so the tree only exists after the bot has actually logged in. This
+      // handler is registered after the registry's, so it runs afterwards.
+      const wireAutocomplete = () => {
+        if (bot.commandManager) {
+          tui.setCommandManager(bot.commandManager);
+        }
+      };
+      if (bot.commandManager) {
+        wireAutocomplete();
+      } else {
+        bot.once("login", wireAutocomplete);
+      }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       logger.error(`Failed to create bot ${def.number}: ${msg}`, "Client");
@@ -167,58 +232,6 @@ async function start(): Promise<void> {
     process.exit(1);
   }
 }
-
-tui.onInput((text: string) => {
-  const trimmed = text.trim();
-  if (!trimmed) return;
-
-  const parsed = registry.parseBotPrefix(trimmed);
-  const allBots = registry.getAllBots();
-
-  if (parsed) {
-    const botNumbers = parsed.botNumbers.filter((n) => registry.getBot(n));
-    const cmd = parsed.command;
-
-    // Execute chained commands (semicolons) on each selected bot
-    const chained = cmd
-      .split(";")
-      .map((c) => c.trim())
-      .filter(Boolean);
-    for (const botNum of botNumbers) {
-      const bot = registry.getBot(botNum);
-      if (!bot) continue;
-      const cm = bot.commandManager;
-      if (!cm) continue;
-      for (const c of chained) {
-        try {
-          cm.query(c);
-        } catch (error: unknown) {
-          const err = error as Error;
-          err.message = `Command execution on bot ${botNum} failed: ${err.message}`;
-          registry.getLogger(botNum).error(err, "Command");
-        }
-      }
-    }
-  } else {
-    const chained = trimmed
-      .split(";")
-      .map((c) => c.trim())
-      .filter(Boolean);
-    for (const [botNum, bot] of allBots) {
-      const cm = bot.commandManager;
-      if (!cm) continue;
-      for (const c of chained) {
-        try {
-          cm.query(c);
-        } catch (error: unknown) {
-          const err = error as Error;
-          err.message = `Command execution on bot ${botNum} failed: ${err.message}`;
-          registry.getLogger(botNum).error(err, "Command");
-        }
-      }
-    }
-  }
-});
 
 process.on("uncaughtException", (err: Error, origin: string) => {
   err.message = `Uncaught Exception: ${err.message} at ${origin}`;

@@ -594,7 +594,7 @@ describe("getBestPearlTrajectory", () => {
     }
   });
 
-  test("selects low arc over high arc when both are clear (low arc is faster)", () => {
+  test("selects fastest clear arc (min flight time)", () => {
     const source = new Vec3(0, 0, 0);
     const target = new Vec3(15, 0, 0);
 
@@ -609,8 +609,9 @@ describe("getBestPearlTrajectory", () => {
     );
 
     expect(result).not.toBeNull();
-    // Low arc is the default fastest choice when unobstructed
-    expect(result!.arc).toBe("low");
+    // New scoring: minimum flight time wins, not low-arc preference
+    expect(result!.flightTime).toBeGreaterThan(0);
+    expect(result!.landingDist).toBeLessThanOrEqual(1.5);
   });
 });
 

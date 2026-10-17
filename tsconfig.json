@@ -16,7 +16,8 @@
     "sourceMap": true,
     "moduleResolution": "nodenext",
     "allowJs": false,
-    "isolatedModules": true
+    "isolatedModules": true,
+    "jsx": "react-jsx"
   },
   "include": ["src/**/*.ts", "tests/**/*.ts"],
   "exclude": [

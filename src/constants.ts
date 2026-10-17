@@ -130,6 +130,28 @@ export const Constants = {
       { x: -0.3, z: 0.3 },
       { x: 0.3, z: 0.3 },
     ],
+    /** Maximum distance the bot can jump in a single strafe */
+    STRAFE_JUMP_DISTANCE: 4.0,
+    /** Minimum distance between consecutive strafe points */
+    STRAFE_MIN_SPACING: 2.5,
+    /** Minimum distance from bot to consider a strafe point valid */
+    STRAFE_MIN_DISTANCE: 0.3,
+    /** Grid resolution for sampling candidate strafe points */
+    STRAFE_GRID_RESOLUTION: 0.3,
+    /** Maximum distance from target to consider a strafe point valid */
+    STRAFE_RADIUS: 3.0,
+    /** Maximum number of previous strafe points to keep in history */
+    STRAFE_HISTORY_SIZE: 3,
+    /**
+     * Lateral velocity target for combat strafing (blocks/tick, before
+     * ground friction). Blended per tick, so the effective speed settles
+     * around walking pace.
+     */
+    STRAFE_SPEED: 0.5,
+    /** Per-tick blend factor toward the strafe direction (0..1) */
+    STRAFE_STRENGTH: 0.5,
+    /** Lookahead distance used to validate each strafe step */
+    STRAFE_PROBE_DISTANCE: 0.8,
   },
 
   // ============================================================================

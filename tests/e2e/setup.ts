@@ -126,21 +126,31 @@ export function requireRcon(): void {
 export async function serverCommand(bot: Bot, cmd: string): Promise<string> {
   const clean = cmd.startsWith("/") ? cmd.slice(1) : cmd;
   if (process.env.RCON_PASS && rconCommands) {
-    const out = await rcon([clean]);
-    if (out) {
-      const response = out[0] ?? "";
-      // Fail fast on RCON error responses instead of polling to timeout:
-      // a targetless /gamemode, bad selector, or unloaded-chunk summon
-      // reports here, not in-game.
-      if (/unknown command|usage:|incorrect|error|failed|invalid|could not|cannot summon|no entity|not found/i.test(response)) {
-        throw new Error(`E2E RCON '${clean}' rejected: ${response}`);
+    // Outer retry: server stalls can exceed the inner rcon() retry budget.
+    // Retry the whole command with a longer backoff to ride out multi-second
+    // server freezes without failing the test.
+    let lastError: unknown = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (attempt > 0) {
+        await new Promise((resolve) => setTimeout(resolve, 10000));
       }
-      return response;
+      const out = await rcon([clean]);
+      if (out) {
+        const response = out[0] ?? "";
+        // Fail fast on RCON error responses instead of polling to timeout:
+        // a targetless /gamemode, bad selector, or unloaded-chunk summon
+        // reports here, not in-game.
+        if (/unknown command|usage:|incorrect|error|failed|invalid|could not|cannot summon|no entity|not found/i.test(response)) {
+          throw new Error(`E2E RCON '${clean}' rejected: ${response}`);
+        }
+        return response;
+      }
+      lastError = new Error(`E2E RCON transport returned null for '${clean}'`);
     }
     // RCON was configured but unreachable even after retries: falling back
     // to unauthenticated chat would silently fail every privileged command,
     // so fail loudly instead.
-    throw new Error(
+    throw lastError ?? new Error(
       `E2E RCON transport failed for '${clean}' (see warnings above)`,
     );
   }
@@ -173,7 +183,14 @@ export function e2eTimeoutMs(): number {
 // Minecraft usernames are limited to 16 chars, so suite keys stay short.
 
 /** Short per-suite keys; full usernames are `<key>_<suffix>`. */
-export type SuiteKey = "inv" | "jmp" | "prl" | "pvp";
+export type SuiteKey =
+  | "inv"
+  | "jmp"
+  | "prl"
+  | "pvp"
+  /** 2-bot combat-loop suite: attacker / target */
+  | "pva"
+  | "pvt";
 
 /** Hash a string to a non-negative integer (djb2). */
 export function simpleHash(str: string): number {
@@ -566,15 +583,41 @@ export async function probeHostiles(bot: Bot): Promise<boolean> {
   const before = new Set(Object.keys(bot.entities).map((k) => parseInt(k, 10)));
   const p = bot.entity.position;
   await serverCommand(bot, summonCmd("Zombie", p.x, p.y + 1, p.z));
+  const seen = new Set<number>();
   for (let i = 0; i < 40; i++) {
     await bot.waitForTicks!(1);
     for (const [idStr, entity] of Object.entries(bot.entities)) {
-      if (before.has(parseInt(idStr, 10))) continue;
+      const id = parseInt(idStr, 10);
+      if (before.has(id)) continue;
       const e = entity as any;
-      if (e.position && /zombie/i.test(e.name ?? "")) return true;
+      if (e.position && /zombie/i.test(e.name ?? "")) seen.add(id);
     }
   }
-  return false;
+  // A Peaceful server clears the just-summoned zombie within a tick or two,
+  // but its spawn packet can still reach the client first. A sighting alone
+  // is therefore not proof of hostile support: the zombie must still exist
+  // when the window ends.
+  let survived = false;
+  for (const id of seen) {
+    if (bot.entities[id]) {
+      survived = true;
+      break;
+    }
+  }
+  // Remove the probe zombie before returning. Where hostiles are enabled it
+  // survives the window and would otherwise stand at the bot's side,
+  // attacking it for the rest of the suite (its knockback and damage break
+  // health/threshold assertions in unrelated tests).
+  try {
+    await serverCommand(bot, killMobsCmd(6, p.x, p.y, p.z));
+    await bot.waitForTicks!(2);
+  } catch (error) {
+    logger.warning(
+      `E2E: probe zombie cleanup failed: ${(error as Error).message}`,
+      "Command",
+    );
+  }
+  return survived;
 }
 
 export interface EnvToken {
@@ -654,6 +697,25 @@ export async function ensureTestEnvironment(
       "night to hold after freeze",
     );
     token.timeFrozen = true;
+  } else {
+    // Without this, a suite inherits whatever world time the previous suite
+    // left behind. The PvP suite freezes midnight and only unfreezes the
+    // daylight cycle on restore, so the next suite can start in darkness
+    // with nocturnal mobs wandering in: their knockback and damage break
+    // movement and health assertions in unrelated tests. Pin daytime and
+    // clear hostiles that already spawned under the previous night.
+    logger.info("E2E: setting daytime via RCON", "Command");
+    await rconOrThrow(["time set day", "gamerule doDaylightCycle true"]);
+    const p = bot.entity.position;
+    try {
+      await serverCommand(bot, killMobsCmd(130, p.x, p.y, p.z));
+      await bot.waitForTicks!(10);
+    } catch (error) {
+      logger.warning(
+        `E2E: daytime mob cleanup failed: ${(error as Error).message}`,
+        "Command",
+      );
+    }
   }
   return token;
 }

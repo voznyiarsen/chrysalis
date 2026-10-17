@@ -33,6 +33,7 @@ import {
   isBotAlive,
   logSuiteStart,
   requireRcon,
+  setDifficulty,
   ensureSurvival,
   ensureCreative,
   pollUntil,
@@ -918,6 +919,320 @@ describeE2E("E2E PvP Tests", () => {
         getPvp().forceStop();
       },
       TIMEOUT_MS,
+    );
+  });
+
+  // ══════════════════════════════════════════════════════════════════
+  // Category 13: Complete Combat Loop (2 bots)
+  // ══════════════════════════════════════════════════════════════════
+
+  /**
+   * End-to-end combat loop with a second real player connection:
+   * the attacker (survival) fights a stationary creative target that
+   * never dies and never fights back. Exercises the full chain —
+   * targeting, chasing, strafing, attacking, disengaging/re-engaging.
+   */
+  describe("Combat Loop (2 bots)", () => {
+    let attacker: Bot;
+    let target: Bot;
+    const ATTACKER_POSITION = POSITION.offset(30, 0, 0);
+    const TARGET_POSITION = ATTACKER_POSITION.offset(9, 0, 0);
+
+    /** The target's entity as seen by the attacker. */
+    const targetEntity = (): any =>
+      Object.values(attacker.entities).find(
+        (e: any) => e.type === "player" && e.username === target.username,
+      );
+
+    /** Current attacker→target distance, or null while unseen. */
+    const distanceToTarget = (): number | null => {
+      const entity = targetEntity();
+      return entity
+        ? attacker.entity.position.distanceTo(entity.position)
+        : null;
+    };
+
+    beforeAll(async () => {
+      requireRcon();
+      logSuiteStart("E2E Combat Loop (2 bots)", getUsername("pva"));
+      attacker = await createBot({
+        username: getUsername("pva"),
+        timeoutMs: TIMEOUT_MS,
+      });
+      target = await createBot({
+        username: getUsername("pvt"),
+        timeoutMs: TIMEOUT_MS,
+      });
+      // Attacker fights in survival; the target is a creative statue.
+      await ensureReady(attacker, ATTACKER_POSITION);
+      await ensureSurvival(attacker);
+      await ensureReady(target, TARGET_POSITION);
+      // The suite freezes the world at midnight with difficulty normal, so
+      // zombies spawn in the arena and maul the unarmed survival attacker
+      // mid-orbit (and kill it, respawning it at world spawn). This describe
+      // runs last in the file, so switch to peaceful for it (the outer
+      // afterAll restores difficulty anyway) and add resistance as a second
+      // layer against stray damage.
+      await setDifficulty("peaceful");
+      await killNearbyEntities(attacker, 130);
+      await serverCommand(
+        attacker,
+        effectGiveCmd(attacker.username, "resistance", 900, 255, VERSION),
+      );
+      // The target must exist client-side before targeting can see it.
+      await pollUntil(
+        attacker,
+        () => targetEntity() !== undefined,
+        100,
+        "target player entity to be visible to the attacker",
+      );
+    }, TIMEOUT_MS * 3);
+
+    afterAll(async () => {
+      for (const b of [attacker, target]) {
+        if (!b) continue;
+        try {
+          b.quit!();
+          b.end!();
+        } catch (error) {
+          logger.error(error, "Combat");
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    });
+
+    test(
+      "attacks a stationary creative target while strafing around it",
+      async () => {
+        const cm: any = (attacker as any).combatManager;
+        const pvp: any = (attacker as any).pvp;
+        cm.setMode(2); // Players (All) — matches the creative target.
+
+        // Drive the full combat loop exactly like the `/com` command does.
+        const combatTick = (): void => {
+          void cm.doDecide();
+        };
+        let attacks = 0;
+        const onAttacked = (): void => {
+          attacks++;
+        };
+        attacker.on("physicsTick", combatTick);
+        attacker.on("attackedTarget", onAttacked);
+
+        try {
+          // 1) Acquire the target player through the decision engine.
+          await pollUntil(
+            attacker,
+            () => {
+              const t: any = pvp.target;
+              return !!t && t.username === target.username;
+            },
+            100,
+            "combat loop to acquire the target player",
+          );
+
+          // 2) Close the distance into melee range.
+          await pollUntil(
+            attacker,
+            () => {
+              const dist = distanceToTarget();
+              return dist !== null && dist <= Constants.COMBAT.ATTACK_RANGE;
+            },
+            120,
+            "attacker to close into melee range",
+          );
+
+          // 3) Sample a live window: attacks + strafing + range keeping.
+          const startPos = attacker.entity.position.clone();
+          const targetStart = target.entity.position.clone();
+          const windowTicks = 80;
+          let previous = startPos.clone();
+          let path = 0;
+          let maxDeviation = 0;
+          let inRangeTicks = 0;
+          let strafeTicks = 0;
+          let airborneTicks = 0;
+          let minY = startPos.y;
+          let maxY = startPos.y;
+          let orbitAngle = 0;
+          let previousAngle = Math.atan2(
+            startPos.z - targetStart.z,
+            startPos.x - targetStart.x,
+          );
+          for (let i = 0; i < windowTicks; i++) {
+            await attacker.waitForTicks!(1);
+            const pos = attacker.entity.position;
+            path += Math.hypot(pos.x - previous.x, pos.z - previous.z);
+            previous = pos.clone();
+            maxDeviation = Math.max(
+              maxDeviation,
+              Math.hypot(pos.x - startPos.x, pos.z - startPos.z),
+            );
+            const dist = distanceToTarget();
+            if (dist !== null && dist <= Constants.COMBAT.ATTACK_RANGE + 0.5) {
+              inRangeTicks++;
+            }
+            if (pvp.strafeActive) strafeTicks++;
+            if (!attacker.entity.onGround) airborneTicks++;
+            minY = Math.min(minY, pos.y);
+            maxY = Math.max(maxY, pos.y);
+            // Signed angle swept around the target: grows in magnitude
+            // while the bot keeps circling one way, ~0 if it reverses.
+            const te = target.entity.position;
+            const angle = Math.atan2(pos.z - te.z, pos.x - te.x);
+            let delta = angle - previousAngle;
+            while (delta > Math.PI) delta -= 2 * Math.PI;
+            while (delta < -Math.PI) delta += 2 * Math.PI;
+            orbitAngle += delta;
+            previousAngle = angle;
+          }
+          const targetDrift = target.entity.position.distanceTo(targetStart);
+
+          logger.info(
+            `Combat loop window: attacks=${attacks} strafes=${strafeTicks}/${windowTicks} ` +
+              `airborne=${airborneTicks}/${windowTicks} yRange=${(maxY - minY).toFixed(2)} ` +
+              `orbit=${orbitAngle.toFixed(2)}rad inRange=${inRangeTicks}/${windowTicks} ` +
+              `path=${path.toFixed(2)} deviation=${maxDeviation.toFixed(2)} ` +
+              `targetDrift=${targetDrift.toFixed(2)}`,
+            "Combat",
+          );
+          logger.info(
+            `Combat loop end: attacker@${attacker.entity.position.floored()} ` +
+              `target@${target.entity.position.floored()} ` +
+              `dist=${attacker.entity.position.distanceTo(target.entity.position).toFixed(2)}`,
+            "Combat",
+          );
+
+          // The creative target stood still the whole time.
+          expect(targetDrift).toBeLessThan(0.5);
+          // Attacks kept landing through the window (unarmed cooldown ~5 ticks).
+          expect(attacks).toBeGreaterThanOrEqual(5);
+          // Strafing engaged and produced sustained lateral movement.
+          expect(strafeTicks).toBeGreaterThanOrEqual(40);
+          expect(path).toBeGreaterThanOrEqual(8);
+          expect(maxDeviation).toBeGreaterThanOrEqual(1);
+          // Strafing kept the bot inside (roughly) attacking distance.
+          expect(inRangeTicks).toBeGreaterThanOrEqual(50);
+          // ... and it was a hopping orbit, not a ground slide: the bot
+          // spends most ticks airborne and gains real height...
+          expect(airborneTicks).toBeGreaterThanOrEqual(30);
+          expect(maxY - minY).toBeGreaterThanOrEqual(0.6);
+          // ...while sweeping one consistent direction around the target
+          // (a reversal would cancel the signed angle back toward zero).
+          expect(Math.abs(orbitAngle)).toBeGreaterThan(Math.PI * 0.75);
+        } finally {
+          attacker.removeListener("physicsTick", combatTick);
+          attacker.removeListener("attackedTarget", onAttacked);
+          pvp.forceStop();
+          cm.setMode(0);
+          await attacker.waitForTicks!(2);
+        }
+      },
+      TIMEOUT_MS * 2,
+    );
+
+    test(
+      "chases and re-engages when the target escapes melee range",
+      async () => {
+        const cm: any = (attacker as any).combatManager;
+        const pvp: any = (attacker as any).pvp;
+        cm.setMode(2);
+
+        const combatTick = (): void => {
+          void cm.doDecide();
+        };
+        attacker.on("physicsTick", combatTick);
+
+        try {
+          logger.info(
+            `Re-engage start: attacker@${attacker.entity.position.floored()} ` +
+              `target@${target.entity.position.floored()} ` +
+              `dist=${attacker.entity.position.distanceTo(target.entity.position).toFixed(2)} ` +
+              `pvpTarget=${(pvp.target as any)?.username ?? "none"}`,
+            "Combat",
+          );
+
+          // Reset both bots to known spots so the test does not depend on
+          // where the previous test's orbit happened to end.
+          await tpBot(
+            attacker,
+            ATTACKER_POSITION.x,
+            ATTACKER_POSITION.y,
+            ATTACKER_POSITION.z,
+          );
+          await tpBot(
+            target,
+            TARGET_POSITION.x,
+            TARGET_POSITION.y,
+            TARGET_POSITION.z,
+          );
+
+          // Re-acquire, chase in, and start strafing.
+          let pollTick = 0;
+          await pollUntil(
+            attacker,
+            () => {
+              const dist = distanceToTarget();
+              const pf = (attacker as any).pathfinder;
+              if (++pollTick % 40 === 0) {
+                logger.info(
+                  `Re-engage t=${pollTick}: dist=${dist?.toFixed(2) ?? "?"} ` +
+                    `strafe=${pvp.strafeActive} pvpTarget=${(pvp.target as any)?.username ?? "none"} ` +
+                    `pfGoal=${pf?.goal ? "set" : "null"} moving=${pf?.isMoving?.()} ` +
+                    `attacker@${attacker.entity.position.floored()}`,
+                  "Combat",
+                );
+              }
+              return (
+                pvp.strafeActive === true &&
+                dist !== null &&
+                dist <= Constants.COMBAT.ATTACK_RANGE
+              );
+            },
+            200,
+            "attacker to engage and start strafing",
+          );
+
+          // Teleport the target out of melee range (RCON, verified).
+          const away = TARGET_POSITION.offset(0, 0, 9);
+          await tpBot(target, away.x, away.y, away.z);
+          await pollUntil(
+            attacker,
+            () => {
+              const dist = distanceToTarget();
+              return dist !== null && dist > Constants.COMBAT.ATTACK_RANGE;
+            },
+            40,
+            "distance to grow past attack range after teleport",
+          );
+
+          // Strafing disengages, the follow goal is re-issued, and the
+          // bot closes the gap again.
+          await pollUntil(
+            attacker,
+            () => {
+              const dist = distanceToTarget();
+              return dist !== null && dist <= Constants.COMBAT.ATTACK_RANGE;
+            },
+            200,
+            "attacker to chase back into melee range",
+          );
+
+          // ... and strafing resumes at the new position.
+          await pollUntil(
+            attacker,
+            () => pvp.strafeActive === true,
+            80,
+            "strafing to re-engage after the chase",
+          );
+        } finally {
+          attacker.removeListener("physicsTick", combatTick);
+          pvp.forceStop();
+          cm.setMode(0);
+          await attacker.waitForTicks!(2);
+        }
+      },
+      TIMEOUT_MS * 2,
     );
   });
 });

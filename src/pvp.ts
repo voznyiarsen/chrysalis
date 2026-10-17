@@ -4,6 +4,9 @@ import { Vec3 } from "vec3";
 import { Bot } from "mineflayer";
 import { Entity } from "prismarine-entity";
 import { goals, Movements } from "mineflayer-pathfinder";
+import { buildCombatTree, CombatTreeContext } from "./behavior-tree";
+import { StrafeController } from "./strafe";
+import { Node as BTNode, SUCCESS } from "behaviortree";
 
 /**
  * @fileoverview Combat decision engine, PVP manager, and weapon utilities for Pupa bot.
@@ -87,6 +90,14 @@ export class PVPManager {
    */
   private _pfGoalKey: string | null = null;
 
+  /**
+   * Combat strafing: circles the target laterally while attacking in
+   * melee range. While engaged this manager owns movement — the
+   * pathfinder goal is released and re-issued again on disengage.
+   */
+  strafeController: StrafeController = new StrafeController();
+  private _strafeEngaged = false;
+
   constructor(bot: Bot) {
     this.bot = bot;
     this.movements = new Movements(bot);
@@ -118,6 +129,7 @@ export class PVPManager {
     this.target = undefined;
     this.goal = null;
     this._pfGoalKey = null;
+    this._disengageStrafe();
     this._clearExplosionTimeout();
     this._clearShieldReequipTimeout();
     const pathfinder = this.bot.pathfinder;
@@ -144,6 +156,7 @@ export class PVPManager {
     this.target = undefined;
     this.goal = null;
     this._pfGoalKey = null;
+    this._disengageStrafe();
     this._clearExplosionTimeout();
     this._clearShieldReequipTimeout();
     const pathfinder = this.bot.pathfinder;
@@ -174,11 +187,111 @@ export class PVPManager {
   update(): void {
     this.checkExplosion();
     this.checkRange();
+    this.doStrafe();
     if (!this.target || this.blockingExplosion) return;
     this.timeToNextAttack--;
     if (this.timeToNextAttack <= 0) {
       this.attemptAttack();
     }
+  }
+
+  /** True while the bot is actively strafing around its target. */
+  get strafeActive(): boolean {
+    return this._strafeEngaged;
+  }
+
+  /**
+   * Strafe around the current target while it is in melee range.
+   *
+   * Engages once the target is within STRAFE_RADIUS and the bot is on
+   * the ground; the pathfinder goal is released so this manager owns
+   * movement. Every tick the StrafeController re-aims the orbit velocity
+   * (tangent blend + radius pullback); grounded steps are validated
+   * against the walkable surface first, and airborne ticks just hold the
+   * circle. A grounded tick adds a full jump impulse on top, so the bot
+   * bunny-hops in a continuous orbit around the target — the old build's
+   * `velocity.set(vx, 0.42, vz)` strafe. A blocked side still flips the
+   * orbit direction. Disengaging (target escapes attack range) hands
+   * movement back to the pathfinder with a follow goal.
+   */
+  private doStrafe(): void {
+    const target = this.target;
+    if (!target || !target.isValid) {
+      this._disengageStrafe();
+      return;
+    }
+    if (this.blockingExplosion) return;
+    if (this.goal) {
+      // A static combat goal owns movement; stay out of the way.
+      this._disengageStrafe();
+      return;
+    }
+
+    const entity = this.bot.entity;
+    const source = entity.position;
+    const targetPos = target.position;
+    const dist = targetPos.distanceTo(source);
+
+    if (!this._strafeEngaged) {
+      if (dist > Constants.MOVEMENT.STRAFE_RADIUS || !entity.onGround) return;
+      this._strafeEngaged = true;
+      this.strafeController.reset();
+      // Take over movement from the pathfinder; released on disengage.
+      const pf = this.bot.pathfinder;
+      if (pf) pf.setGoal(null);
+    } else if (dist > this.attackRange) {
+      this._disengageStrafe();
+      this._resumeFollow();
+      return;
+    }
+
+    const collided = (entity as any).isCollidedHorizontally === true;
+    const velocity = this.strafeController.steerAroundTarget(
+      source,
+      targetPos,
+      entity.velocity,
+      (pos: Vec3) => this.bot.blockAt(pos),
+      collided,
+      entity.onGround,
+    );
+    if (velocity) {
+      // Hop the instant the bot lands: re-apply the orbit velocity with a
+      // full jump impulse on top (the old build's velocity.set(vx, 0.42,
+      // vz)), so the bot jumps around the target instead of sliding along
+      // the ground. Airborne ticks keep the same orbit velocity with the
+      // ballistic vertical component, so the pullback holds the circle
+      // through the hop.
+      this.bot.utilsManager.applyImpulse(
+        entity.onGround
+          ? new Vec3(velocity.x, Constants.PHYSICS.JUMP_VELOCITY, velocity.z)
+          : velocity,
+        "set",
+        true,
+      );
+    }
+
+    // Keep facing the target while sidestepping.
+    this.bot.lookAt(targetPos.offset(0, target.height ?? 1.8, 0), true);
+  }
+
+  /** Drop strafe state; the pathfinder is not touched. */
+  private _disengageStrafe(): void {
+    if (!this._strafeEngaged) return;
+    this._strafeEngaged = false;
+    this.strafeController.reset();
+  }
+
+  /**
+   * Re-issue the follow goal after strafing hands movement back to the
+   * pathfinder. Issued once — only while the pathfinder holds no goal —
+   * to avoid the per-tick setGoal storm documented on checkRange.
+   */
+  private _resumeFollow(): void {
+    const target = this.target;
+    const pf = this.bot.pathfinder;
+    if (!target || !pf || pf.goal) return;
+    pf.setMovements(this.movements);
+    pf.setGoal(new goals.GoalFollow(target, this.followRange), true);
   }
 
   private checkRange(): void {
@@ -340,6 +453,7 @@ class CombatManager {
   lastPearlTime: number;
   public decisions: CombatDecision[];
   _isDeciding: boolean;
+  private _tree: BTNode | null = null;
 
   /**
    * @param bot - Mineflayer bot instance
@@ -364,9 +478,25 @@ class CombatManager {
   }
 
   /**
-   * Initialize the combat decision tree.
+   * Initialize the combat behavior tree.
    */
   setupDecisions(): void {
+    const ctx: CombatTreeContext = {
+      bot: this.bot,
+      inv: () => this.bot.inventoryManager,
+      getHealthStatus: () => this.getHealthStatus(),
+      getFallProtectionStatus: () => this.getFallProtectionStatus(),
+      getBestPearlOffset: (source, target, arc) => this.getBestPearlOffset(source, target, arc),
+      lastDamage: this.lastDamage,
+      lastPearlTime: this.lastPearlTime,
+      logger: this.logger,
+    };
+    this._tree = buildCombatTree(ctx);
+    this.decisions = [];
+  }
+
+  /** @deprecated kept for backward compat */
+  private _legacySetupDecisions(): void {
     const { CRITICAL_HP_MULT, LOW_FOOD } = Constants.COMBAT;
     const inv = () => this.bot.inventoryManager;
 
@@ -668,51 +798,35 @@ class CombatManager {
     this.debounce = true;
 
     try {
-      const svc: { switchedItem: boolean } = { switchedItem: false };
-      const track = (fn: () => Promise<void>) => async () => {
-        const heldBefore = this.bot.heldItem?.type;
-        await fn();
-        const heldAfter = this.bot.heldItem?.type;
-        if (heldBefore !== heldAfter) svc.switchedItem = true;
-      };
-
-      // Sort decisions so the highest-priority tier runs first. Decisions
-      // with priority > 0 may short-circuit lower tiers if their action
-      // swaps the held item.
-      const sorted = [...this.decisions].sort(
-        (a, b) => b.priority - a.priority,
-      );
-
-      for (const decision of sorted) {
-        if (decision.condition()) {
-          this.logger.debug(`Decision: ${decision.name} triggered`, "Combat");
-          if (decision.priority > 0) {
-            await track(decision.action)();
-            if (svc.switchedItem) {
-              this.logger.debug(
-                `Decision: item swapped by ${decision.name}, skipping lower priority`,
-                "Combat",
-              );
-              break;
-            }
-          } else {
-            await decision.action();
-          }
-        }
+      if (this._tree) {
+        const blackboard = { ctx: this._buildTreeContext() };
+        this._tree.run(blackboard);
       }
     } finally {
       this.debounce = false;
     }
   }
 
+  private _buildTreeContext(): CombatTreeContext {
+    return {
+      bot: this.bot,
+      inv: () => this.bot.inventoryManager,
+      getHealthStatus: () => this.getHealthStatus(),
+      getFallProtectionStatus: () => this.getFallProtectionStatus(),
+      getBestPearlOffset: (source, target, arc) => this.getBestPearlOffset(source, target, arc),
+      lastDamage: this.lastDamage,
+      lastPearlTime: this.lastPearlTime,
+      logger: this.logger,
+    };
+  }
+
   /**
-   * Set or cycle combat mode.
+   * Set or cycle combat mode. Callers are responsible for logging.
    * @param mode - Mode number (0-3), or undefined to cycle
    */
   setMode(mode?: number): void {
     this.mode = mode !== undefined ? mode : (this.mode + 1) % 4;
     this.modeFilterCache = null;
-    this.logger.combat(`Combat mode set to ${this.mode}`);
   }
 
   /**

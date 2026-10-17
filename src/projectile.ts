@@ -433,20 +433,20 @@ export function isProjectilePathClear(
 /**
  * Best pearl trajectory calculation.
  *
- * Samples candidate landing points within a 1.5-block tolerance sphere centered
- * on the target point, computes pitches for each candidate, checks whether each
- * trajectory is unobstructed, then ranks by:
- *  1) Unobstructed (clear paths before blocked ones)
- *  2) Flight time  (ascending  – faster is better)
- *  3) Landing distance to original target (ascending – more precise is better)
+ * Samples candidate landing points laterally (perpendicular to the origin-to-target
+ * axis), capped at one quarter of the origin-to-target distance. No forward or
+ * backward sampling along the throw axis. Prefers smaller lateral offsets first.
+ *
+ * Scoring: exact target > relaxed target; minimum flight time; miss distance within
+ * tolerance; tie-break by smaller miss and larger clearance.
  *
  * @param source - Launch position (eye position of the thrower)
  * @param target - Desired target position
  * @param velocity - Initial projectile speed (default: ender pearl 1.5)
  * @param gravity  - Gravity acceleration per tick (default: 0.03)
  * @param drag     - Per-tick velocity multiplier (default: 0.99)
- * @param toleranceRadius - Sampling radius around the target (default: 1.5)
- * @param sampleStep       - Grid step size for candidate generation (default: 1.0)
+ * @param toleranceRadius - Max lateral sampling radius (default: 1.5, capped at dist/4)
+ * @param sampleStep       - Lateral grid step size for candidate generation (default: 0.5)
  * @param blockAt - Function to look up a block at a given position
  * @param entities - Array of entities to check for collisions (should exclude the thrower)
  * @returns The best trajectory result, or null if no candidate trajectory
@@ -459,7 +459,7 @@ export function getBestPearlTrajectory(
   gravity: number = Constants.COMBAT.PROJECTILES.ender_pearl.GRAVITY,
   drag: number = Constants.COMBAT.PROJECTILES.ender_pearl.DRAG,
   toleranceRadius: number = 1.5,
-  sampleStep: number = 1.0,
+  sampleStep: number = 0.5,
   blockAt: (pos: Vec3) => any,
   entities: any[],
 ): PearlTrajectoryResult | null {
@@ -473,29 +473,28 @@ export function getBestPearlTrajectory(
     landingDist: number;
   }> = [];
 
-  // Determine the number of integer-valued offset steps that fit inside the radius
-  const maxOffset = Math.floor(toleranceRadius / sampleStep);
-  const offsets: number[] = [];
-  for (let d = -maxOffset; d <= maxOffset; d++) {
-    const o = d * sampleStep;
-    // Always include the exact target (o = 0) and keep the list small
-    offsets.push(o);
-  }
-  // Ensure 0 is always present (maxOffset >= 1 for radius >= step, which is typical)
-  if (!offsets.includes(0)) offsets.push(0);
+  // Lateral sampling: perpendicular to origin-to-target axis in XZ plane.
+  const dx = target.x - source.x;
+  const dz = target.z - source.z;
+  const dist = Math.hypot(dx, dz);
+  // Cap tolerance at one quarter of origin-to-target distance.
+  const maxLateral = Math.min(toleranceRadius, dist / 4);
+  // Lateral unit vector (perpendicular to forward in XZ).
+  const latX = dist > 1e-6 ? -dz / dist : 1;
+  const latZ = dist > 1e-6 ? dx / dist : 0;
 
-  const candidateTargets: Vec3[] = [];
-  for (const dx of offsets) {
-    for (const dy of offsets) {
-      for (const dz of offsets) {
-        const distSq = dx * dx + dy * dy + dz * dz;
-        if (distSq > toleranceRadius * toleranceRadius + 1e-9) continue;
-        candidateTargets.push(
-          new Vec3(target.x + dx, target.y + dy, target.z + dz),
-        );
-      }
-    }
+  // Build lateral offsets: 0 first, then expanding outward (±step, ±2*step, ...).
+  const offsets: number[] = [0];
+  const maxSteps = Math.ceil(maxLateral / sampleStep);
+  for (let i = 1; i <= maxSteps; i++) {
+    const o = i * sampleStep;
+    if (o > maxLateral + 1e-9) break;
+    offsets.push(o, -o);
   }
+
+  const candidateTargets: Vec3[] = offsets.map(
+    (o) => new Vec3(target.x + latX * o, target.y, target.z + latZ * o),
+  );
 
   for (const candidateTarget of candidateTargets) {
     const pitches = getProjectilePitch(
@@ -571,17 +570,18 @@ export function getBestPearlTrajectory(
     }
   }
 
-  // ---- 3. Rank: unobstructed (false < true) > low arc preferred > flightTime ASC > landingDist ASC ----
+  // ---- 3. Rank: clear > exact target > min flight time > smaller miss ----
   if (candidates.length === 0) return null;
 
   candidates.sort((a, b) => {
     // Clear paths first
     if (a.blocked !== b.blocked) return a.blocked ? 1 : -1;
-    // Prefer low arc over high arc when both are available
-    if (a.arc !== b.arc) return a.arc === "low" ? -1 : 1;
-    // Then fastest (shortest flight time)
+    // Exact target (landingDist == 0) over relaxed target
+    if (a.landingDist === 0 && b.landingDist > 0) return -1;
+    if (b.landingDist === 0 && a.landingDist > 0) return 1;
+    // Minimum flight time
     if (a.flightTime !== b.flightTime) return a.flightTime - b.flightTime;
-    // Then most precise (closest to actual target)
+    // Tie-break by smaller miss distance
     return a.landingDist - b.landingDist;
   });
 

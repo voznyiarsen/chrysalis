@@ -3,7 +3,7 @@
  * Wraps the TUI/headless backend and provides level-based and semantic logging APIs.
  */
 
-import { createTerminalUI } from "./tui.js";
+import { createHeadlessUI, createTerminalUI } from "./tui.js";
 
 type LogLevel = "DEBUG" | "INFO" | "WARN" | "ERROR";
 
@@ -17,6 +17,10 @@ export class Logger {
   private _backend: UIBackend;
   /** Optional bot number for multi-bot tagging. 0 = no tag (single-bot mode). */
   public botNumber: number = 0;
+  /** True once the Ink TUI backend is ready (async import resolves). */
+  private _backendReady = false;
+  /** Logs buffered until the Ink TUI is ready (flushed on upgrade). */
+  private _logBuffer: { message: string; tag: string; level: LogLevel }[] = [];
 
   private _messageLogEnabled = false;
   private _messageListener: ((...args: any[]) => void) | null = null;
@@ -25,7 +29,16 @@ export class Logger {
   protected _parent: Logger | null = null;
 
   constructor() {
-    this._backend = createTerminalUI() as unknown as UIBackend;
+    this._backend = createHeadlessUI() as unknown as UIBackend;
+    // Upgrade to Ink TUI asynchronously (ink v8 is ESM-only, loaded via import())
+    createTerminalUI().then((backend) => {
+      this._backend = backend;
+      this._backendReady = true;
+      for (const entry of this._logBuffer) {
+        this._backend.log(entry.message, entry.tag, entry.level);
+      }
+      this._logBuffer = [];
+    });
   }
 
   get isMessageLogEnabled(): boolean {
@@ -60,7 +73,6 @@ export class Logger {
       this._log(`[${position}] ${text}`, "Packet", "DEBUG");
     };
     this._bot.on("message", this._messageListener);
-    this._log("Message logging enabled", "Packet", "INFO");
   }
 
   /**
@@ -75,7 +87,6 @@ export class Logger {
       this._bot.removeListener("message", this._messageListener);
     }
     this._messageListener = null;
-    this._log("Message logging disabled", "Packet", "INFO");
   }
 
   /**
@@ -134,7 +145,11 @@ export class Logger {
     const botTag = this._botPrefix();
     const combinedTag = botTag && tag ? `${botTag} ${tag}` : botTag || tag;
     const messageWithCaller = caller ? `[${caller}] ${message}` : message;
-    this._backend.log(messageWithCaller, combinedTag, level);
+    if (this._backendReady) {
+      this._backend.log(messageWithCaller, combinedTag, level);
+    } else {
+      this._logBuffer.push({ message: String(messageWithCaller), tag: combinedTag, level });
+    }
   }
 
   debug(msg: unknown, tag = "", caller?: string): void {

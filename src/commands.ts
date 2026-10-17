@@ -341,6 +341,13 @@ export class CommandManager {
           await this.listFunctions();
         },
       },
+      help: {
+        description: "Show available commands and their descriptions",
+        handler: () => {
+          const helpStr = getHelp(this.tree);
+          this.logger.command(`Available commands:\n${helpStr}`);
+        },
+      },
     };
   }
 
@@ -380,12 +387,28 @@ export class CommandManager {
   }
 
   /**
+   * Route user input: `/command` is processed internally, plain text is
+   * sent to the server as chat via bot.chat().
+   */
+  async handleInput(data: string): Promise<void> {
+    const trimmed = data.trim();
+    if (!trimmed) return;
+    if (trimmed.startsWith("/")) {
+      await this.query(trimmed.slice(1));
+      return;
+    }
+    this.logger.chat(`<${this.bot.username}> ${trimmed}`);
+    this.bot.chat(trimmed);
+  }
+
+  /**
    * Process and execute a command query from user input.
-   * Supports ${variable} substitution.
+   * Supports ${variable} substitution and an optional leading `/`.
    */
   async query(data: string): Promise<void> {
     // Variable substitution
-    const resolved = this.evaluatePlaceholders(data);
+    let resolved = this.evaluatePlaceholders(data);
+    if (resolved.startsWith("/")) resolved = resolved.slice(1);
 
     const { tokens } = tokenize(resolved);
     if (tokens.length === 0) return;
@@ -453,7 +476,16 @@ export class CommandManager {
       this.logger.error(new Error(`Item '${args[1]}' not found`), "Inventory");
       return;
     }
-    const count = args.length >= 3 ? parseInt(args[2]) : 1;
+    const count = args.length >= 3 ? parseInt(args[2], 10) : 1;
+    if (isNaN(count) || count <= 0) {
+      this.logger.error(
+        new Error(
+          `Invalid count '${args[2]}' — expected a positive integer`,
+        ),
+        "Inventory",
+      );
+      return;
+    }
 
     try {
       await this.bot.toss(item.id, null, count);
@@ -579,37 +611,51 @@ export class CommandManager {
   }
 
   /**
-   * Toggle combat mode on/off.
+   * Toggle the combat decision loop on/off.
    */
   toggleCombat(): void {
     // mineflayer plugin property access
-    const listener = this.bot.combatManager.doDecide;
-    if (
-      (this.bot.listenerCount as unknown as (e: string) => number)(
-        "physicsTick",
-      ) > 0
-    ) {
+    const manager = this.bot.combatManager;
+    const listener = manager.doDecide;
+    // Check for this exact listener: the manager also keeps a permanent
+    // `update` physicsTick listener, so listenerCount() is always > 0.
+    const listeners = (
+      this.bot.listeners as unknown as (e: string) => unknown[]
+    )("physicsTick");
+    if (listeners.includes(listener)) {
       this.logger.combat("Combat disabled");
       this.bot.off("physicsTick", listener);
       // mineflayer plugin property access
       this.bot.pvp.stop();
     } else {
       this.logger.combat("Combat enabled");
-      // mineflayer plugin property access
       this.bot.on("physicsTick", listener);
     }
   }
 
   /**
    * Change combat mode.
-   * args[1] is the mode number
+   * args[1] is the mode number (0-3); without it, show the current mode.
    */
   changeMode(args: string[]): void {
     // mineflayer plugin property access
     const cm = this.bot.combatManager;
-    const arg = args[1] ?? String(cm.mode);
-    cm.setMode(parseInt(arg, 10));
-    this.logger.combat(`Mode changed to ${cm.mode}`);
+    if (args[1] === undefined) {
+      this.logger.combat(`Combat mode: ${cm.mode}`);
+      return;
+    }
+    const mode = parseInt(args[1], 10);
+    if (isNaN(mode) || mode < 0 || mode > 3) {
+      this.logger.error(
+        new Error(
+          `Invalid combat mode '${args[1]}'. Valid modes: 0=Mobs, 1=Players Survival, 2=Players All, 3=All Entities`,
+        ),
+        "Combat",
+      );
+      return;
+    }
+    cm.setMode(mode);
+    this.logger.combat(`Combat mode set to ${cm.mode}`);
   }
 
   /**
@@ -636,7 +682,7 @@ export class CommandManager {
     }
     this.logger.debug(`Player Debug: '${player.username}'`, "Debug");
     this.logger.debug(
-      util.inspect(player, { depth: 1, colors: true }),
+      util.inspect(player, { depth: 1, colors: false }),
       "Debug",
     );
   }
@@ -659,7 +705,7 @@ export class CommandManager {
       `Slot Debug: '${item.displayName}' (slot ${slotNumber})`,
       "Debug",
     );
-    this.logger.debug(util.inspect(item, { depth: 1, colors: true }), "Debug");
+    this.logger.debug(util.inspect(item, { depth: 1, colors: false }), "Debug");
   }
 
   /**
@@ -810,7 +856,7 @@ export class CommandManager {
     const n = parseInt(args[2], 10);
     const m = parseInt(args[3], 10);
 
-    if (n <= 0 || m < 0) {
+    if (isNaN(n) || isNaN(m) || n <= 0 || m < 0) {
       this.logger.error(
         "Invalid arguments: run <cmd> <N> <M> where N>0, M>=0",
         "Command",
@@ -975,12 +1021,11 @@ export class CommandManager {
     try {
       const result = await this.functionRegistry[functionName](functionArgs);
 
+      // Only log a return value; the function itself logs its own outcome.
       if (result !== undefined) {
         this.logger.info(
           `Function '${functionName}' returned: ${JSON.stringify(result)}`,
         );
-      } else {
-        this.logger.info(`Function '${functionName}' executed successfully.`);
       }
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : String(error);

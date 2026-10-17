@@ -129,6 +129,7 @@ declare class CommandManager {
   tree: Record<string, unknown>;
   variables: Record<string, unknown>;
   setupCommandTree(): void;
+  handleInput(data: string): Promise<void>;
   evaluatePlaceholders(str: string): string;
   query(data: string): Promise<void>;
   registerCommand(name: string, node: unknown): void;

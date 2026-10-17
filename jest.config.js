@@ -2,7 +2,7 @@
 module.exports = {
   testEnvironment: "node",
   transform: {
-    "^.+\\.ts$": [
+    "^.+\\.(ts|tsx)$": [
       "ts-jest",
       {
         tsconfig: "tsconfig.json",
@@ -12,13 +12,15 @@ module.exports = {
       },
     ],
   },
-  moduleFileExtensions: ["ts", "js", "json", "node"],
+  moduleFileExtensions: ["tsx", "ts", "js", "json", "node"],
   testMatch: ["**/tests/**/*.test.ts"],
   testPathIgnorePatterns: ["<rootDir>/codeArchive/"],
   rootDir: ".",
   moduleNameMapper: {
     "^(\\.{1,2}/.+)\\.js$": "$1",
+    "^(\\.{1,2}/.+)\\.tsx$": "$1",
   },
+  transformIgnorePatterns: ["/node_modules/(?!(ink|ink-.*|react-.*)/)"],
   forceExit: true,
   detectOpenHandles: false,
 };
