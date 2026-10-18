@@ -41,6 +41,7 @@ function makeCtx(overrides: {
     equipPearl: () => invCalls.push("equipPearl"),
     equipBuff: () => invCalls.push("equipBuff"),
     equipFood: () => invCalls.push("equipFood"),
+    equipUtility: () => invCalls.push("equipUtility"),
     isItemUseActive: () => false,
   };
 
@@ -57,6 +58,8 @@ function makeCtx(overrides: {
     },
     food: overrides.food ?? 20,
     combatManager: { _lastFallPearlTime: 0 },
+    getEquipmentDestSlot: (dest: string) => ({ head: 5, torso: 6, legs: 7, feet: 8, "off-hand": 45 }[dest] ?? 0),
+    inventory: { slots: [] },
   };
 
   let lastPearlTime = 0;
@@ -95,6 +98,7 @@ function makeCtx(overrides: {
   };
 
   return {
+    bot,
     // Mirrors PVPManager._buildTreeContext(): a fresh snapshot per run so
     // the write-back through setLastPearlTime is visible next tick.
     nextRunCtx: (): CombatTreeContext => ({ ...ctx, lastPearlTime }),
@@ -214,6 +218,61 @@ describe("combat tree dispatch", () => {
     expect(h.invCalls.filter((c) => c.startsWith("equip"))).toEqual([
       "equipGapple",
     ]);
+  });
+
+  test("gapplesUtility equips gapple to offhand when no totem and offhand empty", () => {
+    const h = makeCtx({
+      has: { golden_apple: true },
+    });
+    const tree = h.build();
+
+    tree.run({ ctx: h.nextRunCtx() });
+
+    const dispatches = h.invCalls.filter((c) => c.startsWith("equip"));
+    // Maintenance armor + weapon always run; gapplesUtility equips gapple.
+    expect(dispatches).toEqual([
+      "equipArmor",
+      "equipWeapon",
+      "equipUtility",
+    ]);
+  });
+
+  test("gapplesUtility does nothing when totem available", () => {
+    const h = makeCtx({
+      has: { golden_apple: true, totem_of_undying: true },
+    });
+    const tree = h.build();
+
+    tree.run({ ctx: h.nextRunCtx() });
+
+    const dispatches = h.invCalls.filter((c) => c.startsWith("equip"));
+    expect(dispatches).toEqual(["equipArmor", "equipWeapon"]);
+  });
+
+  test("gapplesUtility does nothing when no gapple", () => {
+    const h = makeCtx({
+      has: { ender_pearl: true },
+    });
+    const tree = h.build();
+
+    tree.run({ ctx: h.nextRunCtx() });
+
+    const dispatches = h.invCalls.filter((c) => c.startsWith("equip"));
+    expect(dispatches).toEqual(["equipArmor", "equipWeapon"]);
+  });
+
+  test("gapplesUtility does nothing when offhand occupied by non-gapple", () => {
+    const h = makeCtx({
+      has: { golden_apple: true },
+    });
+    const tree = h.build();
+    // Simulate food in offhand: gapplesUtility should not unequip it.
+    h.bot.inventory.slots[45] = { name: "cooked_beef", type: 1, count: 1 };
+
+    tree.run({ ctx: h.nextRunCtx() });
+
+    const dispatches = h.invCalls.filter((c) => c.startsWith("equip"));
+    expect(dispatches).toEqual(["equipArmor", "equipWeapon"]);
   });
 
   test("pearl branch honors the cooldown through setLastPearlTime", () => {

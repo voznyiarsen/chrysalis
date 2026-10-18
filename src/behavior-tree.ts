@@ -289,6 +289,25 @@ export function buildCombatTree(ctx: CombatTreeContext): Node {
             action("eat", (c) => { c.inv().equipFood(); }),
           ],
         }),
+
+        // 9. Gapple utility — equip gapple to offhand (ready state) when no
+        // totems are available. Equips without eating so the gapple is ready
+        // for immediate consumption when health drops. Does not unequip food
+        // or other offhand items.
+        new Sequence({
+          name: "gapplesUtility",
+          nodes: [
+            condition("gapplesUtility", (c) => {
+              const inv = c.inv();
+              const hasGapple = inv.hasItem("golden_apple");
+              const hasTotems = inv.hasItem("totem_of_undying");
+              const offhandSlot = c.bot.getEquipmentDestSlot("off-hand");
+              const offhand = c.bot.inventory.slots[offhandSlot];
+              return hasGapple && !hasTotems && (!offhand || offhand.name === "golden_apple");
+            }),
+            action("equipGappleUtility", (c) => { c.inv().equipUtility(); }),
+          ],
+        }),
       ]),
     ],
   });
