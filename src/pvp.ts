@@ -1028,14 +1028,14 @@ class CombatManager {
     let targetPos: Vec3 | null = null;
 
     if (groundY > -64) {
-      // Solid ground below: aim at it. Target one block above the surface so
-      // the projectile path ends in air (isProjectilePathClear rejects paths
-      // ending inside a block). Bot teleports there and falls ~1 block.
-      targetPos = new Vec3(entity.position.x, groundY + 1.0, entity.position.z);
+      // Solid ground below: aim at the block's top surface (block.y + 1).
+      // The ender pearl collides with the block face and teleports the bot
+      // to safety before impact.
+      targetPos = new Vec3(entity.position.x, groundY, entity.position.z);
     } else {
       // No ground below (void): scan upward for overhead blocks. Ender pearls
       // teleport on collision with ANY solid block, so a ceiling block above
-      // is a valid mitigation target.
+      // is a valid mitigation target. Aim at the ceiling's bottom surface.
       let ceilingY = this.bot.utilsManager.getGroundAbove();
       if (ceilingY <= -64) {
         ceilingY = this.bot.utilsManager.getGroundAbove(
@@ -1044,9 +1044,7 @@ class CombatManager {
       }
       if (ceilingY <= -64) return { canMitigate: false }; // No ground above either
 
-      // Aim at the underside of the ceiling block. Target one block below the
-      // ceiling surface so the projectile path ends in air.
-      targetPos = new Vec3(entity.position.x, ceilingY - 1.0, entity.position.z);
+      targetPos = new Vec3(entity.position.x, ceilingY, entity.position.z);
     }
 
     // Calculate ballistic trajectory to the target (downward or upward).

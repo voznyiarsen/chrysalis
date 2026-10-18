@@ -383,7 +383,7 @@ describe("CombatManager - Health Status", () => {
 
       const result = manager.getFallPearlMitigation();
       expect(result.canMitigate).toBe(true);
-      expect(result.targetPos?.y).toBe(64);
+      expect(result.targetPos?.y).toBe(65);
       expect(result.flightTime).toBe(10);
       expect(result.offset).toBeDefined();
     });
@@ -410,7 +410,7 @@ describe("CombatManager - Health Status", () => {
     test("returns canMitigate true with target and flight time", () => {
       const result = manager.getFallPearlMitigation();
       expect(result.canMitigate).toBe(true);
-      expect(result.targetPos).toEqual({ x: 0, y: 1, z: 0 });
+      expect(result.targetPos).toEqual({ x: 0, y: 0, z: 0 });
       expect(result.flightTime).toBe(10);
       expect(result.offset).toBeDefined();
     });

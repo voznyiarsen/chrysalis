@@ -406,7 +406,18 @@ export function isProjectilePathClear(
 
     // Use swept raycast for block collision (more accurate than discrete check)
     const hitBlock = raycastBlocks(currPos, nextPos, blockAt);
-    if (hitBlock && isPointInBlock(nextPos, hitBlock)) return false;
+    if (hitBlock && isPointInBlock(nextPos, hitBlock)) {
+      // Ender pearls teleport on collision with solid blocks. If the path
+      // enters a block from outside (currPos not inside), the collision at
+      // the surface between them is the teleport trigger — treat as a valid
+      // path end. Only reject if already inside the block (passing through).
+      if (!isPointInBlock(currPos, hitBlock)) {
+        // Entering block from outside = valid ender pearl collision
+        return true;
+      }
+      // Already inside block interior = path is blocked
+      return false;
+    }
 
     // Check entity collisions with correct pearl hitbox (0.25x0.25)
     const hitEntities = entities.filter(
