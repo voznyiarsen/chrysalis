@@ -7,6 +7,8 @@ import { goals, Movements } from "mineflayer-pathfinder";
 import { buildCombatTree, CombatTreeContext } from "./behavior-tree";
 import { StrafeController } from "./strafe";
 import { Node as BTNode, SUCCESS } from "behaviortree";
+import { AABB } from "./utils";
+import { getCollisions } from "./movement";
 
 /**
  * @fileoverview Combat decision engine, PVP manager, and weapon utilities for Pupa bot.
@@ -205,13 +207,13 @@ export class PVPManager {
    *
    * Engages once the target is within STRAFE_RADIUS and the bot is on
    * the ground; the pathfinder goal is released so this manager owns
-   * movement. Every tick the StrafeController re-aims the orbit velocity
-   * (tangent blend + radius pullback); grounded steps are validated
-   * against the walkable surface first, and airborne ticks just hold the
-   * circle. A grounded tick adds a full jump impulse on top, so the bot
-   * bunny-hops in a continuous orbit around the target — the old build's
-   * `velocity.set(vx, 0.42, vz)` strafe. A blocked side still flips the
-   * orbit direction. Disengaging (target escapes attack range) hands
+   * movement. Every tick the StrafeController computes the continuous
+   * orbit velocity (LiquidBounce-style tangential + radial encirclement
+   * redirect), validated by a per-tick physics prediction so the bot never
+   * commits to a path that falls into the void. A grounded tick adds a
+   * jump impulse (vy = 0.42), so the bot bunny-hops in a continuous orbit
+   * around the target. Blocked candidates make the orbit shrink or flip
+   * direction instead. Disengaging (target escapes attack range) hands
    * movement back to the pathfinder with a follow goal.
    */
   private doStrafe(): void {
@@ -246,28 +248,24 @@ export class PVPManager {
     }
 
     const collided = (entity as any).isCollidedHorizontally === true;
-    const velocity = this.strafeController.steerAroundTarget(
+    const blockAt = (pos: Vec3) => this.bot.blockAt(pos);
+
+    // Continuous orbit plan, validated against the real block world.
+    const plan = this.strafeController.computeTick({
       source,
-      targetPos,
-      entity.velocity,
-      (pos: Vec3) => this.bot.blockAt(pos),
-      collided,
-      entity.onGround,
-    );
-    if (velocity) {
-      // Hop the instant the bot lands: re-apply the orbit velocity with a
-      // full jump impulse on top (the old build's velocity.set(vx, 0.42,
-      // vz)), so the bot jumps around the target instead of sliding along
-      // the ground. Airborne ticks keep the same orbit velocity with the
-      // ballistic vertical component, so the pullback holds the circle
-      // through the hop.
-      this.bot.utilsManager.applyImpulse(
-        entity.onGround
-          ? new Vec3(velocity.x, Constants.PHYSICS.JUMP_VELOCITY, velocity.z)
-          : velocity,
-        "set",
-        true,
-      );
+      target: targetPos,
+      velocity: entity.velocity,
+      onGround: entity.onGround,
+      collidedHorizontally: collided,
+      world: {
+        blockAt,
+        getCollisions: (aabb: AABB, minY: number) =>
+          getCollisions(aabb, minY, blockAt),
+      },
+    });
+
+    if (plan) {
+      this.bot.utilsManager.applyImpulse(plan.velocity, "set", true);
     }
 
     // Keep facing the target while sidestepping.

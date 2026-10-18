@@ -1,731 +1,675 @@
 /**
- * @fileoverview Strafe controller — continuous orbit hops with full landing validation.
+ * @fileoverview Strafe controller — continuous per-tick orbit steering with
+ * full physics prediction.
  *
- * The bot hops on every landing tick while applying a continuous orbit velocity
- * (tangent + radius pullback) every tick. The step ahead is validated with a
- * hazard-aware arc sweep (void drops, lava/water, cobwebs, cacti, fire, walls).
+ * Modelled after LiquidBounce's ModuleTargetStrafe (`computeDirectionVec`
+ * + per-tick movement redirect) and Lambda's TargetStrafe/setSpeed model:
+ *
+ * - Every tick (grounded or airborne) the horizontal velocity is *set* to the
+ *   desired orbit direction at a fixed speed — the continuous counterpart of
+ *   LiquidBounce's `withStrafe(yaw, speed)` redirect and Lambda's
+ *   `setSpeed(moveSpeed)`. The orbit vector is LiquidBounce's
+ *   `computeDirectionVec`: a tangential component around the target plus a
+ *   radial encirclement correction that pulls the bot back to the orbit
+ *   radius (clamped so a too-close target pushes outward at most one step).
+ *   There are no discrete orbit points, so the bot traces a continuous,
+ *   roughly circular path instead of oscillating between a few sampled ones.
+ * - Grounded ticks add a jump: vertical velocity 0.42 (Lambda Speed's
+ *   `player.motionY = 0.42` / vanilla jump), while the horizontal component
+ *   keeps the orbit tangent — bunny-hopping in a continuous circle.
+ * - The orbit side flips on horizontal collision (`direction = -direction`),
+ *   like both reference clients.
+ * - Every candidate plan is validated with *continuous physics prediction*:
+ *   a closed-loop, per-tick simulation of the exact control pattern the bot
+ *   will apply (velocity injection + prismarine gravity/drag/collision
+ *   order), rejecting any plan whose simulated path blocks on a wall,
+ *   touches a hazard, or descends into a void. This runs every tick, not
+ *   only when a jump is planned, so the bot aborts or steers away from a
+ *   fall before committing to it.
+ *
+ * Candidate preference: current orbit side at the full radius → progressively
+ * smaller radii (wall/void hugging) → opposite side → inward rescue → brake.
+ * Landing drops up to STRAFE_SAFE_DROP are "safe"; larger drops up to
+ * STRAFE_HAZARD_MAX_DROP are only accepted when nothing better exists.
  */
 
 import { Vec3 } from "vec3";
-import { AABB, isPathClear } from "./collision-oracle";
-import { isJumpPathClear, getGroundBelow } from "./movement";
+import { getGroundBelow, isPositionClear } from "./movement";
+import { AABB } from "./utils";
 import { Constants } from "./constants";
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-const STRAFE_JUMP_DISTANCE = Constants.MOVEMENT.STRAFE_JUMP_DISTANCE;
-const STRAFE_MIN_SPACING = Constants.MOVEMENT.STRAFE_MIN_SPACING;
-const STRAFE_MIN_DISTANCE = Constants.MOVEMENT.STRAFE_MIN_DISTANCE;
-const STRAFE_GRID_RESOLUTION = Constants.MOVEMENT.STRAFE_GRID_RESOLUTION;
-const STRAFE_RADIUS = Constants.MOVEMENT.STRAFE_RADIUS;
-const STRAFE_HAZARD_LOOKAHEAD = Constants.MOVEMENT.STRAFE_HAZARD_LOOKAHEAD;
-const STRAFE_HAZARD_MAX_DROP = Constants.MOVEMENT.STRAFE_HAZARD_MAX_DROP;
-const MAX_AXIS_SPEED = Constants.MOVEMENT.MAX_AXIS_SPEED;
-const PLAYER_HALF_WIDTH = Constants.PHYSICS.PLAYER_OFFSET;
-const PLAYER_HEIGHT = Constants.PHYSICS.PLAYER_HEIGHT;
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-export interface StrafeCandidate {
-  point: Vec3;
-  score: number;
-  distToTarget: number;
-  clearance: number;
+/** World access used for validation. Mirrors PVPManager's bot wiring. */
+export interface StrafeWorld {
+  blockAt(pos: Vec3): any;
+  getCollisions(aabb: AABB, minY: number): AABB[];
 }
+
+/** Per-tick input for the strafe controller. */
+export interface StrafeTickInput {
+  /** Bot feet position at this tick */
+  source: Vec3;
+  /** Target feet position — the orbit center */
+  target: Vec3;
+  /** Bot's current velocity (y is preserved on non-jump ticks) */
+  velocity: Vec3;
+  onGround: boolean;
+  collidedHorizontally: boolean;
+  world: StrafeWorld;
+}
+
+/** Quality of the chosen plan. */
+export type StrafeTier = "safe" | "warn" | "rescue" | "brake";
+
+/** The per-tick movement decision returned by StrafeController. */
+export interface StrafePlan {
+  /**
+   * Velocity to apply this tick. X/Z is the orbit movement (the next tick
+   * moves the bot by exactly this vector); Y is the jump impulse on jump
+   * ticks or the current vertical velocity otherwise.
+   */
+  velocity: Vec3;
+  /** True when this tick launches a jump (vertical velocity 0.42). */
+  jump: boolean;
+  /** Orbit side used for this plan (+1 or -1). */
+  direction: number;
+  /** Orbit radius the plan was validated against. */
+  range: number;
+  /** Plan quality that made it win the candidate search. */
+  tier: StrafeTier;
+  /** Position the bot reaches after one tick of this velocity (probe). */
+  point: Vec3;
+}
+
+/** Parameters for the continuous physics prediction. */
+export interface StrafeSimParams {
+  source: Vec3;
+  target: Vec3;
+  velocity: Vec3;
+  onGround: boolean;
+  /** Launch a jump on the first simulated tick (grounded only). */
+  jump: boolean;
+  direction: number;
+  range: number;
+  speed: number;
+  /** Ground level the bot is standing on / took off from (null = unknown). */
+  referenceGroundY: number | null;
+  world: StrafeWorld;
+  /** Orbit direction control (default) or pure inward steering (rescue). */
+  mode?: "orbit" | "inward";
+  maxTicks?: number;
+}
+/**
+ * Failure reasons for the rescue-mode prediction:
+ * the bot is already airborne over one or more void columns, so per-tick
+ * ground checks are relaxed; the rescue is only valid if it lands on real
+ * ground (drop within MAX_DROP) before the horizon ends.
+ */
+const INWARD_NO_LANDING = "no-landing";
+
+/** Result of the continuous physics prediction. */
+export interface StrafeSimResult {
+  /** No collision, hazard, void, or too-deep drop along the whole path. */
+  safe: boolean;
+  /** Landing drop relative to the reference ground (blocks). */
+  drop: number;
+  /** Whether the simulation reached a landing. */
+  landed: boolean;
+  /** Failure reason when `!safe`: blocked | hazard | void | deep-drop. */
+  reason?: string;
+  ticks: number;
+}
+
+/** Internal candidate evaluated by the controller. */
+interface Candidate {
+  direction: number;
+  range: number;
+  velocity: Vec3;
+  point: Vec3;
+  tier: "safe" | "warn";
+  jump: boolean;
+  result: StrafeSimResult;
+}
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+const SPEED = Constants.MOVEMENT.STRAFE_SPEED;
+const BASE_RANGE = Constants.MOVEMENT.STRAFE_RADIUS;
+const SAFE_DROP = Constants.MOVEMENT.STRAFE_SAFE_DROP;
+const MAX_DROP = Constants.MOVEMENT.STRAFE_HAZARD_MAX_DROP;
+const SIM_TICKS = Constants.MOVEMENT.STRAFE_SIM_TICKS;
+/** Orbit radius cascade tried before flipping the orbit side. */
+const RANGE_STEPS = [1.0, 0.7, 0.45];
+/** getGroundBelow's sentinel: everything at/below this Y is not ground. */
+const VOID_LEVEL = -63.5;
+const EPS = 1e-6;
+
+/** Blocks that must never be stood in or on during a strafe. */
+const HAZARD_BLOCK_NAMES = new Set<string>([
+  ...Constants.BLOCK_DETECTION.UNWANTED_BLOCK_NAMES,
+  "fire",
+  "cobweb",
+]);
+
+const GRAVITY = Constants.PHYSICS.GRAVITY;
+const DRAG = Constants.PHYSICS.DRAG;
+const TERMINAL_VELOCITY = Constants.PHYSICS.TERMINAL_VELOCITY;
+const JUMP_VELOCITY = Constants.PHYSICS.JUMP_VELOCITY;
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-/**
- * Compute the yaw angle for a strafe direction.
- * direction: quarter-turns relative to the target — 0 = forward,
- * +1 = strafe left, -1 = strafe right, 2 = backward.
- */
-export function getStrafeYaw(
-  playerPos: Vec3,
-  targetPos: Vec3,
-  direction: number,
-): number {
-  const dx = targetPos.x - playerPos.x;
-  const dz = targetPos.z - playerPos.z;
-  const minecraftYawToTarget = Math.atan2(-dx, dz);
-  return minecraftYawToTarget + direction * (Math.PI / 2);
-}
-
-/**
- * Apply a strafe impulse to a velocity vector.
- */
-export function withStrafe(
-  velocity: Vec3,
-  yaw: number,
-  speed?: number,
-  strength: number = 1.0,
-): Vec3 {
-  const currentSpeed = Math.hypot(velocity.x, velocity.z);
-  const usedSpeed = speed !== undefined ? speed : currentSpeed;
-  const oneMinusStrength = 1.0 - strength;
-  const prevX = velocity.x * oneMinusStrength;
-  const prevZ = velocity.z * oneMinusStrength;
-  const used = usedSpeed * strength;
-  return new Vec3(
-    prevX - Math.sin(yaw) * used,
-    velocity.y,
-    prevZ + Math.cos(yaw) * used,
+function playerAABB(pos: Vec3): AABB {
+  const half = Constants.PHYSICS.PLAYER_OFFSET;
+  return new AABB(
+    pos.x - half,
+    pos.y,
+    pos.z - half,
+    pos.x + half,
+    pos.y + Constants.PHYSICS.PLAYER_HEIGHT,
+    pos.z + half,
   );
 }
 
-// ---------------------------------------------------------------------------
-// Obstacle tracking
-// ---------------------------------------------------------------------------
-
-export class ObstacleCache {
-  private _obstacles: AABB[] = [];
-  private _holes: [number, number][] = [];
-  private _lastPos: Vec3 | null = null;
-  private _lastUpdateTick = -1;
-
-  get obstacles(): AABB[] {
-    return this._obstacles;
-  }
-
-  get holes(): [number, number][] {
-    return this._holes;
-  }
-
-  /**
-   * Rebuild obstacle and hole maps from the block world.
-   * Only re-query if the bot moved > 0.5 blocks since last update.
-   */
-  update(botPos: Vec3, blockAt: (pos: Vec3) => any): void {
-    if (
-      this._lastPos &&
-      botPos.distanceTo(this._lastPos) < 0.5 &&
-      this._lastUpdateTick >= 0
-    ) {
-      return;
-    }
-    this._lastPos = botPos.clone();
-    this._lastUpdateTick++;
-
-    const radius = Constants.MOVEMENT.SOLID_BLOCK_RADIUS;
-    const obstacles: AABB[] = [];
-    const minX = Math.floor(botPos.x - radius);
-    const maxX = Math.floor(botPos.x + radius);
-    const minZ = Math.floor(botPos.z - radius);
-    const maxZ = Math.floor(botPos.z + radius);
-    const minY = Math.floor(botPos.y);
-    const maxY = Math.floor(botPos.y + PLAYER_HEIGHT);
-
-    for (let x = minX; x <= maxX; x++) {
-      for (let y = minY; y <= maxY; y++) {
-        for (let z = minZ; z <= maxZ; z++) {
-          const block = blockAt(new Vec3(x, y, z));
-          if (block && block.boundingBox !== "empty" && block.shapes) {
-            for (const shape of block.shapes) {
-              obstacles.push(
-                new AABB(
-                  x + shape[0],
-                  y + shape[1],
-                  z + shape[2],
-                  x + shape[3],
-                  y + shape[4],
-                  z + shape[5],
-                ),
-              );
-            }
-          }
-        }
-      }
-    }
-    this._obstacles = obstacles;
-
-    // Detect holes (cells with no walkable surface)
-    const holes: [number, number][] = [];
-    for (let x = minX; x <= maxX; x++) {
-      for (let z = minZ; z <= maxZ; z++) {
-        let hasSurface = false;
-        for (let y = maxY; y >= minY + 1; y--) {
-          const block = blockAt(new Vec3(x, y, z));
-          const above = blockAt(new Vec3(x, y + 1, z));
-          if (
-            block &&
-            block.boundingBox !== "empty" &&
-            (!above || above.boundingBox === "empty")
-          ) {
-            hasSurface = true;
-            break;
-          }
-        }
-        if (!hasSurface) {
-          holes.push([x, z]);
-        }
-      }
-    }
-    this._holes = holes;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Scoring
-// ---------------------------------------------------------------------------
-
-function scoreDistance(dist: number): number {
-  if (dist < 1.0) return 0;
-  if (dist < 2.0) return dist;
-  if (dist <= 2.5) return 6.0 - 2.0 * dist;
-  return -1;
-}
-
-function isInsideObstacleXZ(x: number, z: number, obstacles: AABB[], eps: number): boolean {
-  for (const obs of obstacles) {
-    if (
-      x >= obs.minX - eps &&
-      x <= obs.maxX + eps &&
-      z >= obs.minZ - eps &&
-      z <= obs.maxZ + eps
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function isInsideObstacle(point: Vec3, obstacles: AABB[]): boolean {
-  for (const obs of obstacles) {
-    if (
-      point.x >= obs.minX &&
-      point.x <= obs.maxX &&
-      point.y >= obs.minY &&
-      point.y <= obs.maxY &&
-      point.z >= obs.minZ &&
-      point.z <= obs.maxZ
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function isHole(x: number, z: number, holes: [number, number][]): boolean {
-  const bx = Math.floor(x);
-  const bz = Math.floor(z);
-  for (const [hx, hz] of holes) {
-    if (bx === hx && bz === hz) return true;
-  }
-  return false;
-}
-
-function isPathBlocked(source: Vec3, point: Vec3, obstacles: AABB[]): boolean {
-  const dx = point.x - source.x;
-  const dy = point.y - source.y;
-  const dz = point.z - source.z;
-  const length = Math.hypot(dx, dy, dz);
-  if (length < 1e-6) return false;
-  const dirX = dx / length;
-  const dirY = dy / length;
-  const dirZ = dz / length;
-
-  for (const obs of obstacles) {
-    const mask = new AABB(
-      obs.minX - PLAYER_HALF_WIDTH,
-      obs.minY - PLAYER_HALF_WIDTH,
-      obs.minZ - PLAYER_HALF_WIDTH,
-      obs.maxX + PLAYER_HALF_WIDTH,
-      obs.maxY + PLAYER_HALF_WIDTH,
-      obs.maxZ + PLAYER_HALF_WIDTH,
-    );
-    const [, tFar] = mask.rayHitTFar(source, new Vec3(dirX, dirY, dirZ));
-    if (tFar < 1.0) return true;
-  }
-  return false;
-}
-
-// ---------------------------------------------------------------------------
-// Hazard-aware arc lookahead
-// ---------------------------------------------------------------------------
-//
-// The short ground probe validates a 0.8-block step and the swept
-// volume to it, but the bot actually commits to a full hop that travels
-// several blocks. To stop strafing into death traps (cliff edges, lava,
-// water, cobwebs, cacti, fire, suffocating ceilings) we scan a short arc
-// along the strafe heading and reject the step if any cell along it cannot
-// safely support the bot's landing.
-
-// Reuse the project's "unwanted" block list (lava, water, web, cactus)
-// and add fire, which damages the bot but isn't in that list.
-const HAZARD_BLOCK_NAMES: ReadonlySet<string> = new Set([
-  ...Constants.BLOCK_DETECTION.UNWANTED_BLOCK_NAMES,
-  "fire",
-  "cobweb", // minecraft-data names it "web"; keep both for safety
-]);
-
-/** A block whose collision shape is a full 1x1x1 cube (impassable wall). */
-function isFullCube(block: any): boolean {
-  if (!block || !block.shapes || block.shapes.length === 0) return false;
-  return block.shapes.some(
-    (s: number[]) =>
-      s[0] === 0 && s[1] === 0 && s[2] === 0 &&
-      s[3] === 1 && s[4] === 1 && s[5] === 1,
-  );
-}
-
-/** True if the block is a named movement hazard / damage source. */
-function isHazardBlock(block: any): boolean {
-  if (!block) return false;
-  return HAZARD_BLOCK_NAMES.has(block.name);
-}
-
 /**
- * Scan a straight arc (length = STRAFE_HAZARD_LOOKAHEAD) along the
- * (dirX, dirZ) heading from `source` and return false if any cell holds
- * ground the bot cannot safely stand on:
- *   - no solid support beneath the feet within STRAFE_HAZARD_MAX_DROP
- *     -> the bot would fall and take damage
- *   - a hazard block (lava/water/cobweb/cactus/fire) at foot or head level
- *   - a full-cube obstacle at foot level (a wall the bot can't pass)
- *
- * getGroundBelow finds the first solid surface beneath each column; if the
- * drop from the bot's feet to that surface exceeds the safe threshold the
- * step is rejected before the hop is committed.
+ * Hazard scan of the support/feet/head blocks around a feet position.
+ * Checks the column across three block levels: support (dy=-1), feet (dy=0)
+ * and head (dy=1).
  */
-function isHazardFreeArc(
-  source: Vec3,
-  dirX: number,
-  dirZ: number,
-  blockAt: (pos: Vec3) => any,
-): boolean {
-  const len = Math.hypot(dirX, dirZ);
-  if (len < 1e-6) return true;
-  const ux = dirX / len;
-  const uz = dirZ / len;
-  const footY = Math.floor(source.y);
-  const headY = footY + 1;
-  const belowY = footY - 1; // block directly under the feet (landing support)
-
-  for (let t = 0; t <= STRAFE_HAZARD_LOOKAHEAD; t += STRAFE_GRID_RESOLUTION) {
-    const x = source.x + ux * t;
-    const z = source.z + uz * t;
-    const bx = Math.floor(x);
-    const bz = Math.floor(z);
-
-    // Full-height solid block at foot level = an impassable wall.
-    const feet = blockAt(new Vec3(bx, footY, bz));
-    if (isFullCube(feet)) return false;
-    if (isHazardBlock(feet)) return false;
-
-    // Hazard floating at / above head height (lava on a ledge, fire, webs).
-    const head = blockAt(new Vec3(bx, headY, bz));
-    if (isHazardBlock(head)) return false;
-
-    // The block directly beneath the feet is the landing support.
-    const support = blockAt(new Vec3(bx, belowY, bz));
-    if (isHazardBlock(support)) return false;
-
-    // Solid ground must hold the landing. getGroundBelow finds the surface
-    // of the first solid block beneath the column; if the drop from the
-    // bot's feet exceeds the safe threshold the bot would fall.
-    const groundY = getGroundBelow(new Vec3(x, source.y, z), blockAt);
-    if (source.y - groundY > STRAFE_HAZARD_MAX_DROP) return false;
+function hasHazardAt(pos: Vec3, blockAt: (pos: Vec3) => any): boolean {
+  const baseY = Math.floor(pos.y);
+  for (let dy = -1; dy <= 1; dy++) {
+    const block = blockAt(new Vec3(pos.x, baseY + dy, pos.z));
+    if (block && HAZARD_BLOCK_NAMES.has(block.name)) return true;
   }
-  return true;
+  return false;
 }
 
 // ---------------------------------------------------------------------------
-// Walkable surface
+// computeDirectionVec — LiquidBounce's encirclement formula
 // ---------------------------------------------------------------------------
 
 /**
- * Find a walkable surface Y at the given (x, z) by scanning downward.
- */
-export function findWalkableSurface(
-  x: number,
-  z: number,
-  targetY: number,
-  blockAt: (pos: Vec3) => any,
-): Vec3 | null {
-  const step = STRAFE_GRID_RESOLUTION;
-  const maxY = targetY + STRAFE_JUMP_DISTANCE;
-  const minY = targetY - 2;
-  const halfWidth = PLAYER_HALF_WIDTH;
-  const height = PLAYER_HEIGHT;
-
-  for (let y = maxY; y >= minY; y -= step) {
-    const bx = Math.floor(x);
-    const by = Math.floor(y);
-    const bz = Math.floor(z);
-    const block = blockAt(new Vec3(bx, by, bz));
-    if (!block || block.boundingBox === "empty") continue;
-
-    const shape = block.shapes[0];
-    // Shape layout is [minX, minY, minZ, maxX, maxY, maxZ]: the standing
-    // surface is the shape's top face (maxY). Falling back to a full cube
-    // keeps shapesless blocks (by + 1) consistent.
-    const surfaceY = shape ? by + shape[4] : by + 1;
-
-    const clearMinX = Math.floor(x - halfWidth);
-    const clearMaxX = Math.floor(x + halfWidth);
-    const clearMinY = Math.floor(surfaceY);
-    const clearMaxY = Math.floor(surfaceY + height);
-    const clearMinZ = Math.floor(z - halfWidth);
-    const clearMaxZ = Math.floor(z + halfWidth);
-
-    let isClear = true;
-    for (let cx = clearMinX; cx <= clearMaxX && isClear; cx++) {
-      for (let cy = clearMinY; cy <= clearMaxY && isClear; cy++) {
-        for (let cz = clearMinZ; cz <= clearMaxZ && isClear; cz++) {
-          const aboveBlock = blockAt(new Vec3(cx, cy, cz));
-          if (aboveBlock && aboveBlock.boundingBox !== "empty") {
-            if (aboveBlock.shapes && aboveBlock.shapes.length > 0) {
-              for (const s of aboveBlock.shapes) {
-                if (
-                  x + halfWidth > cx + s[0] &&
-                  x - halfWidth < cx + s[3] &&
-                  surfaceY + height > cy + s[1] &&
-                  surfaceY < cy + s[4] &&
-                  z + halfWidth > cz + s[2] &&
-                  z - halfWidth < cz + s[5]
-                ) {
-                  isClear = false;
-                  break;
-                }
-              }
-            } else {
-              isClear = false;
-            }
-          }
-        }
-      }
-    }
-
-    if (isClear) {
-      return new Vec3(x, surfaceY, z);
-    }
-  }
-  return null;
-}
-
-// ---------------------------------------------------------------------------
-// Main: getStrafePoint (point-to-point hop evaluator, kept for future use)
-// ---------------------------------------------------------------------------
-
-/**
- * Find the best strafe point around a target.
+ * Compute the per-tick horizontal velocity for orbiting the target.
  *
- * Samples candidate points in a circle around the target at
- * STRAFE_JUMP_DISTANCE, checks walkability, obstacle collision,
- * and returns the best-scoring candidate.
+ * LiquidBounce formula: a tangential component (magnitude `speed`, rotating
+ * around the target on `direction`'s side) plus a radial encirclement
+ * correction `max(-speed, distance - range)` pointing at the target. The sum
+ * is normalized back to `speed` so the orbit speed is constant regardless of
+ * the correction strength — LiquidBounce redirects movement toward the
+ * resulting direction at the current speed, so the yaw is what matters.
  *
- * @param source - Bot position (feet-level)
- * @param target - PvP target position
- * @param obstacles - Current obstacle cache
- * @param holes - Current hole map
- * @param blockAt - Block lookup callback
- * @param recentPoints - Recent strafe points (for spacing)
- * @param direction - Current strafe direction (+1 / -1)
- * @returns Best strafe point, or null if none found
+ * Convention: `bearing = atan2(dz, dx)` uses the standard math orientation,
+ * so circle points are `target + (cos a, sin a) * r` — consistent with the
+ * tangential/radial trig below (no yaw-mirroring mismatch).
+ *
+ * @param source - Bot feet position
+ * @param target - Target (orbit center)
+ * @param speed - Orbit speed (blocks/tick)
+ * @param range - Desired orbit radius (blocks)
+ * @param direction - Orbit side: +1 or -1
  */
-export function getStrafePoint(
+export function computeDirectionVec(
   source: Vec3,
   target: Vec3,
-  obstacles: AABB[],
-  holes: [number, number][],
-  blockAt: (pos: Vec3) => any,
-  recentPoints: Vec3[],
-  direction: number = 1,
-): Vec3 | null {
-  const candidates: StrafeCandidate[] = [];
-  const yaw = getStrafeYaw(source, target, direction);
-  const candidate = source.offset(
-    -Math.sin(yaw) * STRAFE_JUMP_DISTANCE,
-    0,
-    Math.cos(yaw) * STRAFE_JUMP_DISTANCE,
-  );
+  speed: number,
+  range: number,
+  direction: number,
+): Vec3 {
+  const dx = target.x - source.x;
+  const dz = target.z - source.z;
+  const distance = Math.hypot(dx, dz);
+  const bearing = Math.atan2(dz, dx);
 
-  const walkable = findWalkableSurface(
-    candidate.x,
-    candidate.z,
-    candidate.y,
-    blockAt,
-  );
-  if (!walkable) return null;
+  // Tangential unit vector: perpendicular to the bot→target line.
+  const tangentialX = -Math.sin(bearing) * direction;
+  const tangentialZ = Math.cos(bearing) * direction;
+  // Radial encirclement toward the orbit radius, clamped so a too-close
+  // target pushes outward by at most one speed step (LiquidBounce).
+  const encirclement = Math.max(-speed, distance - range);
+  const radialX = Math.cos(bearing) * encirclement;
+  const radialZ = Math.sin(bearing) * encirclement;
 
-  if (isInsideObstacle(walkable, obstacles)) return null;
-  if (isHole(walkable.x, walkable.z, holes)) return null;
-  if (isPathBlocked(source, walkable, obstacles)) return null;
-
-  const distToTarget = Math.hypot(
-    walkable.x - target.x,
-    walkable.z - target.z,
-  );
-  const distToSource = Math.hypot(
-    walkable.x - source.x,
-    walkable.z - source.z,
-  );
-
-  if (distToSource < STRAFE_MIN_DISTANCE) return null;
-
-  // Check spacing against recent points
-  let tooClose = false;
-  for (const rp of recentPoints) {
-    if (Math.hypot(walkable.x - rp.x, walkable.z - rp.z) < STRAFE_MIN_SPACING) {
-      tooClose = true;
-      break;
-    }
+  let vx = tangentialX * speed + radialX;
+  let vz = tangentialZ * speed + radialZ;
+  const len = Math.hypot(vx, vz);
+  if (len > EPS) {
+    vx = (vx / len) * speed;
+    vz = (vz / len) * speed;
+  } else {
+    // Degenerate: fall back to the pure tangent.
+    vx = tangentialX * speed;
+    vz = tangentialZ * speed;
+    const tangentLen = Math.hypot(vx, vz) || 1;
+    vx = (vx / tangentLen) * speed;
+    vz = (vz / tangentLen) * speed;
   }
-  if (tooClose) return null;
 
-  const score = scoreDistance(distToTarget);
-  candidates.push({
-    point: walkable,
-    score,
-    distToTarget,
-    clearance: 0,
-  });
+  return new Vec3(vx, 0, vz);
+}
 
-  if (candidates.length === 0) return null;
-  candidates.sort((a, b) => b.score - a.score);
-  return candidates[0].point;
+/** Unit direction from a position toward the target, scaled to `speed`. */
+function inwardVector(
+  source: Vec3,
+  target: Vec3,
+  speed: number,
+): Vec3 {
+  const dx = target.x - source.x;
+  const dz = target.z - source.z;
+  const len = Math.hypot(dx, dz) || 1;
+  return new Vec3((dx / len) * speed, 0, (dz / len) * speed);
 }
 
 // ---------------------------------------------------------------------------
-// StrafeController — high-level strafe decision (continuous orbit)
+// simulateStrafePath — continuous physics prediction
 // ---------------------------------------------------------------------------
 
-export class StrafeController {
-  private _direction: number = 1;
-  private _strafePoint: Vec3 | null = null;
-  private _obstacleCache: ObstacleCache;
-  private _recentPoints: Vec3[] = [];
-  private _maxRecent: number;
+/**
+ * Predict the bot's path over the coming ticks with the candidate control
+ * applied continuously on every simulated tick (closed loop):
+ *
+ * - horizontal velocity is *set* each tick to the candidate's orbit vector
+ *   (or inward steering in rescue mode);
+ * - a grounded start with `jump` launches with vy = 0.42, like Lambda's
+ *   Speed module;
+ * - vertical motion is real physics (gravity −0.08, drag 0.98, terminal
+ *   velocity −3.92);
+ * - movement resolution mirrors prismarine-physics `moveEntity` (Y first,
+ *   then X, then Z; onGround set on downward Y collisions; velocities zeroed
+ *   on collision).
+ *
+ * The prediction is what makes void safety continuous: any candidate whose
+ * simulated path blocks on geometry, touches hazards, or whose ground drops
+ * into a void / beyond MAX_DROP is rejected before the real bot moves.
+ */
+export function simulateStrafePath(params: StrafeSimParams): StrafeSimResult {
+  const maxTicks = params.maxTicks ?? SIM_TICKS;
+  const mode = params.mode ?? "orbit";
+  const blockAt = params.world.blockAt;
+  // Airborne rescue mode flies through void columns (the bot is already
+  // committed to gravity); success means landing on real ground before the
+  // horizon ends. A grounded rescue keeps stricter ground checks.
+  const relaxGroundChecks = mode === "inward" && !params.onGround;
+  // Effective ground reference for the landing-drop measurement.
+  const dropReferenceY = params.referenceGroundY ?? params.source.y;
 
-  constructor(maxRecent: number = Constants.MOVEMENT.STRAFE_HISTORY_SIZE) {
-    this._obstacleCache = new ObstacleCache();
-    this._maxRecent = maxRecent;
+  const pos = params.source.clone();
+  let vx = params.velocity.x;
+  let vy = params.velocity.y;
+  let vz = params.velocity.z;
+  let onGround = params.onGround;
+  let jumpPending = params.jump && onGround;
+  let everAirborne = !onGround;
+  let landed = false;
+  let drop = 0;
+
+  for (let tick = 0; tick < maxTicks; tick++) {
+    // 1. Control — set horizontal velocity this tick (the "move" of this
+    //    tick comes from the velocity set during the previous tick).
+    if (mode === "inward") {
+      const inward = inwardVector(pos, params.target, params.speed);
+      vx = inward.x;
+      vz = inward.z;
+    } else {
+      const dirVel = computeDirectionVec(
+        pos,
+        params.target,
+        params.speed,
+        params.range,
+        params.direction,
+      );
+      vx = dirVel.x;
+      vz = dirVel.z;
+    }
+    if (onGround && jumpPending) vy = JUMP_VELOCITY;
+    jumpPending = false;
+    // Grounded rest velocity (tests may pass exactly 0; the real bot stands
+    // with the post-friction -0.0784 value this mirrors).
+    if (onGround && !jumpPending && vy === 0) vy = (0 - GRAVITY) * DRAG;
+
+    // 2. Collision-resolved move — prismarine moveEntity: Y, X, Z. Offsets
+    //    use prismarine's exact semantics (touching is not colliding; the
+    //    mover clamps against blocks it is entirely above/below of).
+    let bb = playerAABB(pos);
+    const collisions = params.world.getCollisions(
+      bb.extend(vx, vy, vz),
+      -Infinity,
+    );
+
+    let dy = vy;
+    for (const c of collisions) dy = bb.calculateYOffset(c, dy);
+    const yBlocked = Math.abs(dy - vy) > EPS;
+    bb = bb.offset(0, dy, 0);
+    pos.y += dy;
+
+    let dx = vx;
+    for (const c of collisions) dx = bb.calculateXOffset(c, dx);
+    let dz = vz;
+    for (const c of collisions) dz = bb.calculateZOffset(c, dz);
+    const horizontalBlocked =
+      Math.abs(dx - vx) > EPS || Math.abs(dz - vz) > EPS;
+
+    pos.x += dx;
+    pos.z += dz;
+
+    // 3. Update flags — prismarine: onGround requires a downward Y collision;
+    //    colliding velocities are zeroed.
+    if (yBlocked && vy < 0) {
+      if (!landed) {
+        const g = getGroundBelow(pos, blockAt);
+        drop = dropReferenceY - g;
+        if (everAirborne) {
+          landed = true;
+          if (drop > MAX_DROP) {
+            return {
+              safe: false,
+              drop,
+              landed: true,
+              reason: "deep-drop",
+              ticks: tick + 1,
+            };
+          }
+        }
+      }
+      onGround = true;
+      vy = 0;
+    } else {
+      onGround = false;
+      if (vy > 0 && yBlocked) vy = 0; // head bump
+      everAirborne = true;
+    }
+
+    // 4. Per-tick safety: hazards always; ground presence/drop depth only in
+    //    orbit mode (rescue mode already tolerates void columns it crosses).
+    if (hasHazardAt(pos, blockAt)) {
+      return { safe: false, drop, landed, reason: "hazard", ticks: tick + 1 };
+    }
+    if (!relaxGroundChecks) {
+      const groundY = getGroundBelow(pos, blockAt);
+      if (groundY <= VOID_LEVEL) {
+        return { safe: false, drop, landed, reason: "void", ticks: tick + 1 };
+      }
+      if (params.referenceGroundY !== null && params.referenceGroundY - groundY > MAX_DROP) {
+        return {
+          safe: false,
+          drop,
+          landed,
+          reason: "deep-drop",
+          ticks: tick + 1,
+        };
+      }
+    } else if (pos.y < dropReferenceY - 4) {
+      // Rescue fell well below its starting level without landing.
+      return {
+        safe: false,
+        drop,
+        landed,
+        reason: "deep-drop",
+        ticks: tick + 1,
+      };
+    }
+    if (horizontalBlocked && !landed) {
+      return { safe: false, drop, landed, reason: "blocked", ticks: tick + 1 };
+    }
+    if (landed) {
+      // Landing stabilizes the sim; the next tick computes a fresh plan.
+      return { safe: true, drop, landed: true, ticks: tick + 1 };
+    }
+
+    // 5. Physics for the next tick. Horizontal gets overwritten by the
+    //    control anyway; vertical momentum carries over exactly like the
+    //    real bot (prismarine zeroes vy on collision, then gravity + drag).
+    vy = (vy - GRAVITY) * DRAG;
+    if (vy < TERMINAL_VELOCITY) vy = TERMINAL_VELOCITY;
   }
 
+  if (mode === "inward" && everAirborne && !landed) {
+    // The rescue never touched ground — no guaranteed recovery.
+    return {
+      safe: false,
+      drop,
+      landed: false,
+      reason: INWARD_NO_LANDING,
+      ticks: maxTicks,
+    };
+  }
+
+  // Still airborne after the horizon: the per-tick checks above cover the
+  // dangerous part into the visible future.
+  return { safe: true, drop, landed, ticks: maxTicks };
+}
+
+// ---------------------------------------------------------------------------
+// StrafeController
+// ---------------------------------------------------------------------------
+
+/**
+ * Continuous per-tick strafe driver. Candidate preference:
+ *
+ * 1. Hop orbit (`jump: true` on grounded ticks): the current orbit side (the
+ *    flipped side right after a collision) at radius steps 1.0/0.7/0.45 ×
+ *    STRAFE_RADIUS, each validated with probe clearance + continuous
+ *    physics prediction. A "safe" plan wins immediately; a "warn" plan
+ *    (descends ≤ MAX_DROP) is remembered as a fallback.
+ * 2. Walk orbit (grounded ticks only, when every hop was rejected): the
+ *    same candidates without a jump.
+ * 3. Rescue: steer straight toward the target (validated the same way) —
+ *    airborne falls head for the known-safe ground under the target.
+ * 4. Brake: no validated plan — stop horizontal motion and stand; never
+ *    jump into an unresolved path.
+ */
+export class StrafeController {
+  private _direction = 1;
+  private _groundY: number | null = null;
+
+  /** Current orbit side (+1 / -1). Flips on collision. */
   get direction(): number {
     return this._direction;
   }
 
-  get strafePoint(): Vec3 | null {
-    return this._strafePoint;
+  reset(): void {
+    this._direction = 1;
+    this._groundY = null;
   }
 
   /**
-   * Compute and apply a strafe jump toward the target.
-   * Returns the strafe point if a jump was applied, null otherwise.
-   * (Kept for potential future use; not wired to PVPManager.)
+   * Compute this tick's strafe plan. Returns null when the target is out of
+   * attack range (the caller disengages) or coincident with the bot.
    */
-  computeStrafe(
-    source: Vec3,
-    target: Vec3,
-    blockAt: (pos: Vec3) => any,
-    isOnGround: boolean,
-    isCollidedHorizontally: boolean,
-  ): Vec3 | null {
-    // Flip direction on collision
-    if (isCollidedHorizontally) {
-      this._direction = -this._direction;
-      this._strafePoint = null;
-    }
+  computeTick(input: StrafeTickInput): StrafePlan | null {
+    const { source, target, velocity, onGround, collidedHorizontally, world } =
+      input;
 
-    this._obstacleCache.update(source, blockAt);
-
-    const distToTarget = Math.hypot(
-      source.x - target.x,
-      source.z - target.z,
-    );
-
-    if (distToTarget > STRAFE_RADIUS) {
-      this._strafePoint = null;
+    const dxT = target.x - source.x;
+    const dzT = target.z - source.z;
+    const dist = Math.hypot(dxT, dzT);
+    if (dist > Constants.COMBAT.ATTACK_RANGE || dist < EPS) {
+      this.reset();
       return null;
     }
 
-    if (isOnGround) {
-      // Validate existing strafe point
-      if (this._strafePoint) {
-        const distToPoint = Math.hypot(
-          source.x - this._strafePoint.x,
-          source.z - this._strafePoint.z,
-        );
-        if (distToPoint > STRAFE_RADIUS + 1) {
-          this._strafePoint = null;
-        } else {
-          const blocked = !isPathClear(source, this._strafePoint, blockAt);
-          if (blocked || distToPoint < 0.2) {
-            this._strafePoint = null;
-          }
-        }
-      }
+    if (collidedHorizontally) this._direction = -this._direction;
 
-      // Find new strafe point
-      if (!this._strafePoint) {
-        const directions = [this._direction, -this._direction, 0, 2];
-        for (const dir of directions) {
-          this._strafePoint = getStrafePoint(
-            source,
-            target,
-            this._obstacleCache.obstacles,
-            this._obstacleCache.holes,
-            blockAt,
-            this._recentPoints,
-            dir,
-          );
-          if (this._strafePoint) {
-            this._direction = dir;
-            break;
-          }
-        }
-      }
-
-      if (this._strafePoint) {
-        // Record recent point
-        this._recentPoints.push(this._strafePoint.clone());
-        if (this._recentPoints.length > this._maxRecent) {
-          this._recentPoints.shift();
-        }
-      }
+    const groundHere = getGroundBelow(source, world.blockAt);
+    if (onGround) {
+      this._groundY = groundHere > VOID_LEVEL ? groundHere : null;
     }
+    const referenceGroundY = this._groundY;
 
-    return this._strafePoint;
-  }
+    const hop = this._search(input, referenceGroundY, true);
+    const walk =
+      onGround && !hop.safe
+        ? this._search(input, referenceGroundY, false)
+        : null;
 
-  /**
-   * Continuous lateral steering for circling a nearby target (combat).
-   *
-   * The step direction is re-aimed from the bot's current position every tick.
-   * A pure tangent step of length s widens the orbit to sqrt(r^2 + s^2), so the
-   * tangent blend gets an exact pullback that lands the step back on the
-   * STRAFE_RADIUS circle — including after a hop has pushed the bot in
-   * or out. While grounded each step ahead is validated with the
-   * walkable-surface scan and a swept AABB test; a blocked side flips
-   * the orbit direction. Airborne ticks (onGround=false) skip that probe
-   * — the jump arc is already committed — and only hold the circle. The
-   * lateral velocity is blended with the current velocity (withStrafe)
-   * so direction changes carry momentum instead of snapping.
-   *
-   * @param source - Bot position (feet-level)
-   * @param target - PvP target position
-   * @param velocity - Current bot velocity
-   * @param blockAt - Block lookup callback
-   * @param isCollidedHorizontally - Whether the bot pushed into a wall
-   * @param onGround - Whether the bot is grounded (probes the step ahead)
-   * @returns Blended velocity with the strafe applied, or null to hold
-   */
-  steerAroundTarget(
-    source: Vec3,
-    target: Vec3,
-    velocity: Vec3,
-    blockAt: (pos: Vec3) => any,
-    isCollidedHorizontally: boolean,
-    onGround: boolean = true,
-  ): Vec3 | null {
-    if (isCollidedHorizontally) {
-      this._direction = -this._direction;
-    }
+    const chosen =
+      hop.safe ??
+      walk?.safe ??
+      walk?.warn ??
+      hop.warn ??
+      null;
 
-    const radiusDx = source.x - target.x;
-    const radiusDz = source.z - target.z;
-    const radius = Math.hypot(radiusDx, radiusDz);
-    // Beyond melee reach the caller hands movement back to the
-    // pathfinder; steering here would just fight the follow goal. In
-    // between, steer back toward the orbit.
-    if (radius > Constants.COMBAT.ATTACK_RANGE) return null;
-    // Too close to orbit meaningfully; hold and attack from point blank.
-    if (radius < STRAFE_MIN_DISTANCE) return null;
-
-    const speed = Constants.MOVEMENT.STRAFE_SPEED;
-    const strength = Constants.MOVEMENT.STRAFE_STRENGTH;
-
-    // Try the preferred side first, then the opposite one.
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const yaw = getStrafeYaw(source, target, this._direction);
-      const blended = withStrafe(velocity, yaw, speed, strength);
-
-      // Pull the step back onto the orbit circle: a step whose tangential
-      // part is s_t and radial part is b_r must be corrected inward by
-      // p = r + b_r - sqrt(R^2 - s_t^2) to land at radius R again.
-      const ux = radiusDx / radius;
-      const uz = radiusDz / radius;
-      const step = Math.hypot(blended.x, blended.z);
-      const radial = blended.x * ux + blended.z * uz;
-      const tangential = Math.sqrt(Math.max(step * step - radial * radial, 0));
-      const pullback = Math.max(
-        -step,
-        Math.min(
-          step,
-          radius +
-            radial -
-            Math.sqrt(
-              Math.max(
-                STRAFE_RADIUS * STRAFE_RADIUS - tangential * tangential,
-                0,
-              ),
-            ),
+    if (chosen) {
+      this._direction = chosen.direction;
+      const jump = chosen.jump;
+      return {
+        velocity: new Vec3(
+          chosen.velocity.x,
+          jump ? JUMP_VELOCITY : velocity.y,
+          chosen.velocity.z,
         ),
-      );
-      const dirX = blended.x - ux * pullback;
-      const dirZ = blended.z - uz * pullback;
-
-      const clear = !onGround || this._isStepClear(source, dirX, dirZ, blockAt);
-      if (clear) {
-        return new Vec3(dirX, blended.y, dirZ);
-      }
-
-      this._direction = -this._direction;
+        jump,
+        direction: chosen.direction,
+        range: chosen.range,
+        tier: chosen.tier,
+        point: chosen.point,
+      };
     }
 
-    return null;
+    // Rescue: validated inward steering toward the target's ground.
+    const rescue = this._searchInward(input, referenceGroundY, dist);
+    if (rescue) {
+      return {
+        velocity: new Vec3(
+          rescue.velocity.x,
+          velocity.y,
+          rescue.velocity.z,
+        ),
+        jump: false,
+        direction: this._direction,
+        range: BASE_RANGE,
+        tier: "rescue",
+        point: rescue.point,
+      };
+    }
+
+    // Brake: stand. Never commit to an unresolved path.
+    return {
+      velocity: new Vec3(0, velocity.y, 0),
+      jump: false,
+      direction: this._direction,
+      range: BASE_RANGE,
+      tier: "brake",
+      point: source.clone(),
+    };
   }
 
   /**
-   * Validate the step ahead along a movement direction: a walkable
-   * surface at the current level, reachable without clipping terrain.
-   * Endpoints are lifted a hair above the floor so the feet-level sweep
-   * does not graze the ground block under floating-point noise.
-   *
-   * Also runs a hazard-aware arc lookahead (STRAFE_HAZARD_LOOKAHEAD blocks)
-   * to reject steps that carry the bot over cliffs into lava/water/cobwebs
-   * or off lethal drops.
+   * Candidate search over both orbit sides and radius steps.
+   * Returns the first fully "safe" and the first "warn" plan.
    */
-  private _isStepClear(
-    source: Vec3,
-    dirX: number,
-    dirZ: number,
-    blockAt: (pos: Vec3) => any,
-  ): boolean {
-    const len = Math.hypot(dirX, dirZ);
-    if (len < 1e-6) return false;
+  private _search(
+    input: StrafeTickInput,
+    referenceGroundY: number | null,
+    allowJump: boolean,
+  ): { safe: Candidate | null; warn: Candidate | null } {
+    let safe: Candidate | null = null;
+    let warn: Candidate | null = null;
 
-    const probe = source.offset(
-      (dirX / len) * Constants.MOVEMENT.STRAFE_PROBE_DISTANCE,
-      0,
-      (dirZ / len) * Constants.MOVEMENT.STRAFE_PROBE_DISTANCE,
-    );
+    for (const direction of [this._direction, -this._direction]) {
+      for (const step of RANGE_STEPS) {
+        const range = BASE_RANGE * step;
+        const velocity = computeDirectionVec(
+          input.source,
+          input.target,
+          SPEED,
+          range,
+          direction,
+        );
+        const point = new Vec3(
+          input.source.x + velocity.x,
+          input.source.y,
+          input.source.z + velocity.z,
+        );
 
-    const walkable = findWalkableSurface(probe.x, probe.z, source.y, blockAt);
-    if (!walkable) return false;
-    if (Math.abs(walkable.y - source.y) > 0.5) return false;
-    if (!isPathClear(source.offset(0, 0.01, 0), walkable.offset(0, 0.01, 0), blockAt)) {
-      return false;
+        if (!isPositionClear(point, input.world.blockAt)) continue;
+        if (hasHazardAt(point, input.world.blockAt)) continue;
+
+        const jump = allowJump && input.onGround;
+        const result = simulateStrafePath({
+          source: input.source,
+          target: input.target,
+          velocity: input.velocity,
+          onGround: input.onGround,
+          jump,
+          direction,
+          range,
+          speed: SPEED,
+          referenceGroundY,
+          world: input.world,
+        });
+
+        if (!result.safe) continue;
+        const tier: "safe" | "warn" =
+          result.drop > SAFE_DROP ? "warn" : "safe";
+        const candidate: Candidate = {
+          direction,
+          range,
+          velocity,
+          point,
+          tier,
+          jump,
+          result,
+        };
+        if (tier === "safe") return { safe: candidate, warn };
+        if (!warn) warn = candidate;
+      }
     }
 
-    // Hazard-aware arc lookahead: reject steps that carry the bot over a
-    // cliff into lava/water, through a cobweb, or off a lethal drop. This
-    // covers the full hop distance rather than the 0.8-block probe above.
-    if (!isHazardFreeArc(source, dirX, dirZ, blockAt)) return false;
-
-    return true;
+    return { safe, warn };
   }
 
-  reset(): void {
-    this._direction = 1;
-    this._strafePoint = null;
-    this._recentPoints = [];
+  /**
+   * Inward rescue candidate: steer straight toward the target. Accepted only
+   * when the continuous prediction of the inward walk is fully safe.
+   */
+  private _searchInward(
+    input: StrafeTickInput,
+    referenceGroundY: number | null,
+    dist: number,
+  ): Candidate | null {
+    const velocity = inwardVector(input.source, input.target, SPEED);
+    const point = new Vec3(
+      input.source.x + velocity.x,
+      input.source.y,
+      input.source.z + velocity.z,
+    );
+    if (!isPositionClear(point, input.world.blockAt)) return null;
+    if (hasHazardAt(point, input.world.blockAt)) return null;
+    if (dist < SPEED) {
+      // Already at the target; standing is the safe action.
+      return null;
+    }
+
+    const result = simulateStrafePath({
+      source: input.source,
+      target: input.target,
+      velocity: input.velocity,
+      onGround: input.onGround,
+      jump: false,
+      direction: this._direction,
+      range: BASE_RANGE,
+      speed: SPEED,
+      referenceGroundY,
+      world: input.world,
+      mode: "inward",
+    });
+    if (!result.safe) return null;
+
+    return {
+      direction: this._direction,
+      range: BASE_RANGE,
+      velocity,
+      point,
+      tier: "warn",
+      jump: false,
+      result,
+    };
   }
 }

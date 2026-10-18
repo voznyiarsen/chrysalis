@@ -401,7 +401,7 @@ export class UtilsManager {
 
   getSlipperiness(pos: Vec3): number {
     const entity = this.bot.entity as any;
-    if (!entity.onGround) return Constants.PHYSICS.SLIPPERINESS.AIRBORNE;
+    if (!entity.onGround) return Constants.PHYSICS.SLIPPERINESS.DEFAULT;
     const offset = this.isNewSlipperiness ? 0.5 : 1.0;
     const blockPos = pos.offset(0, -offset, 0);
     const block = this.bot.blockAt(blockPos);

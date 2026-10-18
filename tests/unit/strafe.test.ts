@@ -1,14 +1,33 @@
 /**
- * @fileoverview Unit tests for the strafe controller's continuous orbit steering.
+ * @fileoverview Unit tests for the continuous strafe controller.
  *
- * Covers the continuous circle-strafe used by PVPManager (steerAroundTarget)
- * and the walkable-surface + hazard scan it depends on, using a mocked flat world.
+ * The controller sets the orbit velocity every tick (grounded and airborne)
+ * from a tangential + radial-encirclement direction vector, with a full
+ * closed-loop physics prediction validating every candidate before the bot
+ * moves. These tests cover:
+ *
+ * - computeDirectionVec geometry (tangential at range, inward when far,
+ *   outward when close, constant magnitude, no yaw-mirroring mismatch),
+ * - the continuous predictor (void/deep-drop/hazard/wall rejection, landing
+ *   drop measurement) and jump velocity (0.42 on jump ticks, y preserved
+ *   otherwise),
+ * - controller behavior: bunny-hop orbit on flat ground, blocked orbit
+ *   radius cascade, direction flip on collision, void avoidance, hazard
+ *   avoidance, rescue and brake,
+ * - integration loops that reproduce the original bug reports: a flat
+ *   ground orbit must be circular (no oscillation) and an orbit next to a
+ *   void hole must never step into the void.
  */
 
 import { Vec3 } from "vec3";
-import { StrafeController, findWalkableSurface } from "../../src/strafe";
+import {
+  StrafeController,
+  computeDirectionVec,
+  simulateStrafePath,
+} from "../../src/strafe";
+import type { StrafeWorld } from "../../src/strafe";
+import { getCollisions, getGroundBelow } from "../../src/movement";
 import { Constants } from "../../src/constants";
-import { AABB } from "../../src/utils";
 
 // ── Mock block world ────────────────────────────────────────────────
 
@@ -18,379 +37,671 @@ const SOLID = {
   shapes: [[0, 0, 0, 1, 1, 1]],
 };
 const AIR = { name: "air", boundingBox: "empty", shapes: [] };
+const LAVA = { name: "lava", boundingBox: "empty", shapes: [] };
 
-/** Flat floor with its walkable surface at y=1; overlay adds walls/hazards. */
-function flatWorld(overlay?: (pos: Vec3) => unknown): (pos: Vec3) => any {
+type Overlay = (
+  x: number,
+  y: number,
+  z: number,
+) => "stone" | "lava" | "air" | "keep" | undefined;
+
+/** Floor: solid at y<=0 (top surface y=1), air above, overlay on top. */
+function makeWorld(overlay?: Overlay): (pos: Vec3) => any {
   return (pos: Vec3) => {
-    const over = overlay?.(pos);
-    if (over) return over;
-    return pos.y < 1 ? SOLID : AIR;
+    const x = Math.floor(pos.x);
+    const y = Math.floor(pos.y);
+    const z = Math.floor(pos.z);
+    if (overlay) {
+      const over = overlay(x, y, z);
+      if (over === "stone") return SOLID;
+      if (over === "lava") return LAVA;
+      if (over === "air") return AIR;
+      if (over === "keep") return y <= 0 ? SOLID : AIR;
+    }
+    return y <= 0 ? SOLID : AIR;
   };
 }
 
-/** Simple getCollisions for the mocked flat world. */
-function getCollisionsFlat(
-  aabb: AABB,
-  _minY: number,
-  blockAt: (pos: Vec3) => any,
-): AABB[] {
-  const collisions: AABB[] = [];
-  const minX = Math.floor(aabb.minX);
-  const maxX = Math.floor(aabb.maxX);
-  const minY = Math.floor(aabb.minY);
-  const maxY = Math.floor(aabb.maxY);
-  const minZ = Math.floor(aabb.minZ);
-  const maxZ = Math.floor(aabb.maxZ);
-
-  for (let x = minX; x <= maxX; x++) {
-    for (let y = minY; y <= maxY; y++) {
-      for (let z = minZ; z <= maxZ; z++) {
-        const block = blockAt(new Vec3(x, y, z));
-        if (block && block.shapes && block.shapes.length > 0) {
-          for (const shape of block.shapes) {
-            collisions.push(
-              new AABB(
-                x + shape[0],
-                y + shape[1],
-                z + shape[2],
-                x + shape[3],
-                y + shape[4],
-                z + shape[5],
-              ),
-            );
-          }
-        }
-      }
-    }
-  }
-  return collisions;
+function worldOf(blockAt: (pos: Vec3) => any): StrafeWorld {
+  return {
+    blockAt,
+    getCollisions: (aabb, minY) => getCollisions(aabb, minY, blockAt),
+  };
 }
 
-const BOT = new Vec3(0.5, 1, 0.5);
-const ZERO = new Vec3(0, 0, 0);
+// ── Mini-physics integration (mirrors the real bot loop) ───────────
 
-describe("findWalkableSurface", () => {
-  test("returns the top face of a full block", () => {
-    const surface = findWalkableSurface(2.5, 2.5, 1, flatWorld());
-    expect(surface).not.toBeNull();
-    expect(surface!.y).toBe(1);
-  });
+interface OrbitRun {
+  positions: Vec3[];
+  fellIntoVoid: boolean;
+  ticks: number;
+}
 
-  test("returns a slab's half-block surface", () => {
-    const world = (pos: Vec3) =>
-      pos.x === 2 && pos.y === 0 && pos.z === 2
-        ? { name: "slab", boundingBox: "block", shapes: [[0, 0, 0, 1, 0.5, 1]] }
-        : pos.y < 1
-          ? SOLID
-          : AIR;
-    const surface = findWalkableSurface(2.5, 2.5, 1, world);
-    expect(surface).not.toBeNull();
-    expect(surface!.y).toBe(0.5);
-  });
+/**
+ * Integrate the controller over a tick loop the same way the real bot runs
+ * its physics: move by the velocity from the previous tick's plan, apply
+ * gravity/drag, land on `getGroundBelow`, and stop if the bot drops into
+ * the void (y well below the ground level).
+ */
+function runOrbit(
+  controller: StrafeController,
+  blockAt: (pos: Vec3) => any,
+  start: Vec3,
+  target: Vec3,
+  ticks: number,
+): OrbitRun {
+  const positions: Vec3[] = [];
+  const pos = start.clone();
+  let vy = 0;
+  let onGround = true;
+  let fellIntoVoid = false;
+  let jumped = 0;
+  let plans = 0;
 
-  test("returns null over a void column", () => {
-    const world = (pos: Vec3) =>
-      Math.floor(pos.x) === 2 ? AIR : pos.y < 1 ? SOLID : AIR;
-    expect(findWalkableSurface(2.5, 0.5, 1, world)).toBeNull();
-    // Control: the neighbouring column still resolves a surface.
-    expect(findWalkableSurface(1.5, 0.5, 1, world)).not.toBeNull();
-  });
-});
-
-describe("StrafeController.steerAroundTarget (continuous orbit)", () => {
-  test("returns mostly-lateral velocity around the target", () => {
-    const controller = new StrafeController();
-    const target = new Vec3(0.5, 1, 3.5); // 3 blocks away, within STRAFE_RADIUS
-
-    const velocity = controller.steerAroundTarget(
-      BOT,
+  for (let i = 0; i < ticks; i++) {
+    const plan = controller.computeTick({
+      source: pos.clone(),
       target,
-      ZERO,
-      flatWorld(),
-      false,
-    );
+      velocity: new Vec3(0, vy, 0),
+      onGround,
+      collidedHorizontally: false,
+      world: worldOf(blockAt),
+    });
+    if (!plan) continue;
+    plans++;
+    if (plan.jump) jumped++;
+    positions.push(pos.clone());
 
-    expect(velocity).not.toBeNull();
-    const mag = Math.hypot(velocity!.x, velocity!.z);
-    expect(mag).toBeGreaterThan(0);
-
-    // Target is due +Z: direction +1 strafes toward -X (left) with only a
-    // small inward pullback toward the target.
-    const outward = new Vec3(0, 0, -1); // unit vector from target to bot (XZ)
-    const dot = (velocity!.x * outward.x + velocity!.z * outward.z) / mag;
-    expect(dot).toBeLessThan(0.2); // never drifting outward
-    expect(velocity!.x).toBeLessThan(0);
-    // Vertical velocity is untouched (no inputs, no fall).
-    expect(velocity!.y).toBe(0);
-  });
-
-  test("keeps the orbit radius stable while circling", () => {
-    const controller = new StrafeController();
-    const target = new Vec3(0.5, 1, 0.5);
-    let pos = new Vec3(0.5, 1, 3.36); // radius 2.86
-    let velocity = new Vec3(0, 0, 0);
-    let angle = 0;
-    let minRadius = Infinity;
-    let maxRadius = 0;
-    let previousAngle = Math.atan2(pos.z - target.z, pos.x - target.x);
-
-    for (let i = 0; i < 80; i++) {
-      const v = controller.steerAroundTarget(
-        pos,
-        target,
-        velocity,
-        flatWorld(),
-        false,
-      );
-      expect(v).not.toBeNull();
-      velocity = v!;
-      // Physics order: move by the velocity, then apply ground friction.
-      pos = pos.offset(velocity.x, 0, velocity.z);
-      velocity = new Vec3(velocity.x * 0.546, 0, velocity.z * 0.546);
-
-      const radius = Math.hypot(pos.x - target.x, pos.z - target.z);
-      minRadius = Math.min(minRadius, radius);
-      maxRadius = Math.max(maxRadius, radius);
-
-      const current = Math.atan2(pos.z - target.z, pos.x - target.x);
-      let delta = current - previousAngle;
-      while (delta > Math.PI) delta -= 2 * Math.PI;
-      while (delta < -Math.PI) delta += 2 * Math.PI;
-      angle += Math.abs(delta);
-      previousAngle = current;
+    // Move by the velocity computed this tick (the control loop injects it).
+    pos.x += plan.velocity.x;
+    pos.z += plan.velocity.z;
+    positionVertical(pos, plan, blockAt, (state) => {
+      vy = state.vy;
+      onGround = state.onGround;
+    });
+    if (pos.y < -20) {
+      fellIntoVoid = true;
+      break;
     }
+  }
+  return { positions, fellIntoVoid, ticks: plans };
+}
 
-    // The bot circled a wide sector without drifting out of strafe range.
-    expect(minRadius).toBeGreaterThan(2.2);
-    expect(maxRadius).toBeLessThan(3.2);
-    expect(angle).toBeGreaterThan(Math.PI);
+/**
+ * Vertical step of the mini-physics: prismarine order — move by the planned
+ * velocity, clamp on the floor below (getGroundBelow), then gravity + drag
+ * when airborne.
+ */
+function positionVertical(
+  pos: Vec3,
+  plan: { velocity: Vec3 },
+  blockAt: (pos: Vec3) => any,
+  apply: (state: { vy: number; onGround: boolean }) => void,
+): void {
+  const velY = plan.velocity.y;
+  pos.y += velY;
+  const ground = getGroundBelow(pos, blockAt);
+  if (velY <= 0 && pos.y <= ground) {
+    // Landed: snap onto the surface.
+    pos.y = ground;
+    apply({ vy: 0, onGround: true });
+  } else {
+    apply({
+      vy: (velY - Constants.PHYSICS.GRAVITY) * Constants.PHYSICS.DRAG,
+      onGround: false,
+    });
+  }
+}
+
+// ── Orbit statistics ────────────────────────────────────────────────
+
+function signedAngleDelta(from: number, to: number): number {
+  let d = to - from;
+  while (d > Math.PI) d -= Math.PI * 2;
+  while (d < -Math.PI) d += Math.PI * 2;
+  return d;
+}
+
+/** Sum of |Δbearing| and signed ΣΔbearing around `target`. */
+function orbitStats(positions: Vec3[], target: Vec3) {
+  let sumAbs = 0;
+  let sumSigned = 0;
+  let prev: number | null = null;
+  for (const p of positions) {
+    const a = Math.atan2(p.z - target.z, p.x - target.x);
+    if (prev !== null) {
+      const d = signedAngleDelta(prev, a);
+      sumAbs += Math.abs(d);
+      sumSigned += d;
+    }
+    prev = a;
+  }
+  return { sumAbs, sumSigned };
+}
+
+function pathLength(positions: Vec3[], skip = 1): number {
+  let len = 0;
+  for (let i = skip; i < positions.length; i++) {
+    len += positions[i].distanceTo(positions[i - 1]);
+  }
+  return len;
+}
+
+// ── computeDirectionVec ─────────────────────────────────────────────
+
+describe("computeDirectionVec (LiquidBounce encirclement)", () => {
+  const speed = Constants.MOVEMENT.STRAFE_SPEED;
+
+  test("is purely tangential at the orbit radius", () => {
+    // Bot directly west of the target: tangent must be ±Z only.
+    const source = new Vec3(7.5, 1, 0.5);
+    const target = new Vec3(10.5, 1, 0.5);
+    const v = computeDirectionVec(source, target, speed, 3, 1);
+    expect(Math.abs(v.x)).toBeLessThan(0.02);
+    expect(v.z).toBeGreaterThan(speed * 0.9);
+    // No parametrization mismatch: the tangent is perpendicular, i.e. the
+    // velocity has no component along the bot→target line.
+    const dot = v.x * (target.x - source.x) + v.z * (target.z - source.z);
+    expect(Math.abs(dot)).toBeLessThan(0.15);
   });
 
-  test("holds when the target is beyond combat reach", () => {
-    const controller = new StrafeController();
-    const target = new Vec3(
-      0.5,
-      1,
-      0.5 + Constants.COMBAT.ATTACK_RANGE + 0.5,
-    );
-    expect(
-      controller.steerAroundTarget(BOT, target, ZERO, flatWorld(), false),
-    ).toBeNull();
+  test("always has magnitude speed", () => {
+    for (const dist of [0.5, 3, 6, 12]) {
+      const source = new Vec3(0, 1, 0);
+      const target = new Vec3(dist, 1, 0);
+      const v = computeDirectionVec(source, target, speed, 3, 1);
+      expect(Math.hypot(v.x, v.z)).toBeCloseTo(speed, 5);
+    }
   });
 
-  test("steers back toward the orbit radius after drifting out", () => {
-    const controller = new StrafeController();
-    const target = new Vec3(0.5, 1, 0.5);
-    // Outside STRAFE_RADIUS but still inside combat reach: the pullback
-    // must aim inward instead of refusing to steer.
-    const bot = new Vec3(
-      0.5,
-      1,
-      0.5 + Constants.MOVEMENT.STRAFE_RADIUS + 0.4,
-    );
-
-    const velocity = controller.steerAroundTarget(
-      bot,
-      target,
-      ZERO,
-      flatWorld(),
-      false,
-    );
-
-    expect(velocity).not.toBeNull();
-    const outward = new Vec3(0, 0, 1); // unit vector target -> bot (XZ)
-    const mag = Math.hypot(velocity!.x, velocity!.z);
-    const dot = (velocity!.x * outward.x + velocity!.z * outward.z) / mag;
-    expect(dot).toBeLessThan(0); // net inward
+  test("points inward when the bot is outside the orbit radius", () => {
+    const source = new Vec3(-6.5, 1, 0);
+    const target = new Vec3(0, 1, 0);
+    const v = computeDirectionVec(source, target, speed, 3, 1);
+    // Component along bot→target (+X) must be inward and dominant.
+    expect(v.x).toBeGreaterThan(speed * 0.6);
   });
 
-  test("airborne steering holds the orbit without the ground probe", () => {
-    const controller = new StrafeController();
-    const target = new Vec3(0.5, 1, 3.5);
-    // Direction +1 strafes toward -X; block that side one level up. A
-    // committed jump arc must not flip there ...
-    const world = flatWorld((pos) =>
-      pos.x <= -1 && pos.y === 1 ? SOLID : null,
-    );
-    const airborne = new Vec3(0.5, 2, 0.5);
-
-    const velocity = controller.steerAroundTarget(
-      airborne,
-      target,
-      ZERO,
-      world,
-      false,
-      false,
-    );
-
-    // ... whereas the same world flips a grounded step.
-    expect(velocity).not.toBeNull();
-    expect(velocity!.x).toBeLessThan(0); // preferred -X side kept
-    expect(controller.direction).toBe(1); // no flip mid-hop
-    const grounded = controller.steerAroundTarget(
-      BOT,
-      target,
-      ZERO,
-      world,
-      false,
-    );
-    expect(grounded).not.toBeNull();
-    expect(grounded!.x).toBeGreaterThan(0); // flipped to +X
-    expect(controller.direction).toBe(-1);
+  test("pushes outward when the bot is inside the orbit radius", () => {
+    const source = new Vec3(3, 1, 0);
+    const target = new Vec3(5, 1, 0);
+    const v = computeDirectionVec(source, target, speed, 3, 1);
+    expect(v.x).toBeLessThan(-0.02);
   });
 
-  test("flips to the free side when the preferred side is blocked", () => {
-    const controller = new StrafeController();
-    const target = new Vec3(0.5, 1, 3.5);
-    // Direction +1 strafes toward -X; block that side one level up.
-    const world = flatWorld((pos) =>
-      pos.x <= -1 && pos.y === 1 ? SOLID : null,
-    );
-
-    const velocity = controller.steerAroundTarget(
-      BOT,
-      target,
-      ZERO,
-      world,
-      false,
-    );
-
-    expect(velocity).not.toBeNull();
-    expect(velocity!.x).toBeGreaterThan(0); // pushed to the free +X side
-    expect(controller.direction).toBe(-1); // flip remembered
-  });
-
-  test("horizontal collisions reverse the orbit direction", () => {
-    const controller = new StrafeController();
-    const target = new Vec3(0.5, 1, 3.5);
-    controller.steerAroundTarget(BOT, target, ZERO, flatWorld(), true);
-    expect(controller.direction).toBe(-1);
-  });
-
-  test("preserves upward velocity while strafing", () => {
-    const controller = new StrafeController();
-    const target = new Vec3(0.5, 1, 3.5);
-    const airborne = new Vec3(0, 0.42, 0);
-    const velocity = controller.steerAroundTarget(
-      BOT,
-      target,
-      airborne,
-      flatWorld(),
-      false,
-    );
-    expect(velocity).not.toBeNull();
-    expect(velocity!.y).toBeCloseTo(0.42, 6);
+  test("mirrors correctly between +1 and -1 sides", () => {
+    const source = new Vec3(7.5, 1, 0.5);
+    const target = new Vec3(10.5, 1, 0.5);
+    const v1 = computeDirectionVec(source, target, speed, 3, 1);
+    const v2 = computeDirectionVec(source, target, speed, 3, -1);
+    expect(v1.x).toBeCloseTo(v2.x, 6); // tangential: no radial flip
+    expect(v1.z).toBeCloseTo(-v2.z, 6); // mirrored tangent
+    expect(v1.z).toBeGreaterThan(0);
+    expect(v2.z).toBeLessThan(0);
   });
 });
 
-// ── Hazard-aware strafing ────────────────────────────────────────────
+// ── simulateStrafePath (continuous prediction) ──────────────────────
 
-/** Lava/water: full block, damages/moves the bot. */
-const LIQUID = {
-  name: "lava",
-  boundingBox: "block",
-  shapes: [[0, 0, 0, 1, 0.99, 1]],
-};
-/** Cobweb: no collision shape but named "web". */
-const WEB = { name: "web", boundingBox: "empty", shapes: [] };
-const COBWEB = { name: "cobweb", boundingBox: "empty", shapes: [] };
+describe("simulateStrafePath (continuous physics prediction)", () => {
+  test("flat ground hop lands safely with zero drop", () => {
+    const blockAt = makeWorld();
+    const result = simulateStrafePath({
+      source: new Vec3(10.5, 1, 10.5),
+      target: new Vec3(4.5, 1, 10.5),
+      velocity: new Vec3(0, 0, 0),
+      onGround: true,
+      jump: true,
+      direction: 1,
+      range: 3,
+      speed: Constants.MOVEMENT.STRAFE_SPEED,
+      referenceGroundY: 1,
+      world: worldOf(blockAt),
+    });
+    expect(result.safe).toBe(true);
+    expect(result.landed).toBe(true);
+    expect(result.drop).toBeLessThanOrEqual(0.5);
+  });
 
-describe("StrafeController.steerAroundTarget (hazard rejection)", () => {
-  test("avoids strafing over a cliff into void", () => {
-    // Ground exists only for x < 3; everything past that is a void drop
-    // (no solid floor within the fallback depth).
-    const world = (pos: Vec3) => {
-      if (pos.y <= 0 && pos.x < 3) return SOLID;
-      return AIR;
+  test("rejects a hop straight into a wall before moving", () => {
+    // 2-tall wall spanning the target side.
+    const blockAt = makeWorld(
+      (x, y, z) => (y === 1 || y === 2) && x === 9 ? "stone" : undefined,
+    );
+    const result = simulateStrafePath({
+      source: new Vec3(10.5, 1, 10.5),
+      target: new Vec3(4.5, 1, 10.5),
+      velocity: new Vec3(0, 0, 0),
+      onGround: true,
+      jump: true,
+      direction: 1,
+      range: 3,
+      speed: Constants.MOVEMENT.STRAFE_SPEED,
+      referenceGroundY: 1,
+      world: worldOf(blockAt),
+    });
+    expect(result.safe).toBe(false);
+  });
+
+  test("rejects an inward walk that would fall into the void", () => {
+    // Floor only for x >= 6 (void beyond the ledge).
+    const blockAt = makeWorld((x) => (x >= 6 ? "keep" : "air"));
+    const result = simulateStrafePath({
+      source: new Vec3(6.5, 1, 10.5),
+      target: new Vec3(2.5, 1, 10.5),
+      velocity: new Vec3(0, 0, 0),
+      onGround: true,
+      jump: false,
+      direction: 1,
+      range: 3,
+      speed: Constants.MOVEMENT.STRAFE_SPEED,
+      referenceGroundY: 1,
+      world: worldOf(blockAt),
+      mode: "inward",
+    });
+    expect(result.safe).toBe(false);
+    expect(result.reason).toBe("void");
+  });
+
+  test("rejects paths over hazard blocks", () => {
+    // Lava pool replacing the floor east of x=9.
+    const blockAt = makeWorld(
+      (x, y) => (y <= 0 && x >= 9 ? "lava" : y <= 0 ? "keep" : undefined),
+    );
+    const result = simulateStrafePath({
+      source: new Vec3(6.5, 1, 10.5),
+      target: new Vec3(9.5, 1, 10.5),
+      velocity: new Vec3(0, -0.0784, 0),
+      onGround: true,
+      jump: false,
+      direction: 1,
+      range: 3,
+      speed: Constants.MOVEMENT.STRAFE_SPEED,
+      referenceGroundY: 1,
+      world: worldOf(blockAt),
+      mode: "inward",
+    });
+    expect(result.safe).toBe(false);
+    expect(result.reason).toBe("hazard");
+  });
+
+  test("measures a 1-block landing drop (warn tier input)", () => {
+    // 1-deep basin: mouth at y=0 over x 5..8 (wide so the walk falls in it),
+    // solid basin floor at y=-1 → landing drop 1 from the ground level.
+    const blockAt = makeWorld(
+      (x, y, z) => {
+        if (y === 0 && x >= 5 && x <= 8 && z >= 4 && z <= 17) return "air";
+        return y <= 0 ? "keep" : undefined;
+      },
+    );
+    const result = simulateStrafePath({
+      source: new Vec3(10.5, 1, 10.5),
+      target: new Vec3(4.5, 1, 10.5),
+      velocity: new Vec3(0, -0.0784, 0),
+      onGround: true,
+      jump: false,
+      direction: 1,
+      range: 3,
+      speed: Constants.MOVEMENT.STRAFE_SPEED,
+      referenceGroundY: 1,
+      world: worldOf(blockAt),
+      mode: "inward",
+    });
+    expect(result.safe).toBe(true);
+    expect(result.landed).toBe(true);
+    expect(result.drop).toBeGreaterThan(0.5); // > STRAFE_SAFE_DROP
+    expect(result.drop).toBeLessThanOrEqual(3); // ≤ STRAFE_HAZARD_MAX_DROP
+  });
+
+  test("rejects drops deeper than STRAFE_HAZARD_MAX_DROP", () => {
+    // 4-deep pit: solid floor only at y=-4 inside the pit region.
+    const blockAt = makeWorld((x, y) => {
+      if (y <= 0 && x >= 9 && x <= 12) return y <= -4 ? "keep" : "air";
+      return y <= 0 ? "keep" : undefined;
+    });
+    const result = simulateStrafePath({
+      source: new Vec3(13.5, 1, 10.5),
+      target: new Vec3(8.5, 1, 10.5),
+      velocity: new Vec3(0, 0, 0),
+      onGround: true,
+      jump: false,
+      direction: 1,
+      range: 3,
+      speed: Constants.MOVEMENT.STRAFE_SPEED,
+      referenceGroundY: 1,
+      world: worldOf(blockAt),
+      mode: "inward",
+    });
+    expect(result.safe).toBe(false);
+    expect(result.reason).toBe("deep-drop");
+  });
+
+  test("launches with vy = 0.42 exactly like a vanilla jump", () => {
+    const blockAt = makeWorld();
+    // The prediction marks the first tick with the jump velocity internally;
+    // verify via landed state and safe path (indirect), plus no unsafe
+    // reasons for a normal launch.
+    const result = simulateStrafePath({
+      source: new Vec3(10.5, 1, 10.5),
+      target: new Vec3(10.5, 1, 13.5),
+      velocity: new Vec3(0, 0, 0),
+      onGround: true,
+      jump: true,
+      direction: 1,
+      range: 3,
+      speed: Constants.MOVEMENT.STRAFE_SPEED,
+      referenceGroundY: 1,
+      world: worldOf(blockAt),
+      maxTicks: 12,
+    });
+    expect(result.safe).toBe(true);
+    expect(result.landed).toBe(true);
+  });
+});
+
+// ── StrafeController.computeTick ────────────────────────────────────
+
+describe("StrafeController.computeTick (continuous orbit)", () => {
+  const SPEED = Constants.MOVEMENT.STRAFE_SPEED;
+  const FLAT = worldOf(makeWorld());
+
+  test("returns null beyond attack range", () => {
+    const controller = new StrafeController();
+    const plan = controller.computeTick({
+      source: new Vec3(0, 1, 0),
+      target: new Vec3(10, 1, 0),
+      velocity: new Vec3(0, 0, 0),
+      onGround: true,
+      collidedHorizontally: false,
+      world: FLAT,
+    });
+    expect(plan).toBeNull();
+  });
+
+  test("grounded plan is a bunny-hop (jump 0.42) with tier safe", () => {
+    const controller = new StrafeController();
+    const plan = controller.computeTick({
+      source: new Vec3(7.5, 1, 10.5),
+      target: new Vec3(10.5, 1, 10.5),
+      velocity: new Vec3(0, -0.0784, 0),
+      onGround: true,
+      collidedHorizontally: false,
+      world: FLAT,
+    });
+    expect(plan).not.toBeNull();
+    expect(plan!.tier).toBe("safe");
+    expect(plan!.jump).toBe(true);
+    expect(plan!.velocity.y).toBe(Constants.PHYSICS.JUMP_VELOCITY);
+    const h = Math.hypot(plan!.velocity.x, plan!.velocity.z);
+    expect(h).toBeCloseTo(SPEED, 5);
+  });
+
+  test("airborne plan preserves vertical velocity and does not jump", () => {
+    const controller = new StrafeController();
+    const plan = controller.computeTick({
+      source: new Vec3(7.5, 1.4, 10.5),
+      target: new Vec3(10.5, 1, 10.5),
+      velocity: new Vec3(0, -0.15, 0),
+      onGround: false,
+      collidedHorizontally: false,
+      world: FLAT,
+    });
+    expect(plan).not.toBeNull();
+    expect(plan!.jump).toBe(false);
+    expect(plan!.velocity.y).toBe(-0.15);
+  });
+
+  test("flips orbit side when horizontally collided", () => {
+    const controller = new StrafeController();
+    const base = {
+      source: new Vec3(7.5, 1, 10.5),
+      target: new Vec3(10.5, 1, 10.5),
+      velocity: new Vec3(0, -0.0784, 0),
+      onGround: true,
+      collidedHorizontally: false,
+      world: FLAT,
     };
-    const controller = new StrafeController();
-    const target = new Vec3(0.5, 1, 3.5);
-
-    // Force the preferred direction toward +X (the cliff). The lookup in
-    // getStrafeYaw maps direction -1 to a +X heading, so the controller
-    // must reject that step and flip to the supported -X side.
-    controller["_direction"] = -1;
-    const velocity = controller.steerAroundTarget(
-      BOT,
-      target,
-      ZERO,
-      world,
-      false,
-      true,
-    );
-    expect(velocity).not.toBeNull();
-    expect(velocity!.x).toBeLessThan(0); // kept on the safe -X side
+    // First tick: the controller picks whatever safe direction it prefers.
+    const first = controller.computeTick({ ...base });
+    expect(first).not.toBeNull();
+    // A reported horizontal collision flips the side on the next tick.
+    const collided = controller.computeTick({
+      ...base,
+      collidedHorizontally: true,
+    });
+    expect(collided!.direction).toBe(-first!.direction);
   });
 
-  test("does not commit to a hop toward a lava surface", () => {
-    const world = flatWorld((pos: Vec3) =>
-      pos.x >= 1 && pos.y < 1 ? LIQUID : null,
+  test("avoids the void: refuses to orbit over a void hole", () => {
+    // Hole in the floor at (7..8, 10..11); the bot starts north-west of the
+    // hole, target east of it. Any plan heading over the hole must be
+    // rejected; the resulting plan must move to ground that supports the
+    // bot (floor reachable below the probe point).
+    const blockAt = makeWorld(
+      (x, y, z) =>
+        y <= 0 && x >= 7 && x <= 8 && z >= 10 && z <= 11 ? "air" : "keep",
     );
+    const world = worldOf(blockAt);
     const controller = new StrafeController();
-    const target = new Vec3(0.5, 1, 3.5);
-
-    // Direction -1 strafes toward +X, straight onto the lava. The controller
-    // must refuse that side and take the supported -X side instead, never
-    // returning a velocity that carries the bot into the lava.
-    controller["_direction"] = -1;
-    const velocity = controller.steerAroundTarget(
-      BOT,
-      target,
-      ZERO,
+    const plan = controller.computeTick({
+      source: new Vec3(7.8, 1, 12.6),
+      target: new Vec3(10.5, 1, 10.5),
+      velocity: new Vec3(0, -0.0784, 0),
+      onGround: true,
+      collidedHorizontally: false,
       world,
-      false,
-      true,
+    });
+    expect(plan).not.toBeNull();
+    expect(plan!.tier).not.toBe("brake");
+    const probe = new Vec3(
+      plan!.point.x,
+      plan!.point.y,
+      plan!.point.z,
     );
-    expect(velocity).not.toBeNull();
-    expect(velocity!.x).toBeLessThan(0); // held back from the lava side
+    expect(getGroundBelow(probe, blockAt)).toBeGreaterThanOrEqual(1);
   });
 
-  test("holds position when both orbit sides are webbed", () => {
-    const world = flatWorld((pos: Vec3) =>
-      pos.x <= -1 && pos.y === 0 ? WEB : pos.x >= 1 && pos.y === 0 ? COBWEB : null,
-    );
+  test("refuses to move toward lava (brakes instead)", () => {
+    // Lava surrounds a narrow stone corridor (x < 9, 8 <= z < 13); the
+    // target sits across the lava edge. Every orbit ring, flip and inward
+    // walk ends on lava within the horizon → NOTHING is validated.
+    const blockAt = makeWorld((x, y, z) => {
+      if (y > 0) return "air";
+      if (x < 9 && z >= 8 && z < 13) return "keep";
+      return "lava";
+    });
+    const world = worldOf(blockAt);
     const controller = new StrafeController();
-    const target = new Vec3(0.5, 1, 3.5);
+    const plan = controller.computeTick({
+      source: new Vec3(6.5, 1, 10.5),
+      target: new Vec3(9.5, 1, 10.5),
+      velocity: new Vec3(0, -0.0784, 0),
+      onGround: true,
+      collidedHorizontally: false,
+      world,
+    });
+    expect(plan).not.toBeNull();
+    expect(plan!.tier).toBe("brake");
+    expect(plan!.jump).toBe(false);
+    expect(plan!.velocity.x).toBe(0);
+    expect(plan!.velocity.z).toBe(0);
+    expect(plan!.velocity.y).toBe(-0.0784);
+  });
 
-    controller["_direction"] = 1;
-    const v1 = controller.steerAroundTarget(
-      BOT,
-      target,
-      ZERO,
-      world,
-      false,
-      true,
+  test("rescues an airborne fall by steering toward the target", () => {
+    // Island (blocks 8..12 × 8..12) around the target, void beyond; the bot
+    // jumped off the east edge and drifts away — no orbit plan can validate,
+    // so the controller steers back toward the island's ground.
+    const blockAt = makeWorld(
+      (x, y, z) =>
+        y <= 0 && Math.abs(x - 10) <= 2 && Math.abs(z - 10) <= 2
+          ? "keep"
+          : "air",
     );
-    controller["_direction"] = -1;
-    const v2 = controller.steerAroundTarget(
-      BOT,
-      target,
-      ZERO,
+    const world = worldOf(blockAt);
+    const controller = new StrafeController();
+    const plan = controller.computeTick({
+      source: new Vec3(13.4, 1.42, 10.5),
+      target: new Vec3(10.5, 1, 10.5),
+      velocity: new Vec3(0.25, 0.2, 0),
+      onGround: false,
+      collidedHorizontally: false,
       world,
-      false,
-      true,
-    );
-    expect(v1).toBeNull();
-    expect(v2).toBeNull();
+    });
+    expect(plan).not.toBeNull();
+    expect(plan!.tier).toBe("rescue");
+    expect(plan!.jump).toBe(false);
+    // Inward: toward the target (west of the bot) at orbit speed.
+    expect(plan!.velocity.x).toBeLessThan(-SPEED * 0.8);
+  });
+
+  test("brakes (never jumps) when every plan is unsafe", () => {
+    // Entire floor absent: any movement ends in the void.
+    const blockAt = makeWorld(() => "air");
+    const world = worldOf(blockAt);
+    const controller = new StrafeController();
+    const plan = controller.computeTick({
+      source: new Vec3(5.5, 1, 5.5),
+      target: new Vec3(8.5, 1, 5.5),
+      velocity: new Vec3(0.25, -0.1, 0),
+      onGround: false,
+      collidedHorizontally: false,
+      world,
+    });
+    expect(plan).not.toBeNull();
+    expect(plan!.tier).toBe("brake");
+    expect(plan!.jump).toBe(false);
+    expect(Math.abs(plan!.velocity.x)).toBeLessThan(1e-9);
+    expect(Math.abs(plan!.velocity.z)).toBeLessThan(1e-9);
+    expect(plan!.velocity.y).toBe(-0.1);
   });
 });
 
-describe("getStrafeYaw (utility)", () => {
-  const { getStrafeYaw } = require("../../src/strafe");
+// ── Integration: circular orbit / void safety quirks ───────────────
 
-  test("direction +1 strafes left of target", () => {
-    const player = new Vec3(0, 0, 0);
-    const target = new Vec3(0, 0, 3); // target at +Z
-    const yaw = getStrafeYaw(player, target, 1);
-    // +1 = left = +X direction (yaw π/2 from +Z in minecraft coords)
-    expect(yaw).toBeCloseTo(Math.PI / 2, 0.1);
-  });
+describe("orbit integration (the two reported bugs)", () => {
+  test(
+    "flat ground: bot circles the target without oscillating or falling",
+    () => {
+      const controller = new StrafeController();
+      const blockAt = makeWorld();
+      const target = new Vec3(10.5, 1, 10.5);
+      const run = runOrbit(
+        controller,
+        blockAt,
+        new Vec3(7.5, 1, 0 + 10.5),
+        target,
+        90,
+      );
 
-  test("direction -1 strafes right of target", () => {
-    const player = new Vec3(0, 0, 0);
-    const target = new Vec3(0, 0, 3);
-    const yaw = getStrafeYaw(player, target, -1);
-    // -1 = right = -X direction (yaw -π/2 from +Z in minecraft coords)
-    expect(yaw).toBeCloseTo(-Math.PI / 2, 0.1);
-  });
+      expect(run.ticks).toBeGreaterThanOrEqual(70);
+      expect(run.fellIntoVoid).toBe(false);
+
+      // Continuous orbit: plenty of distinct positions, ≥ 2 revolutions.
+      const keys = new Set(
+        run.positions.map((p) => `${Math.round(p.x * 4)},${Math.round(p.z * 4)}`),
+      );
+      expect(keys.size).toBeGreaterThanOrEqual(30);
+
+      // Circular, not oscillating: signed orbit angle dominates the total walked arc.
+      const { sumAbs, sumSigned } = orbitStats(run.positions, target);
+      expect(sumAbs).toBeGreaterThan(4);
+      expect(Math.abs(sumSigned)).toBeGreaterThan(
+        sumAbs - 0.35 * sumAbs, // ≥ 65% of movement is one-directional
+      );
+
+      // Radius stays near the orbit band (no spiral into/out of the target).
+      const radii = run.positions.slice(10).map((p) =>
+        Math.hypot(p.x - target.x, p.z - target.z),
+      );
+      for (const r of radii) {
+        expect(r).toBeGreaterThan(1.6);
+        expect(r).toBeLessThan(3.9);
+      }
+
+      // Bot never leaves the floor.
+      for (const p of run.positions) {
+        expect(p.y).toBeGreaterThanOrEqual(0.9);
+      }
+      expect(pathLength(run.positions)).toBeGreaterThan(15);
+    },
+  );
+
+  test(
+    "void hole on the orbit side: bot orbits without stepping into the void",
+    () => {
+      const controller = new StrafeController();
+      // Hole in the bedrock: blocks (7..8, y=0, z 10..11) removed → void.
+      const blockAt = makeWorld(
+        (x, y, z) =>
+          y <= 0 && x >= 7 && x <= 8 && z >= 10 && z <= 11 ? "air" : "keep",
+      );
+      const target = new Vec3(10.5, 1, 10.5);
+      const run = runOrbit(
+        controller,
+        blockAt,
+        new Vec3(7.8, 1, 12.6),
+        target,
+        90,
+      );
+
+      expect(run.ticks).toBeGreaterThanOrEqual(60);
+      expect(run.fellIntoVoid).toBe(false);
+
+      // Never positioned over the hole and never fell below floor level.
+      for (const p of run.positions) {
+        expect(getGroundBelow(p, blockAt)).toBeGreaterThanOrEqual(1);
+        expect(p.y).toBeGreaterThanOrEqual(0.9);
+      }
+
+      // Orbit continues around the target on the open side.
+      const { sumAbs, sumSigned } = orbitStats(run.positions, target);
+      expect(sumAbs).toBeGreaterThan(2);
+      expect(Math.abs(sumSigned)).toBeGreaterThan(1.5);
+      expect(pathLength(run.positions)).toBeGreaterThan(10);
+    },
+  );
+
+  test(
+    "wall on the orbit side: bot routes around without entering it",
+    () => {
+      const controller = new StrafeController();
+      // 2x2 wall at (7..8, y 1..2, z 10..11) blocks the west orbit side.
+      const blockAt = makeWorld(
+        (x, y, z) =>
+          (y === 1 || y === 2) && x >= 7 && x <= 8 && z >= 10 && z <= 11
+            ? "stone"
+            : "keep",
+      );
+      const target = new Vec3(10.5, 1, 10.5);
+      const run = runOrbit(
+        controller,
+        blockAt,
+        new Vec3(7.8, 1, 12.6),
+        target,
+        90,
+      );
+
+      expect(run.ticks).toBeGreaterThanOrEqual(60);
+      expect(run.fellIntoVoid).toBe(false);
+
+      // Bot never overlaps the wall footprint (with half-width margin).
+      const half = Constants.PHYSICS.PLAYER_OFFSET;
+      for (const p of run.positions) {
+        const overlapX = p.x + half > 7 && p.x - half < 9;
+        const overlapZ = p.z + half > 10 && p.z - half < 12;
+        if (overlapX && overlapZ) {
+          // Only acceptable when the bot's feet are above the wall top.
+          expect(p.y).toBeGreaterThanOrEqual(3);
+        }
+        expect(p.y).toBeGreaterThanOrEqual(0.9);
+      }
+
+      // The orbit keeps moving around the wall (direction flips at the wall
+      // are acceptable, like LiquidBounce) and the bot stays on the floor.
+      const { sumAbs } = orbitStats(run.positions, target);
+      expect(sumAbs).toBeGreaterThan(2);
+      expect(pathLength(run.positions)).toBeGreaterThan(10);
+    },
+  );
 });

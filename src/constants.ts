@@ -22,7 +22,6 @@ export const Constants = {
       SLIME: 0.8,
       ICE: 0.98,
       BLUE_ICE: 0.989,
-      AIRBORNE: 1.0,
     },
     /** Acceleration constants (used in V_H formulas) */
     ACCELERATION: {
@@ -37,8 +36,9 @@ export const Constants = {
     JUMP_BOOST: 0.2,
     /**
      * Correction factor to account for differences between LCE physics model
-     * and actual server physics. The server applies ~21% more effective friction
-     * than the LCE model predicts, so computed velocities must be scaled down.
+     * and actual server physics. The LCE model overestimates travel distance
+     * (the server applies less effective horizontal friction than predicted),
+     * so computed jump velocities are scaled down to match observed behavior.
      * Determined empirically by measuring jump distance vs target distance.
      */
     JUMP_CORRECTION: 0.825,
@@ -130,35 +130,25 @@ export const Constants = {
       { x: -0.3, z: 0.3 },
       { x: 0.3, z: 0.3 },
     ],
-    /** Maximum distance the bot can jump in a single strafe */
-    STRAFE_JUMP_DISTANCE: 4.0,
-    /** Minimum distance between consecutive strafe points */
-    STRAFE_MIN_SPACING: 2.5,
-    /** Minimum distance from bot to consider a strafe point valid */
-    STRAFE_MIN_DISTANCE: 0.3,
-    /** Grid resolution for sampling candidate strafe points */
-    STRAFE_GRID_RESOLUTION: 0.3,
-    /** Maximum distance from target to consider a strafe point valid */
+    /** Desired orbit radius for combat strafing around a target */
     STRAFE_RADIUS: 3.0,
-    /** Maximum number of previous strafe points to keep in history */
-    STRAFE_HISTORY_SIZE: 3,
     /**
-     * Lateral velocity target for combat strafing (blocks/tick, before
-     * ground friction). Blended per tick, so the effective speed settles
-     * around walking pace.
+     * Orbit speed for combat strafing (blocks/tick). The controller sets
+     * this velocity each tick (grounded and airborne), so it is the actual
+     * movement speed: sprint pace, under the vanilla sprint-jump ceiling.
      */
-    STRAFE_SPEED: 0.5,
-    /** Per-tick blend factor toward the strafe direction (0..1) */
-    STRAFE_STRENGTH: 0.5,
-    /** Lookahead distance used to validate each strafe step */
-    STRAFE_PROBE_DISTANCE: 0.8,
+    STRAFE_SPEED: 0.3,
     /**
-     * Distance (blocks) along the strafe step over which the controller
-     * scans for terrain hazards (void drops, lava/water, cobwebs, cacti).
-     * Covers at least one full hop so the bot rejects an orbit step that
-     * would carry it into a cliff or fluid before committing the jump.
+     * Largest landing drop (blocks) predicted during a strafe step that is
+     * still considered fully "safe". Larger drops up to
+     * STRAFE_HAZARD_MAX_DROP are only taken when no better plan exists.
      */
-    STRAFE_HAZARD_LOOKAHEAD: 4.0,
+    STRAFE_SAFE_DROP: 0.5,
+    /**
+     * Ticks the continuous physics prediction simulates ahead for each
+     * strafe plan (covers a full 0.42 jump arc plus margin).
+     */
+    STRAFE_SIM_TICKS: 24,
     /**
      * Largest vertical drop (blocks) the bot will voluntarily strafe into
      * without stopping. Falls above this deal fall damage (damage starts

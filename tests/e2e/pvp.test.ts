@@ -1234,5 +1234,270 @@ describeE2E("E2E PvP Tests", () => {
       },
       TIMEOUT_MS * 2,
     );
+
+    test(
+      "strafes around a 2x2 wall blocking one orbit side",
+      async () => {
+        const cm: any = (attacker as any).combatManager;
+        const pvp: any = (attacker as any).pvp;
+        cm.setMode(2);
+
+        // Reset to known positions so the wall placement is deterministic
+        // relative to the bots (previous test may end anywhere on the orbit).
+        await tpBot(attacker, ATTACKER_POSITION.x, ATTACKER_POSITION.y, ATTACKER_POSITION.z);
+        await tpBot(target, TARGET_POSITION.x, TARGET_POSITION.y, TARGET_POSITION.z);
+        await attacker.waitForChunksToLoad!();
+        await attacker.waitForTicks!(2);
+
+        const te = targetEntity();
+        if (!te) throw new Error("target entity not visible");
+        const tx = Math.floor(te.position.x);
+        const ty = Math.floor(te.position.y);
+        const tz = Math.floor(te.position.z);
+
+        // Place a 2x2 stone wall on the west side of the target's orbit
+        // circle (STRAFE_RADIUS=3 from target). Blocks candidates near
+        // angle 180° (directly west of target), forcing the bot to pick
+        // from the remaining open angles.
+        await serverCommand(
+          attacker,
+          `fill ${tx - 3} ${ty} ${tz - 1} ${tx - 3} ${ty + 1} ${tz} stone`,
+        );
+
+        const combatTick = (): void => {
+          void cm.doDecide();
+        };
+        let attacks = 0;
+        const onAttacked = (): void => {
+          attacks++;
+        };
+        attacker.on("physicsTick", combatTick);
+        attacker.on("attackedTarget", onAttacked);
+
+        try {
+          // Acquire target
+          await pollUntil(
+            attacker,
+            () => {
+              const t: any = pvp.target;
+              return !!t && t.username === target.username;
+            },
+            100,
+            "combat loop to acquire the target player",
+          );
+
+          // Close into melee range
+          await pollUntil(
+            attacker,
+            () => {
+              const dist = distanceToTarget();
+              return dist !== null && dist <= Constants.COMBAT.ATTACK_RANGE;
+            },
+            120,
+            "attacker to close into melee range",
+          );
+
+          // Sample a live window with the wall present
+          const windowTicks = 80;
+          let strafeTicks = 0;
+          let airborneTicks = 0;
+          let inRangeTicks = 0;
+          let path = 0;
+          let previous = attacker.entity.position.clone();
+
+          for (let i = 0; i < windowTicks; i++) {
+            await attacker.waitForTicks!(1);
+            const pos = attacker.entity.position;
+            path += Math.hypot(pos.x - previous.x, pos.z - previous.z);
+            previous = pos.clone();
+            const dist = distanceToTarget();
+            if (dist !== null && dist <= Constants.COMBAT.ATTACK_RANGE + 0.5) {
+              inRangeTicks++;
+            }
+            if (pvp.strafeActive) strafeTicks++;
+            if (!attacker.entity.onGround) airborneTicks++;
+          }
+
+          logger.info(
+            `Wall test: attacks=${attacks} strafes=${strafeTicks}/${windowTicks} ` +
+              `airborne=${airborneTicks}/${windowTicks} inRange=${inRangeTicks}/${windowTicks} ` +
+              `path=${path.toFixed(2)}`,
+            "Combat",
+          );
+
+          expect(attacks).toBeGreaterThanOrEqual(5);
+          expect(strafeTicks).toBeGreaterThanOrEqual(20);
+          expect(inRangeTicks).toBeGreaterThanOrEqual(30);
+          expect(path).toBeGreaterThanOrEqual(4);
+
+          // Bot should not be stuck behind the wall; it stays in melee range.
+          const finalDist = attacker.entity.position.distanceTo(
+            target.entity.position,
+          );
+          expect(finalDist).toBeLessThan(Constants.COMBAT.ATTACK_RANGE + 2);
+        } finally {
+          // Clean up the wall
+          await serverCommand(
+            attacker,
+            `fill ${tx - 3} ${ty} ${tz - 1} ${tx - 3} ${ty + 1} ${tz} air`,
+          );
+          attacker.removeListener("physicsTick", combatTick);
+          attacker.removeListener("attackedTarget", onAttacked);
+          pvp.forceStop();
+          cm.setMode(0);
+          await attacker.waitForTicks!(2);
+        }
+      },
+      TIMEOUT_MS * 2,
+    );
+
+    test(
+      "strafes around a 2x2 hole blocking one orbit side",
+      async () => {
+        const cm: any = (attacker as any).combatManager;
+        const pvp: any = (attacker as any).pvp;
+        cm.setMode(2);
+
+        // Reset to known positions so the hole placement is deterministic
+        // relative to the bots (previous test may end anywhere on the orbit).
+        await tpBot(attacker, ATTACKER_POSITION.x, ATTACKER_POSITION.y, ATTACKER_POSITION.z);
+        await tpBot(target, TARGET_POSITION.x, TARGET_POSITION.y, TARGET_POSITION.z);
+        await attacker.waitForChunksToLoad!();
+        await attacker.waitForTicks!(2);
+
+        const te = targetEntity();
+        if (!te) throw new Error("target entity not visible");
+        const tx = Math.floor(te.position.x);
+        const ty = Math.floor(te.position.y);
+        const tz = Math.floor(te.position.z);
+
+        // Dig a 2x2 hole through the single bedrock floor layer (y = ty-1)
+        // on the west side of the target's orbit circle (STRAFE_RADIUS=3
+        // from target). Below the bedrock is void, so a real fall is fatal:
+        // the strafe controller must route around the hole without ever
+        // planning a step whose trajectory crosses the void.
+        const holeMinX = tx - 3;
+        const holeMaxX = tx - 2;
+        const holeMinZ = tz - 1;
+        const holeMaxZ = tz;
+        const holeY = ty - 1;
+        const surfaceBlock =
+          attacker.blockAt(new Vec3(holeMinX, holeY, holeMinZ)) ?? null;
+        if (!surfaceBlock) {
+          throw new Error("surface block not loaded; cannot dig the hole");
+        }
+        await serverCommand(
+          attacker,
+          `fill ${holeMinX} ${holeY} ${holeMinZ} ` +
+            `${holeMaxX} ${holeY} ${holeMaxZ} air`,
+        );
+        // Verify the client sees the hole (no-op fills would fail here).
+        await pollUntil(
+          attacker,
+          () => {
+            const b = attacker.blockAt(new Vec3(holeMinX, holeY, holeMinZ));
+            return !!b && b.boundingBox === "empty";
+          },
+          40,
+          "void hole to be dug through the floor layer",
+        );
+
+        const combatTick = (): void => {
+          void cm.doDecide();
+        };
+        let attacks = 0;
+        const onAttacked = (): void => {
+          attacks++;
+        };
+        attacker.on("physicsTick", combatTick);
+        attacker.on("attackedTarget", onAttacked);
+
+        try {
+          // Acquire target
+          await pollUntil(
+            attacker,
+            () => {
+              const t: any = pvp.target;
+              return !!t && t.username === target.username;
+            },
+            100,
+            "combat loop to acquire the target player",
+          );
+
+          // Close into melee range
+          await pollUntil(
+            attacker,
+            () => {
+              const dist = distanceToTarget();
+              return dist !== null && dist <= Constants.COMBAT.ATTACK_RANGE;
+            },
+            120,
+            "attacker to close into melee range",
+          );
+
+          // Sample a live window with the hole present. minY tracks the
+          // lowest feet level reached: falling into the hole means dropping
+          // below the floor surface.
+          const startY = attacker.entity.position.y;
+          let minY = attacker.entity.position.y;
+          const windowTicks = 80;
+          let strafeTicks = 0;
+          let airborneTicks = 0;
+          let inRangeTicks = 0;
+          let path = 0;
+          let previous = attacker.entity.position.clone();
+
+          for (let i = 0; i < windowTicks; i++) {
+            await attacker.waitForTicks!(1);
+            const pos = attacker.entity.position;
+            minY = Math.min(minY, pos.y);
+            path += Math.hypot(pos.x - previous.x, pos.z - previous.z);
+            previous = pos.clone();
+            const dist = distanceToTarget();
+            if (dist !== null && dist <= Constants.COMBAT.ATTACK_RANGE + 0.5) {
+              inRangeTicks++;
+            }
+            if (pvp.strafeActive) strafeTicks++;
+            if (!attacker.entity.onGround) airborneTicks++;
+          }
+
+          logger.info(
+            `Hole test: attacks=${attacks} strafes=${strafeTicks}/${windowTicks} ` +
+              `airborne=${airborneTicks}/${windowTicks} inRange=${inRangeTicks}/${windowTicks} ` +
+              `path=${path.toFixed(2)} minY=${minY.toFixed(2)} startY=${startY.toFixed(2)}`,
+            "Combat",
+          );
+
+          expect(attacks).toBeGreaterThanOrEqual(5);
+          expect(strafeTicks).toBeGreaterThanOrEqual(20);
+          expect(inRangeTicks).toBeGreaterThanOrEqual(30);
+          expect(path).toBeGreaterThanOrEqual(4);
+
+          // Bot must never sink toward the void under the hole: the arena
+          // floor is the single bedrock layer (standing feet level = ty),
+          // and only a real fall into the hole can take the feet below it.
+          expect(minY).toBeGreaterThan(ty - 0.9);
+
+          // Bot should not fall into the hole; it stays in melee range.
+          const finalDist = attacker.entity.position.distanceTo(
+            target.entity.position,
+          );
+          expect(finalDist).toBeLessThan(Constants.COMBAT.ATTACK_RANGE + 2);
+        } finally {
+          // Restore the dug-out floor blocks with the queried surface block.
+          await serverCommand(
+            attacker,
+            `fill ${holeMinX} ${holeY} ${holeMinZ} ` +
+              `${holeMaxX} ${holeY} ${holeMaxZ} ${surfaceBlock.name}`,
+          );
+          attacker.removeListener("physicsTick", combatTick);
+          attacker.removeListener("attackedTarget", onAttacked);
+          pvp.forceStop();
+          cm.setMode(0);
+          await attacker.waitForTicks!(2);
+        }
+      },
+      TIMEOUT_MS * 2,
+    );
   });
 });

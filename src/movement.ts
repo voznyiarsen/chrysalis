@@ -543,15 +543,21 @@ export function clearSolidCache(cache: Map<string, SolidCacheEntry>): void {
  */
 export function getGroundBelow(pos: Vec3, blockAt: (pos: Vec3) => any): number {
   const startY = Math.floor(pos.y);
+  let maxGroundY = -64;
   for (let y = startY; y >= startY - 5; y--) {
     const block = blockAt(new Vec3(pos.x, y, pos.z));
     if (block && block.boundingBox !== "empty") {
-      const shape = block.shapes[0];
-      if (shape) return y + shape[Constants.SHAPE.MAX_Y];
+      if (block.shapes) {
+        for (const shape of block.shapes) {
+          const shapeTop = y + shape[Constants.SHAPE.MAX_Y];
+          if (shapeTop > maxGroundY) maxGroundY = shapeTop;
+        }
+        if (maxGroundY > y) return maxGroundY;
+      }
       return y + 1;
     }
   }
-  return -64;
+  return maxGroundY;
 }
 
 // ---------------------------------------------------------------------------
