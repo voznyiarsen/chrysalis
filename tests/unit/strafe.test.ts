@@ -577,6 +577,119 @@ describe("StrafeController.computeTick (continuous orbit)", () => {
   });
 });
 
+// ── Escape hop (grounded rescue jump) ──────────────────────────────
+
+describe("escape hop (grounded rescue jump)", () => {
+  /**
+   * 1x1 perch world: solid only at the perch column and at Chebyshev
+   * distance > `moat` (all at y <= 0); the `moat` rings between them are
+   * air over the void. Blocks above y=0 are air everywhere.
+   */
+  function perchWorld(
+    perchX: number,
+    perchZ: number,
+    moat: number,
+  ): (pos: Vec3) => any {
+    return makeWorld((x, y, z) => {
+      if (y > 0) return undefined;
+      const cheb = Math.max(Math.abs(x - perchX), Math.abs(z - perchZ));
+      if (x === perchX && z === perchZ) return "keep";
+      return cheb > moat ? "keep" : "air";
+    });
+  }
+
+  const PERCH = new Vec3(10.5, 1, 10.5);
+  const TARGET = new Vec3(12.5, 1, 10.5); // due east, within strafe range
+  const SPEED = Constants.MOVEMENT.STRAFE_SPEED;
+
+  test("escapes a 1x1 perch across a one-block void ring", () => {
+    const blockAt = perchWorld(10, 10, 1);
+    const controller = new StrafeController();
+    const plan = controller.computeTick({
+      source: PERCH.clone(),
+      target: TARGET.clone(),
+      velocity: new Vec3(0, -0.0784, 0),
+      onGround: true,
+      collidedHorizontally: false,
+      world: worldOf(blockAt),
+    });
+
+    // Every orbit/walk/rescue candidate steps into the void ring within a
+    // couple of ticks; the only valid plan is the escape hop.
+    expect(plan).not.toBeNull();
+    expect(plan!.tier).toBe("escape");
+    expect(plan!.jump).toBe(true);
+    // Launch impulse bundled into the plan velocity.
+    expect(plan!.velocity.y).toBeGreaterThan(0.4);
+    // Steers straight at the target (east): zero drop to its ground.
+    expect(plan!.velocity.x).toBeGreaterThan(SPEED * 0.85);
+    expect(Math.abs(plan!.velocity.z)).toBeLessThan(0.05);
+  });
+
+  test("rejects the escape hop when the far shore is beyond jump range", () => {
+    // Four void rings around the perch: the ~4-block jump arc lands short
+    // and must never validate.
+    const blockAt = perchWorld(10, 10, 4);
+    const controller = new StrafeController();
+    const plan = controller.computeTick({
+      source: PERCH.clone(),
+      target: TARGET.clone(),
+      velocity: new Vec3(0, -0.0784, 0),
+      onGround: true,
+      collidedHorizontally: false,
+      world: worldOf(blockAt),
+    });
+    expect(plan).not.toBeNull();
+    expect(plan!.tier).toBe("brake");
+    expect(plan!.jump).toBe(false);
+    expect(plan!.velocity.x).toBe(0);
+    expect(plan!.velocity.z).toBe(0);
+  });
+
+  test("integration: bot leaves the perch, lands safely, resumes orbiting", () => {
+    const blockAt = perchWorld(10, 10, 1);
+    const controller = new StrafeController();
+    const run = runOrbit(controller, blockAt, PERCH.clone(), TARGET.clone(), 90);
+
+    expect(run.fellIntoVoid).toBe(false);
+    // The escape arc never dips below the level it jumped from, and later
+    // orbit hops stay above the floor.
+    for (const p of run.positions) {
+      expect(p.y).toBeGreaterThanOrEqual(0.9);
+    }
+
+    // Escaped the perch block…
+    const leftPerch = run.positions.some(
+      (p) => Math.floor(p.x) !== 10 || Math.floor(p.z) !== 10,
+    );
+    expect(leftPerch).toBe(true);
+
+    // …landed on solid ground…
+    const last = run.positions[run.positions.length - 1];
+    expect(getGroundBelow(last, blockAt)).toBeGreaterThanOrEqual(1);
+
+    // …and the orbit resumed around the target.
+    const { sumAbs, sumSigned } = orbitStats(run.positions, TARGET);
+    expect(sumAbs).toBeGreaterThan(2);
+    expect(Math.abs(sumSigned)).toBeGreaterThan(0.5);
+    expect(pathLength(run.positions)).toBeGreaterThan(10);
+  });
+
+  test("integration: unreachable far shore keeps the bot braking in place", () => {
+    const blockAt = perchWorld(10, 10, 4);
+    const controller = new StrafeController();
+    const run = runOrbit(controller, blockAt, PERCH.clone(), TARGET.clone(), 60);
+
+    expect(run.fellIntoVoid).toBe(false);
+    // Never leaves the perch, never sinks below its surface.
+    for (const p of run.positions) {
+      expect(Math.floor(p.x)).toBe(10);
+      expect(Math.floor(p.z)).toBe(10);
+      expect(p.y).toBeCloseTo(1.0, 5);
+    }
+  });
+});
+
 // ── Integration: circular orbit / void safety quirks ───────────────
 
 describe("orbit integration (the two reported bugs)", () => {

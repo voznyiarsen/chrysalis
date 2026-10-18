@@ -141,6 +141,7 @@ declare class CommandManager {
   unequipAll(): Promise<void>;
   showVersion(): void;
   showPosition(): void;
+  showTopDownView(): void;
   restore(args: string[]): Promise<void>;
   record(args: string[]): Promise<void>;
   toggleCombat(): void;

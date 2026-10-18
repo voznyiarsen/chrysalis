@@ -7,7 +7,7 @@
  */
 
 import { Vec3 } from "vec3";
-import { getJumpVelocity } from "../../src/movement";
+import { getJumpVelocity, renderTopDownView } from "../../src/movement";
 import { Constants } from "../../src/constants";
 
 // ---------------------------------------------------------------------------
@@ -199,5 +199,72 @@ describe("getJumpVelocity", () => {
     // jump should be reasonable (between 0.1 and 0.3 blocks/tick).
     expect(vel.x).toBeGreaterThan(0.1);
     expect(vel.x).toBeLessThan(0.3);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// renderTopDownView
+// ---------------------------------------------------------------------------
+
+describe("renderTopDownView", () => {
+  /** Simple world: solid floor at y<=0 ("bedrock"), air above. */
+  const floorWorld = (pos: Vec3): any => {
+    const y = Math.floor(pos.y);
+    return y <= 0 ? { name: "bedrock", boundingBox: "block" } : null;
+  };
+
+  test("renders a 5x5 grid of the level under the feet with the bot marked", () => {
+    const lines = renderTopDownView(new Vec3(10.5, 1, 20.5), floorWorld);
+
+    expect(lines).toHaveLength(7); // header + column labels + 5 rows
+    // Bot at feet y=1 stands on the block level y=0.
+    expect(lines[0]).toContain("y=0");
+    expect(lines[0]).toContain("bot block (10, 20)");
+
+    // 5 columns labeled with x coordinates.
+    expect(lines[1]).toContain("x8");
+    expect(lines[1]).toContain("x12");
+
+    // Rows run north (-Z) to south (+Z) from the bot's row.
+    expect(lines[2]).toContain("z18");
+    expect(lines[4]).toContain("z20");
+    expect(lines[6]).toContain("z22");
+
+    // Every floor cell is bedrock; the bot's own cell carries the marker.
+    expect(lines[4]).toContain("*bed ");
+    expect(lines[4]).toContain("bed  ");
+    const markedCount = lines
+      .slice(2)
+      .filter((l) => l.includes("*"))
+      .length;
+    expect(markedCount).toBe(1);
+  });
+
+  test("shows void gaps as air and unloaded chunks as dots", () => {
+    // Floor only in a 3-wide strip (x 9..11); unloaded west beyond x <= 8
+    // and air east of x >= 12 — both reachable inside the 5x5 window.
+    const world = (pos: Vec3): any => {
+      const x = Math.floor(pos.x);
+      const y = Math.floor(pos.y);
+      if (y > 0) return null;
+      if (x < 9) return null; // unloaded
+      if (x > 11) return { name: "air", boundingBox: "empty" };
+      return { name: "stone", boundingBox: "block" };
+    };
+    const lines = renderTopDownView(new Vec3(10.5, 1, 3.5), world);
+    expect(lines[0]).toContain("y=0");
+    // West columns ... unloaded; east columns air; middle stone.
+    expect(lines[3]).toContain("... ");
+    expect(lines[3]).toContain("air ");
+    expect(lines[3]).toContain("sto ");
+  });
+
+  test("falls back to the level below the feet when hovering over the void", () => {
+    // Nothing but air everywhere.
+    const airWorld = () => ({ name: "air", boundingBox: "empty" });
+    const lines = renderTopDownView(new Vec3(0.5, 1, 0.5), airWorld);
+    // No support found: level = floor(1) - 1 = 0.
+    expect(lines[0]).toContain("y=0");
+    expect(lines[5]).toContain("air ");
   });
 });

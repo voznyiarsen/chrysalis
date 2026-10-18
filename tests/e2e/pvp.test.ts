@@ -19,6 +19,7 @@ import { Bot } from "mineflayer";
 import { Vec3 } from "vec3";
 import { logger } from "../../src/logger";
 import { Constants } from "../../src/constants";
+import { renderTopDownView } from "../../src/movement";
 import {
   createBot,
   e2eTimeoutMs,
@@ -1494,6 +1495,187 @@ describeE2E("E2E PvP Tests", () => {
           attacker.removeListener("attackedTarget", onAttacked);
           pvp.forceStop();
           cm.setMode(0);
+          await attacker.waitForTicks!(2);
+        }
+      },
+      TIMEOUT_MS * 2,
+    );
+
+    test(
+      "escapes a 1x1 perch surrounded by void, then strafes again",
+      async () => {
+        const cm: any = (attacker as any).combatManager;
+        const pvp: any = (attacker as any).pvp;
+        cm.setMode(2);
+
+        // Reset to known positions so the perch placement is deterministic
+        // relative to the bots (previous test may end anywhere on the orbit).
+        await tpBot(attacker, ATTACKER_POSITION.x, ATTACKER_POSITION.y, ATTACKER_POSITION.z);
+        await tpBot(target, TARGET_POSITION.x, TARGET_POSITION.y, TARGET_POSITION.z);
+        await attacker.waitForChunksToLoad!();
+        await attacker.waitForTicks!(2);
+
+        const te = targetEntity();
+        if (!te) throw new Error("target entity not visible");
+        const tx = Math.floor(te.position.x);
+        const ty = Math.floor(te.position.y);
+        const tz = Math.floor(te.position.z);
+
+        // The perch sits 2 blocks west of the target: its 3x3 footprint has
+        // the perch block as the only solid block; the Chebyshev-1 ring is
+        // dug into the void (single bedrock floor layer). The target's own
+        // ground (Chebyshev 2 from the perch) stays solid — reachable by an
+        // escape jump (~4 blocks) but by no orbit step on foot (1 block).
+        const px = tx - 2;
+        const pz = tz;
+        const ringY = ty - 1;
+        const ringFills = [
+          // North and south rows of the 3x3 (3 blocks each)…
+          `fill ${px - 1} ${ringY} ${pz - 1} ${px + 1} ${ringY} ${pz - 1} air`,
+          `fill ${px - 1} ${ringY} ${pz + 1} ${px + 1} ${ringY} ${pz + 1} air`,
+          // …plus the west and east mid cells (the center stays solid).
+          `fill ${px - 1} ${ringY} ${pz} ${px - 1} ${ringY} ${pz} air`,
+          `fill ${px + 1} ${ringY} ${pz} ${px + 1} ${ringY} ${pz} air`,
+        ];
+        for (const fill of ringFills) {
+          await serverCommand(attacker, fill);
+        }
+        // Verify the client sees a real perch ring (no-op fills fail here).
+        await pollUntil(
+          attacker,
+          () => {
+            const ring: Array<[number, number]> = [
+              [-1, -1],
+              [-1, 0],
+              [-1, 1],
+              [0, -1],
+              [0, 1],
+              [1, -1],
+              [1, 0],
+              [1, 1],
+            ];
+            const perch = attacker.blockAt(new Vec3(px, ringY, pz));
+            return (
+              !!perch &&
+              perch.boundingBox === "block" &&
+              ring.every(([dx, dz]) => {
+                const b = attacker.blockAt(new Vec3(px + dx, ringY, pz + dz));
+                return !!b && b.boundingBox === "empty";
+              })
+            );
+          },
+          40,
+          "the 1x1 perch ring to be dug into the void",
+        );
+
+        // Put the attacker on the perch — the target now stands 2 blocks east.
+        await tpBot(attacker, px + 0.5, ty, pz + 0.5);
+        await attacker.waitForTicks!(2);
+
+        // Diagnostic: the support-level view this scenario just built.
+        const view = renderTopDownView(
+          attacker.entity.position,
+          (pos: Vec3) => attacker.blockAt(pos),
+        );
+        for (const line of view) logger.info(line, "Combat");
+
+        const combatTick = (): void => {
+          void cm.doDecide();
+        };
+        let attacks = 0;
+        const onAttacked = (): void => {
+          attacks++;
+        };
+        attacker.on("physicsTick", combatTick);
+        attacker.on("attackedTarget", onAttacked);
+
+        try {
+          // Acquire target and engage strafing from the perch.
+          await pollUntil(
+            attacker,
+            () => {
+              const t: any = pvp.target;
+              return !!t && t.username === target.username && pvp.strafeActive;
+            },
+            100,
+            "combat loop to acquire the target player from the perch",
+          );
+
+          // Sample a live window. The escape hop should fire quickly: the
+          // bot leaves the perch, lands on solid ground past the void ring
+          // and resumes orbiting — never dropping below the floor level.
+          const startY = attacker.entity.position.y;
+          let minY = attacker.entity.position.y;
+          const windowTicks = 80;
+          let strafeTicks = 0;
+          let airborneTicks = 0;
+          let inRangeTicks = 0;
+          let path = 0;
+          let leftPerch = false;
+          let previous = attacker.entity.position.clone();
+
+          for (let i = 0; i < windowTicks; i++) {
+            await attacker.waitForTicks!(1);
+            const pos = attacker.entity.position;
+            minY = Math.min(minY, pos.y);
+            path += Math.hypot(pos.x - previous.x, pos.z - previous.z);
+            previous = pos.clone();
+            if (Math.floor(pos.x) !== px || Math.floor(pos.z) !== pz) {
+              leftPerch = true;
+            }
+            const dist = distanceToTarget();
+            if (dist !== null && dist <= Constants.COMBAT.ATTACK_RANGE + 0.5) {
+              inRangeTicks++;
+            }
+            if (pvp.strafeActive) strafeTicks++;
+            if (!attacker.entity.onGround) airborneTicks++;
+          }
+
+          logger.info(
+            `Perch test: attacks=${attacks} strafes=${strafeTicks}/${windowTicks} ` +
+              `airborne=${airborneTicks}/${windowTicks} inRange=${inRangeTicks}/${windowTicks} ` +
+              `path=${path.toFixed(2)} minY=${minY.toFixed(2)} startY=${startY.toFixed(2)}`,
+            "Combat",
+          );
+
+          expect(attacks).toBeGreaterThanOrEqual(2);
+          expect(strafeTicks).toBeGreaterThanOrEqual(20);
+          expect(inRangeTicks).toBeGreaterThanOrEqual(30);
+          expect(path).toBeGreaterThanOrEqual(6);
+
+          // The escape actually happened: the bot left the perch block.
+          expect(leftPerch).toBe(true);
+
+          // A fatal fall (the arc dipping into the void ring) never happens.
+          expect(minY).toBeGreaterThan(ty - 0.9);
+
+          // Landed on solid ground within melee reach of the target.
+          const finalPos = attacker.entity.position;
+          const support = attacker.blockAt(
+            new Vec3(Math.floor(finalPos.x), ringY, Math.floor(finalPos.z)),
+          );
+          expect(support).not.toBeNull();
+          expect(support!.boundingBox).toBe("block");
+          const finalDist = finalPos.distanceTo(target.entity.position);
+          expect(finalDist).toBeLessThan(Constants.COMBAT.ATTACK_RANGE + 2);
+        } finally {
+          // Restore the ring (and the perch itself) with bedrock and reset
+          // the attacker.
+          await serverCommand(
+            attacker,
+            `fill ${px - 1} ${ringY} ${pz - 1} ` +
+              `${px + 1} ${ringY} ${pz + 1} bedrock`,
+          );
+          attacker.removeListener("physicsTick", combatTick);
+          attacker.removeListener("attackedTarget", onAttacked);
+          pvp.forceStop();
+          cm.setMode(0);
+          await tpBot(
+            attacker,
+            ATTACKER_POSITION.x,
+            ATTACKER_POSITION.y,
+            ATTACKER_POSITION.z,
+          );
           await attacker.waitForTicks!(2);
         }
       },

@@ -561,6 +561,77 @@ export function getGroundBelow(pos: Vec3, blockAt: (pos: Vec3) => any): number {
 }
 
 // ---------------------------------------------------------------------------
+// renderTopDownView
+// ---------------------------------------------------------------------------
+
+/**
+ * Render a top-down map of the block level the bot is standing on.
+ *
+ * The grid is centered on the bot's current block column and shows the
+ * support level under its feet (`getGroundBelow` surface − 1); over the
+ * void it falls back to one level below the feet. North (-Z) is the top
+ * row, +X runs east (right), +Z runs south (down).
+ *
+ * Cells are fixed-width 3-letter block-name abbreviations; the bot's own
+ * cell is prefixed with `*`; `...` marks unloaded chunks (blockAt = null).
+ *
+ * Returns one string per line (header + grid rows) for logging/debugging.
+ */
+export function renderTopDownView(
+  pos: Vec3,
+  blockAt: (pos: Vec3) => any,
+  radius = 2,
+): string[] {
+  const centerX = Math.floor(pos.x);
+  const centerZ = Math.floor(pos.z);
+
+  // Support level: getGroundBelow returns the surface the feet rest on
+  // (top of the block), so the block level is one below it. Over the void
+  // the sentinel (-64) means no support; show the plausible level under
+  // the feet instead.
+  const ground = getGroundBelow(pos, blockAt);
+  const levelY = ground > -64 ? Math.ceil(ground) - 1 : Math.floor(pos.y) - 1;
+
+  const size = radius * 2 + 1;
+  const cell = (name: string | null, marked: boolean): string => {
+    const code = name === null ? "..." : name.slice(0, 3);
+    const content = marked ? "*" + code : code;
+    return content.slice(0, 4).padEnd(5);
+  };
+  const rowLabel = (z: number): string => `z${z}`;
+
+  const lines: string[] = [];
+  lines.push(
+    `top-down ${size}x${size} @ block level y=${levelY}, ` +
+      `bot block (${centerX}, ${centerZ}), x->east z->south`,
+  );
+
+  const labelWidth = Math.max(
+    rowLabel(centerZ - radius).length,
+    rowLabel(centerZ + radius).length,
+  );
+  const gutter = " ".repeat(labelWidth + 1);
+
+  const headerCells: string[] = [];
+  for (let x = centerX - radius; x <= centerX + radius; x++) {
+    headerCells.push(`x${x}`.padEnd(5));
+  }
+  lines.push(gutter + headerCells.join(""));
+
+  for (let z = centerZ - radius; z <= centerZ + radius; z++) {
+    const cells: string[] = [];
+    for (let x = centerX - radius; x <= centerX + radius; x++) {
+      const block = blockAt(new Vec3(x, levelY, z));
+      const marked = x === centerX && z === centerZ;
+      cells.push(cell(block ? block.name : null, marked));
+    }
+    lines.push((rowLabel(z) + " ").padEnd(labelWidth + 1) + cells.join(""));
+  }
+
+  return lines;
+}
+
+// ---------------------------------------------------------------------------
 // getFallDamage
 // ---------------------------------------------------------------------------
 

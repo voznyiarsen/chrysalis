@@ -4,8 +4,10 @@
  */
 
 import util from "node:util";
+import { Vec3 } from "vec3";
 import { Logger, logger } from "./logger";
 import { tokenize, resolve, getHelp, CommandNode } from "./cli-engine";
+import { renderTopDownView } from "./movement";
 import type { Bot, EquipmentDestination } from "mineflayer";
 
 /**
@@ -153,6 +155,11 @@ export class CommandManager {
       pos: {
         description: "Show bot's current position",
         handler: () => this.showPosition(),
+      },
+      top: {
+        description:
+          "Show top-down 5x5 view of the block level under the bot",
+        handler: () => this.showTopDownView(),
       },
       com: {
         description: "Toggle combat mode on/off",
@@ -591,6 +598,17 @@ export class CommandManager {
   }
 
   /**
+   * Show a top-down 5x5 view of the block level the bot stands on.
+   */
+  showTopDownView(): void {
+    const lines = renderTopDownView(
+      this.bot.entity.position,
+      (pos: Vec3) => this.bot.blockAt(pos),
+    );
+    for (const line of lines) this.logger.status(line);
+  }
+
+  /**
    * Restore inventory from a saved JSON file.
    * args[1] is the slot index
    */
@@ -924,6 +942,7 @@ export class CommandManager {
       configCommand: this.configCommand.bind(this),
       showVersion: this.showVersion.bind(this),
       showPosition: this.showPosition.bind(this),
+      showTopDownView: this.showTopDownView.bind(this),
       toggleAutosend: this.toggleAutosend.bind(this),
     };
 

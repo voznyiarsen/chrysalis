@@ -28,9 +28,10 @@
  *   fall before committing to it.
  *
  * Candidate preference: current orbit side at the full radius → progressively
- * smaller radii (wall/void hugging) → opposite side → inward rescue → brake.
- * Landing drops up to STRAFE_SAFE_DROP are "safe"; larger drops up to
- * STRAFE_HAZARD_MAX_DROP are only accepted when nothing better exists.
+ * smaller radii (wall/void hugging) → opposite side → inward rescue → escape
+ * hop (validated jump across an uncrossable gap) → brake. Landing drops up
+ * to STRAFE_SAFE_DROP are "safe"; larger drops up to STRAFE_HAZARD_MAX_DROP
+ * are only accepted when nothing better exists.
  */
 
 import { Vec3 } from "vec3";
@@ -62,7 +63,7 @@ export interface StrafeTickInput {
 }
 
 /** Quality of the chosen plan. */
-export type StrafeTier = "safe" | "warn" | "rescue" | "brake";
+export type StrafeTier = "safe" | "warn" | "rescue" | "escape" | "brake";
 
 /** The per-tick movement decision returned by StrafeController. */
 export interface StrafePlan {
@@ -100,13 +101,20 @@ export interface StrafeSimParams {
   world: StrafeWorld;
   /** Orbit direction control (default) or pure inward steering (rescue). */
   mode?: "orbit" | "inward";
+  /**
+   * Force relaxed mid-air ground checks (void columns tolerated while the
+   * arc is airborne; success requires a real landing within MAX_DROP).
+   * Defaults to `mode === "inward" && !onGround` — the escape hop sets this
+   * explicitly because its launch is grounded.
+   */
+  relax?: boolean;
   maxTicks?: number;
 }
 /**
- * Failure reasons for the rescue-mode prediction:
- * the bot is already airborne over one or more void columns, so per-tick
- * ground checks are relaxed; the rescue is only valid if it lands on real
- * ground (drop within MAX_DROP) before the horizon ends.
+ * Failure reasons for the rescue/escape-mode prediction:
+ * the arc crosses void columns (or the simulated control is already
+ * committed), so per-tick ground checks are relaxed; the plan is only valid
+ * if it lands on real ground (drop within MAX_DROP) before the horizon ends.
  */
 const INWARD_NO_LANDING = "no-landing";
 
@@ -292,10 +300,12 @@ export function simulateStrafePath(params: StrafeSimParams): StrafeSimResult {
   const maxTicks = params.maxTicks ?? SIM_TICKS;
   const mode = params.mode ?? "orbit";
   const blockAt = params.world.blockAt;
-  // Airborne rescue mode flies through void columns (the bot is already
-  // committed to gravity); success means landing on real ground before the
-  // horizon ends. A grounded rescue keeps stricter ground checks.
-  const relaxGroundChecks = mode === "inward" && !params.onGround;
+  // Relaxed mode flies through void columns (the bot is already committed
+  // to gravity — airborne rescue, or a grounded escape hop whose launch the
+  // bot commits to); success means landing on real ground before the
+  // horizon ends. A non-relaxed run keeps stricter ground checks.
+  const relaxGroundChecks =
+    params.relax ?? (mode === "inward" && !params.onGround);
   // Effective ground reference for the landing-drop measurement.
   const dropReferenceY = params.referenceGroundY ?? params.source.y;
 
@@ -461,7 +471,13 @@ export function simulateStrafePath(params: StrafeSimParams): StrafeSimResult {
  *    same candidates without a jump.
  * 3. Rescue: steer straight toward the target (validated the same way) —
  *    airborne falls head for the known-safe ground under the target.
- * 4. Brake: no validated plan — stop horizontal motion and stand; never
+ * 4. Escape hop (grounded ticks only, when every orbit/walk/rescue plan was
+ *    rejected): jump straight toward the target's ground and coast over the
+ *    blocking gap (an isolated perch's void ring, a deep moat). The
+ *    prediction runs relaxed — mid-air void columns tolerated — and demands
+ *    a real landing with drop ≤ MAX_DROP, so an unreachable far shore never
+ *    validates.
+ * 5. Brake: no validated plan — stop horizontal motion and stand; never
  *    jump into an unresolved path.
  */
 export class StrafeController {
@@ -533,7 +549,7 @@ export class StrafeController {
     }
 
     // Rescue: validated inward steering toward the target's ground.
-    const rescue = this._searchInward(input, referenceGroundY, dist);
+    const rescue = this._searchInward(input, referenceGroundY, dist, false);
     if (rescue) {
       return {
         velocity: new Vec3(
@@ -546,6 +562,26 @@ export class StrafeController {
         range: BASE_RANGE,
         tier: "rescue",
         point: rescue.point,
+      };
+    }
+
+    // Escape hop: a grounded bot with no validated orbit/walk/rescue may be
+    // standing on an isolated block surrounded by void (or a deep moat).
+    // Jump toward the target's ground and let the arc coast over the gap —
+    // only when the prediction lands the arc on solid ground.
+    const escape = this._searchInward(input, referenceGroundY, dist, true);
+    if (escape) {
+      return {
+        velocity: new Vec3(
+          escape.velocity.x,
+          JUMP_VELOCITY,
+          escape.velocity.z,
+        ),
+        jump: true,
+        direction: this._direction,
+        range: BASE_RANGE,
+        tier: "escape",
+        point: escape.point,
       };
     }
 
@@ -626,13 +662,18 @@ export class StrafeController {
   }
 
   /**
-   * Inward rescue candidate: steer straight toward the target. Accepted only
-   * when the continuous prediction of the inward walk is fully safe.
+   * Inward candidate: steer straight toward the target. The regular rescue
+   * (`escape: false`) is accepted only when the continuous prediction of the
+   * inward walk is fully safe. The escape hop (`escape: true`, grounded
+   * only) launches a jump with relaxed mid-air ground checks, so the arc may
+   * cross void columns; the prediction still requires a real landing with
+   * drop ≤ MAX_DROP before the horizon ends, or the candidate is rejected.
    */
   private _searchInward(
     input: StrafeTickInput,
     referenceGroundY: number | null,
     dist: number,
+    escape: boolean,
   ): Candidate | null {
     const velocity = inwardVector(input.source, input.target, SPEED);
     const point = new Vec3(
@@ -646,19 +687,21 @@ export class StrafeController {
       // Already at the target; standing is the safe action.
       return null;
     }
+    if (escape && !input.onGround) return null;
 
     const result = simulateStrafePath({
       source: input.source,
       target: input.target,
       velocity: input.velocity,
       onGround: input.onGround,
-      jump: false,
+      jump: escape,
       direction: this._direction,
       range: BASE_RANGE,
       speed: SPEED,
       referenceGroundY,
       world: input.world,
       mode: "inward",
+      relax: escape || undefined,
     });
     if (!result.safe) return null;
 
@@ -668,7 +711,7 @@ export class StrafeController {
       velocity,
       point,
       tier: "warn",
-      jump: false,
+      jump: escape,
       result,
     };
   }
