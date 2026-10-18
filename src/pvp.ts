@@ -512,31 +512,13 @@ class CombatManager {
         },
         async () => {
           const status = this.getFallProtectionStatus();
-          const { canEatGapple, canEatEGapple, needsTotem } = status;
-
-          if (needsTotem) {
-            if (!inv().hasItem("totem_of_undying")) return;
-            this.logger.combat(
-              "Fall: Survival impossible with Gapples, equipping Totem",
-            );
-            await inv().equipTotem();
-          } else if (canEatEGapple && inv().hasItem("golden_apple", 1)) {
-            this.logger.combat("Fall: Mitigating with Enchanted Golden Apple");
-            await inv().equipGapple();
-          } else if (canEatGapple && inv().hasItem("golden_apple", 0)) {
-            this.logger.combat("Fall: Mitigating with Golden Apple");
-            await inv().equipGapple();
-          } else {
-            if (
-              !inv().hasItem("golden_apple") &&
-              !inv().hasItem("totem_of_undying")
-            )
-              return;
-            this.logger.combat(
-              "Fall: No suitable Gapple available, equipping Totem",
-            );
-            await inv().equipTotem();
-          }
+          // Totem of Undying is the only fall mitigation.
+          if (!status.needsTotem) return;
+          if (!inv().hasItem("totem_of_undying")) return;
+          this.logger.combat(
+            "Fall: dangerous, equipping Totem of Undying",
+          );
+          await inv().equipTotem();
         },
         "fall",
         10,
@@ -940,19 +922,9 @@ class CombatManager {
     isDangerous: boolean;
     predictedDamage?: number;
     ticksToImpact?: number;
-    hasTimeToEat?: boolean;
-    canEatGapple?: boolean;
-    canEatEGapple?: boolean;
     needsTotem?: boolean;
   } {
-    const {
-      DANGER_HP,
-      GAPPLE_ABSORB,
-      EGAPPLE_ABSORB,
-      EGAPPLE_RESIST,
-      EAT_TICKS,
-      EAT_BUFFER,
-    } = Constants.COMBAT.SURVIVAL;
+    const { DANGER_HP } = Constants.COMBAT.SURVIVAL;
     const { totalHealth } = this.getHealthStatus();
     const entity = this.bot.entity;
     const velY = entity.velocity.y;
@@ -978,8 +950,6 @@ class CombatManager {
     const fallDistance = fallOriginY - groundY;
     const predictedDamage = this.bot.utilsManager.getFallDamage(fallDistance);
 
-    // Tolerance: 32 ticks (1.6s) to eat + 10 ticks buffer = 42 ticks.
-    const EAT_TICKS_WITH_TOLERANCE = EAT_TICKS + EAT_BUFFER;
     // Time remaining until impact, simulated with vanilla fall physics
     // (gravity + drag, terminal clamp) from current height/velocity.
     const ticksToImpact = this.bot.utilsManager.getFallTicks(
@@ -987,31 +957,20 @@ class CombatManager {
       velY,
       groundY,
     );
-    const hasTimeToEat = ticksToImpact > EAT_TICKS_WITH_TOLERANCE;
 
     const isDangerous = predictedDamage >= totalHealth - DANGER_HP;
     if (!isDangerous) {
-      return {
-        isDangerous: false,
-        predictedDamage,
-        ticksToImpact,
-        hasTimeToEat,
-        needsTotem: false,
-      };
+      return { isDangerous: false, predictedDamage, ticksToImpact };
     }
 
-    // Survival with Regular Gapple: +8 Absorption HP
-    const canEatGapple =
-      hasTimeToEat && predictedDamage < totalHealth + GAPPLE_ABSORB;
-    // Survival with Enchanted Gapple: +32 Absorption HP and 20% Resistance
-    const damageWithResistance = predictedDamage * EGAPPLE_RESIST;
-    const canEatEGapple =
-      hasTimeToEat && damageWithResistance < totalHealth + EGAPPLE_ABSORB;
-
-    const needsTotem = !canEatGapple && !canEatEGapple;
+    // Totem of Undying is the only fall mitigation: a dangerous fall is
+    // always survivable with a totem, and eating mid-fall can't complete
+    // in time (gapple fall-eat is unreachable with vanilla fall physics —
+    // dangerous falls land before the consume bar finishes).
+    const needsTotem = true;
 
     this.logger.debug(
-      `Fall: DANGEROUS. Predicted damage: ${predictedDamage.toFixed(1)} HP, total health: ${totalHealth.toFixed(1)} HP, fall distance: ${fallDistance.toFixed(1)} blocks, ticks to impact: ${ticksToImpact.toFixed(0)}. Can eat gapple: ${canEatGapple}, can eat enchanted gapple: ${canEatEGapple}, needs totem: ${needsTotem}`,
+      `Fall: DANGEROUS. Predicted damage: ${predictedDamage.toFixed(1)} HP, total health: ${totalHealth.toFixed(1)} HP, fall distance: ${fallDistance.toFixed(1)} blocks, ticks to impact: ${ticksToImpact.toFixed(0)}. Needs totem: ${needsTotem}`,
       "Combat",
     );
 
@@ -1019,9 +978,6 @@ class CombatManager {
       isDangerous,
       predictedDamage,
       ticksToImpact,
-      hasTimeToEat,
-      canEatGapple,
-      canEatEGapple,
       needsTotem,
     };
   }

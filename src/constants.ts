@@ -218,11 +218,6 @@ export const Constants = {
     SURVIVAL: {
       MAX_HP: 20,
       DANGER_HP: 2,
-      GAPPLE_ABSORB: 8,
-      EGAPPLE_ABSORB: 32,
-      EGAPPLE_RESIST: 0.8,
-      EAT_TICKS: 32,
-      EAT_BUFFER: 10,
     },
   },
 

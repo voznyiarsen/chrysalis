@@ -103,9 +103,6 @@ declare class CombatManager {
     isDangerous: boolean;
     predictedDamage?: number;
     ticksToImpact?: number;
-    hasTimeToEat?: boolean;
-    canEatGapple?: boolean;
-    canEatEGapple?: boolean;
     needsTotem?: boolean;
   };
   doDecide(): Promise<void>;

@@ -571,10 +571,10 @@ describeE2E("E2E PvP Tests", () => {
    * Scenario: bot given a totem of undying + golden apple, teleported to
    * various heights. Verifies fall-damage prediction picks the right
    * mitigation at each height and that the totem actually equips mid-fall
-   * for dangerous falls.
+   * for dangerous falls. Totem of Undying is the only fall mitigation;
+   * golden apples are for healing, not fall survival.
    *
-   * Expected outcomes (full health 20, DANGER_HP=2, regular gapple +8 absorb,
-   * 42-tick eat budget):
+   * Expected outcomes (full health 20, DANGER_HP=2):
    *   +10  → damage 7,  not dangerous            → no action, lands intact
    *   +25  → damage 22, dangerous, needs totem   → totem equips mid-fall
    *   +50  → damage 47, dangerous, needs totem   → totem equips mid-fall
@@ -619,7 +619,6 @@ describeE2E("E2E PvP Tests", () => {
         expect(status.isDangerous).toBe(expectedDangerous);
         expect(status.predictedDamage).toBeDefined();
         expect(status.ticksToImpact).toBeDefined();
-        expect(status.hasTimeToEat).toBeDefined();
 
         if (expectedMitigate === "totem") {
           expect(status.needsTotem).toBe(true);
@@ -634,7 +633,7 @@ describeE2E("E2E PvP Tests", () => {
             "totem to equip to off-hand during fall",
           );
         } else {
-          expect(status.needsTotem).toBe(false);
+          expect(status.needsTotem).toBeUndefined();
         }
 
         // Land and survive.

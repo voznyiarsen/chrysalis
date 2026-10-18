@@ -32,9 +32,6 @@ export interface CombatTreeContext {
     isDangerous: boolean;
     predictedDamage?: number;
     ticksToImpact?: number;
-    hasTimeToEat?: boolean;
-    canEatGapple?: boolean;
-    canEatEGapple?: boolean;
     needsTotem?: boolean;
   };
   getBestPearlOffset: (source: Vec3, target: Vec3, arc?: "low" | "high") => { offset: number; arc: "low" | "high" } | null;
@@ -129,17 +126,10 @@ export function buildCombatTree(ctx: CombatTreeContext): Node {
               action("mitigateFall", (c) => {
                 const status = c.getFallProtectionStatus();
                 const inv = c.inv();
-                if (status.needsTotem) {
-                  if (!inv.hasItem("totem_of_undying")) return;
-                  inv.equipTotem();
-                } else if (status.canEatEGapple && inv.hasItem("golden_apple", 1)) {
-                  inv.equipGapple();
-                } else if (status.canEatGapple && inv.hasItem("golden_apple", 0)) {
-                  inv.equipGapple();
-                } else {
-                  if (!inv.hasItem("golden_apple") && !inv.hasItem("totem_of_undying")) return;
-                  inv.equipTotem();
-                }
+                // Totem of Undying is the only fall mitigation.
+                if (!status.needsTotem) return;
+                if (!inv.hasItem("totem_of_undying")) return;
+                inv.equipTotem();
               }),
             ],
           }),
