@@ -217,6 +217,11 @@ export class PVPManager {
    * movement back to the pathfinder with a follow goal.
    */
   private doStrafe(): void {
+    if (!this.bot.combatManager.isFeatureEnabled("strafe")) {
+      this._disengageStrafe();
+      return;
+    }
+
     const target = this.target;
     if (!target || !target.isValid) {
       this._disengageStrafe();
@@ -457,6 +462,18 @@ class CombatManager {
   _enemyAboveLaunchPoint: Vec3 | null;
   /** Key for the enemy-above pathfinder goal, to avoid re-issuing every tick. */
   _enemyAboveGoalKey: string | null;
+  /** Feature toggle states for individual combat features. All default to true. */
+  private _featureToggles: Record<string, boolean> = {
+    armor: true,
+    weapon: true,
+    gapple: true,
+    totem: true,
+    pearl: true,
+    strafe: true,
+    enemyAbovePearl: true,
+    buff: true,
+    food: true,
+  };
   public decisions: CombatDecision[];
   _isDeciding: boolean;
   private _tree: BTNode | null = null;
@@ -485,6 +502,41 @@ class CombatManager {
     this._isDeciding = false;
 
     this.setupDecisions();
+  }
+
+  /**
+   * Toggle a combat feature on/off.
+   * @param name - Feature name (armor, weapon, gapple, totem, pearl, strafe, enemyAbovePearl, buff, food)
+   */
+  toggleFeature(name: string): void {
+    const valid = Object.keys(this._featureToggles);
+    if (!(name in this._featureToggles)) {
+      this.logger.combat(
+        `Unknown feature '${name}'. Valid: ${valid.join(", ")}`,
+      );
+      return;
+    }
+    this._featureToggles[name] = !this._featureToggles[name];
+    this.logger.combat(
+      `Feature '${name}' ${this._featureToggles[name] ? "enabled" : "disabled"}`,
+    );
+  }
+
+  /**
+   * Check if a combat feature is enabled.
+   */
+  isFeatureEnabled(name: string): boolean {
+    return this._featureToggles[name] ?? true;
+  }
+
+  /**
+   * Get status of all combat features as a formatted string.
+   */
+  getFeatureStatus(): string {
+    const entries = Object.entries(this._featureToggles)
+      .map(([name, enabled]) => `  ${name}: ${enabled ? "on" : "off"}`)
+      .join("\n");
+    return `Combat features:\n${entries}`;
   }
 
   /**

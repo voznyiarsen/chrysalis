@@ -124,6 +124,7 @@ function maintenance(name: string, children: Node[]): Node {
  *   8. Buff (strength potion)
  *   9. Food
  *   10. Gapple utility
+ * All branches can be toggled individually via the `tg` command.
  */
 export function buildCombatTree(ctx: CombatTreeContext): Node {
   const { CRITICAL_HP_MULT, LOW_FOOD } = Constants.COMBAT;
@@ -139,6 +140,7 @@ export function buildCombatTree(ctx: CombatTreeContext): Node {
             name: "fallProtection",
             nodes: [
               condition("isFallDangerous", (c) => c.getFallProtectionStatus().isDangerous),
+              condition("totemEnabled", (c) => (c.bot as any).combatManager.isFeatureEnabled("totem")),
               condition("hasTotem", (c) => c.inv().hasItem("totem_of_undying")),
               action("mitigateFall", (c) => { c.inv().equipTotem(); }),
             ],
@@ -153,6 +155,7 @@ export function buildCombatTree(ctx: CombatTreeContext): Node {
             name: "fallPearl",
             nodes: [
               condition("isFallDangerous", (c) => c.getFallProtectionStatus().isDangerous),
+              condition("pearlEnabled", (c) => (c.bot as any).combatManager.isFeatureEnabled("pearl")),
               condition("canMitigateFallWithPearl", (c) => c.getFallPearlMitigation().canMitigate),
               action("mitigateFallWithPearl", (c) => {
                 const mitigation = c.getFallPearlMitigation();
@@ -198,6 +201,7 @@ export function buildCombatTree(ctx: CombatTreeContext): Node {
           new Sequence({
             name: "criticalTotem",
             nodes: [
+              condition("totemEnabled", (c) => (c.bot as any).combatManager.isFeatureEnabled("totem")),
               condition("needsCriticalTotem", (c) => {
                 const { totalHealth } = c.getHealthStatus();
                 const hasTotems = c.inv().hasItem("totem_of_undying");
@@ -212,6 +216,7 @@ export function buildCombatTree(ctx: CombatTreeContext): Node {
           new Sequence({
             name: "heal",
             nodes: [
+              condition("gappleEnabled", (c) => (c.bot as any).combatManager.isFeatureEnabled("gapple")),
               condition("needsHeal", (c) => {
                 const { totalHealth, healthPoints } = c.getHealthStatus();
                 const hasGapple = c.inv().hasItem("golden_apple");
@@ -230,7 +235,7 @@ export function buildCombatTree(ctx: CombatTreeContext): Node {
         new Sequence({
           name: "armor",
           nodes: [
-            alwaysTrue(),
+            condition("armorEnabled", (c) => (c.bot as any).combatManager.isFeatureEnabled("armor")),
             action("equipArmor", (c) => { c.inv().equipArmor(); }),
           ],
         }),
@@ -239,7 +244,7 @@ export function buildCombatTree(ctx: CombatTreeContext): Node {
         new Sequence({
           name: "weapon",
           nodes: [
-            alwaysTrue(),
+            condition("weaponEnabled", (c) => (c.bot as any).combatManager.isFeatureEnabled("weapon")),
             action("equipWeapon", (c) => { c.inv().equipWeapon(); }),
           ],
         }),
@@ -248,6 +253,7 @@ export function buildCombatTree(ctx: CombatTreeContext): Node {
         new Sequence({
           name: "pearl",
           nodes: [
+            condition("pearlEnabled", (c) => (c.bot as any).combatManager.isFeatureEnabled("pearl")),
             condition("hasTargetForPearl", (c) => {
               const target = (c.bot as any).pvp?.target;
               if (!target) return false;
@@ -288,6 +294,7 @@ export function buildCombatTree(ctx: CombatTreeContext): Node {
         new Sequence({
           name: "enemyAbovePearl",
           nodes: [
+            condition("enemyAbovePearlEnabled", (c) => (c.bot as any).combatManager.isFeatureEnabled("enemyAbovePearl")),
             condition("canReachEnemyWithPearl", (c) =>
               c.getEnemyAbovePearlMitigation().canMitigate,
             ),
@@ -350,6 +357,7 @@ export function buildCombatTree(ctx: CombatTreeContext): Node {
         new Sequence({
           name: "buff",
           nodes: [
+            condition("buffEnabled", (c) => (c.bot as any).combatManager.isFeatureEnabled("buff")),
             condition("needsBuff", (c) => {
               const { totalHealth } = c.getHealthStatus();
               const hasPotion = c.inv().hasItem("potion");
@@ -366,6 +374,7 @@ export function buildCombatTree(ctx: CombatTreeContext): Node {
         new Sequence({
           name: "food",
           nodes: [
+            condition("foodEnabled", (c) => (c.bot as any).combatManager.isFeatureEnabled("food")),
             condition("needsFood", (c) => {
               const { totalHealth, healthPoints } = c.getHealthStatus();
               const hasGapple = c.inv().hasItem("golden_apple");
@@ -388,6 +397,7 @@ export function buildCombatTree(ctx: CombatTreeContext): Node {
         new Sequence({
           name: "gapplesUtility",
           nodes: [
+            condition("gappleEnabled", (c) => (c.bot as any).combatManager.isFeatureEnabled("gapple")),
             condition("gapplesUtility", (c) => {
               const inv = c.inv();
               const hasGapple = inv.hasItem("golden_apple");

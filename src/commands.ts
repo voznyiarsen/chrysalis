@@ -46,6 +46,57 @@ export class CommandManager {
           );
         },
       },
+      tg: {
+        description:
+          "Toggle individual combat features on/off (armor, weapon, gapple, totem, pearl, strafe, enemyAbovePearl, buff, food). Run without args to show status.",
+        subcommands: {
+          armor: {
+            description: "Toggle armor equip",
+            handler: () => this.toggleFeature("armor"),
+          },
+          weapon: {
+            description: "Toggle weapon equip",
+            handler: () => this.toggleFeature("weapon"),
+          },
+          gapple: {
+            description: "Toggle golden apple heal/eat",
+            handler: () => this.toggleFeature("gapple"),
+          },
+          totem: {
+            description: "Toggle totem of undying equip",
+            handler: () => this.toggleFeature("totem"),
+          },
+          pearl: {
+            description: "Toggle ender pearl throw",
+            handler: () => this.toggleFeature("pearl"),
+          },
+          strafe: {
+            description: "Toggle combat strafing",
+            handler: () => this.toggleFeature("strafe"),
+          },
+          enemyAbovePearl: {
+            description: "Toggle enemy-above pearl teleport",
+            handler: () => this.toggleFeature("enemyAbovePearl"),
+          },
+          buff: {
+            description: "Toggle strength potion buff",
+            handler: () => this.toggleFeature("buff"),
+          },
+          food: {
+            description: "Toggle food eating",
+            handler: () => this.toggleFeature("food"),
+          },
+          "<feature>": {
+            description: "Feature name to toggle",
+            positional: true,
+            handler: (args: string[]) => {
+              if (args[1]) this.toggleFeature(args[1]);
+              else this.showFeatureStatus();
+            },
+          },
+        },
+        handler: () => this.showFeatureStatus(),
+      },
       ts: {
         description: "Toss a single item or stack",
         subcommands: {
@@ -652,6 +703,37 @@ export class CommandManager {
   }
 
   /**
+   * Toggle an individual combat feature on/off.
+   * @param name - Feature name (armor, weapon, gapple, totem, pearl, strafe, enemyAbovePearl, buff, food)
+   */
+  toggleFeature(name: string): void {
+    const cm = this.bot.combatManager;
+    if (!cm) {
+      this.logger.error(
+        new Error("Combat manager not available"),
+        "Command",
+      );
+      return;
+    }
+    cm.toggleFeature(name);
+  }
+
+  /**
+   * Show the status of all combat features.
+   */
+  showFeatureStatus(): void {
+    const cm = this.bot.combatManager;
+    if (!cm) {
+      this.logger.error(
+        new Error("Combat manager not available"),
+        "Command",
+      );
+      return;
+    }
+    this.logger.command(cm.getFeatureStatus());
+  }
+
+  /**
    * Change combat mode.
    * args[1] is the mode number (0-3); without it, show the current mode.
    */
@@ -935,6 +1017,8 @@ export class CommandManager {
       run: this.run.bind(this),
       quit: this.quit.bind(this),
       toggleCombat: this.toggleCombat.bind(this),
+      toggleFeature: this.toggleFeature.bind(this),
+      showFeatureStatus: this.showFeatureStatus.bind(this),
       changeMode: this.changeMode.bind(this),
       pacify: this.pacify.bind(this),
       queryPlayerDB: this.queryPlayerDB.bind(this),

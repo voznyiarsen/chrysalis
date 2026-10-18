@@ -131,6 +131,9 @@ declare class CombatManager {
     flightTime?: number;
     offset?: number;
   };
+  toggleFeature(name: string): void;
+  isFeatureEnabled(name: string): boolean;
+  getFeatureStatus(): string;
 }
 
 declare class CommandManager {

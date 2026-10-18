@@ -58,7 +58,7 @@ function makeCtx(overrides: {
       height: 1.8,
     },
     food: overrides.food ?? 20,
-    combatManager: { _lastFallPearlTime: 0 },
+    combatManager: { _lastFallPearlTime: 0, isFeatureEnabled: () => true },
     getEquipmentDestSlot: (dest: string) => ({ head: 5, torso: 6, legs: 7, feet: 8, "off-hand": 45 }[dest] ?? 0),
     inventory: { slots: [] },
   };
