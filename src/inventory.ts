@@ -38,6 +38,35 @@ class InventoryManager {
     this.bot.inventory.on("changedSlot", clearCache);
   }
 
+  // ── Window-op serialization ────────────────────────────────────────
+  // bot.equip / toss / unequip drive mineflayer moveSlotItem chains: a
+  // sequence of clickWindow calls where every click must be confirmed by
+  // the server before the next fires, all sharing one mouse cursor. Two
+  // overlapping chains interleave their clicks, the transaction sequence
+  // desyncs and the server starts rejecting clicks ("Server rejected
+  // transaction") — items bounce in and out of slots and nothing settles
+  // until the bot reconnects. This happens exactly when an armor set
+  // appears all at once: the combat tree fires equipArmor() fire-and-
+  // forget every tick, and each tick re-reads the still-shift/shifting
+  // inventory. Every window operation in this manager therefore queues
+  // behind the same promise chain.
+  /** Tail of the serialized window-operation chain. */
+  private _windowChain: Promise<unknown> = Promise.resolve();
+
+  /**
+   * Run `fn` as an exclusive window operation: nothing else in this
+   * manager touches the inventory window until it settles.
+   */
+  private _withWindow<T>(fn: () => Promise<T>): Promise<T> {
+    // Run regardless of the previous op's outcome.
+    const prev = this._windowChain as Promise<void>;
+    const run = prev.then(() => fn(), () => fn());
+    // The stored chain must never reject — a rejection would poison every
+    // later op. Errors stay visible through the returned promise.
+    this._windowChain = run.catch(() => undefined);
+    return run;
+  }
+
   /**
    * Collect all items matching the given criteria from inventory and equipment.
    * This is the single source of truth for item lookups — all other query
@@ -223,8 +252,10 @@ class InventoryManager {
       this.logger.inventory(
         `Equipping ${item.displayName} to ${targetSlot}...`,
       );
-      await this.bot.equip!(item, targetSlot as any);
-      await this.bot.waitForTicks!(Constants.TIMING.EQUIP_TICKS);
+      await this._withWindow(async () => {
+        await this.bot.equip!(item, targetSlot as any);
+        await this.bot.waitForTicks!(Constants.TIMING.EQUIP_TICKS);
+      });
       return true;
     } catch (error: unknown) {
       const err = error as Error;
@@ -530,31 +561,67 @@ class InventoryManager {
    * Unequip all armor slots.
    */
   async unequipAllItems(): Promise<void> {
-    const destinations = ["head", "torso", "legs", "feet", "off-hand"];
-    for (const destination of destinations) {
-      const slot = this.bot.getEquipmentDestSlot(destination);
-      if (this.bot.inventory.slots[slot] !== null) {
-        await this.bot.waitForTicks!(Constants.TIMING.EQUIP_TICKS);
-        await this.bot.unequip!(destination as any);
+    await this._withWindow(async () => {
+      const destinations = ["head", "torso", "legs", "feet", "off-hand"];
+      for (const destination of destinations) {
+        const slot = this.bot.getEquipmentDestSlot(destination);
+        if (this.bot.inventory.slots[slot] !== null) {
+          await this.bot.waitForTicks!(Constants.TIMING.EQUIP_TICKS);
+          await this.bot.unequip!(destination as any);
+        }
       }
-    }
+    });
   }
 
   /**
    * Toss every item from the inventory.
    */
   async tossAllItems(): Promise<void> {
-    const items = this.bot.inventory.items();
-    for (const item of items) {
-      await this.bot.waitForTicks!(Constants.TIMING.EQUIP_TICKS);
-      await this.bot.toss!(item.type, item.metadata, item.count);
-    }
+    await this._withWindow(async () => {
+      const items = this.bot.inventory.items();
+      for (const item of items) {
+        await this.bot.waitForTicks!(Constants.TIMING.EQUIP_TICKS);
+        await this.bot.toss!(item.type, item.metadata, item.count);
+      }
+    });
   }
 
   /**
-   * Equip the best armor items for each slot based on material and enchantment scores.
+   * Equip the best armor items for each slot based on material and
+   * enchantment scores.
+   *
+   * The combat tree fires this fire-and-forget every combat tick, so the
+   * runs serialize here instead of at the window: while a pass is in
+   * flight, later calls collapse into a single follow-up pass that
+   * re-reads the inventory fresh. Without the guard, overlapping passes
+   * interleave mineflayer's click chains and the server rejects the
+   * window transactions (the bot stalls — see {@link _withWindow}).
    */
   async equipArmor(): Promise<void> {
+    if (this._equipArmorBusy) {
+      this._equipArmorQueued = true;
+      return;
+    }
+    this._equipArmorBusy = true;
+    try {
+      do {
+        this._equipArmorQueued = false;
+        await this._withWindow(() => this._equipArmorPass());
+      } while (this._equipArmorQueued);
+    } finally {
+      this._equipArmorBusy = false;
+    }
+  }
+
+  /** While an armor pass runs, collapse overlapping calls into one more. */
+  private _equipArmorBusy = false;
+  private _equipArmorQueued = false;
+
+  /**
+   * One armor pass: read the inventory once, equip at most one item per
+   * slot. Runs exclusively ({@link _withWindow}).
+   */
+  private async _equipArmorPass(): Promise<void> {
     const materialStats = Constants.MATERIALS.ARMOR;
     const slotMap = Constants.MATERIALS.SLOT_MAP;
 
@@ -1079,8 +1146,10 @@ class InventoryManager {
       this.logger.inventory(
         `Equipping ${weapon.displayName} (#${weapon.type}) (DPS: ${bestScore.toFixed(2)}) to hand...`,
       );
-      await this.bot.equip!(weapon, "hand" as any);
-      await this.bot.waitForTicks!(Constants.TIMING.EQUIP_TICKS);
+      await this._withWindow(async () => {
+        await this.bot.equip!(weapon, "hand" as any);
+        await this.bot.waitForTicks!(Constants.TIMING.EQUIP_TICKS);
+      });
     }
   }
 

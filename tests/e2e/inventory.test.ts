@@ -510,6 +510,32 @@ describeE2E("E2E Inventory Tests", () => {
         ]),
       );
     });
+
+    test("equips a full set arriving at once even when equip calls overlap", async () => {
+      await clearInventory(bot);
+      // A full set arrives effectively at once: four /give commands land
+      // back-to-back with no waiting between them.
+      await giveItem(bot, "leather_helmet", 1);
+      await giveItem(bot, "leather_chestplate", 1);
+      await giveItem(bot, "leather_leggings", 1);
+      await giveItem(bot, "leather_boots", 1);
+
+      // The combat tree fires equipArmor() fire-and-forget every tick;
+      // emulate five overlapping invocations that are NOT awaited before
+      // the next one starts.
+      const runs = [0, 0, 0, 0, 0].map(() => getInv(bot).equipArmor());
+      // Settle all of them. Without a window-op lock the interleaved
+      // mineflayer click chains desync, clicks stop confirming, pieces
+      // bounce in and out of the armor slots and the pass never converges.
+      await Promise.all(runs);
+
+      // The full set is equipped and nothing is left in the main inventory.
+      expect(getEquippedItem(bot, "head")!.name).toBe("leather_helmet");
+      expect(getEquippedItem(bot, "torso")!.name).toBe("leather_chestplate");
+      expect(getEquippedItem(bot, "legs")!.name).toBe("leather_leggings");
+      expect(getEquippedItem(bot, "feet")!.name).toBe("leather_boots");
+      expect(bot.inventory.items().length).toBe(0);
+    }, TIMEOUT_MS * 2);
   });
 
   // ══════════════════════════════════════════════════════════════════
