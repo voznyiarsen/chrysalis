@@ -1137,46 +1137,6 @@ class CombatManager {
     const eyePos = entity.position.offset(0, entity.height!, 0);
     const targetPos = target.position.offset(0, target.height / 2, 0);
 
-    // If we already have a cached launch point (pathfinding in progress), reuse it
-    if (this._enemyAboveLaunchPoint) {
-      const trajectory = this.bot.utilsManager.getBestPearlTrajectory(
-        this._enemyAboveLaunchPoint.offset(0, entity.height!, 0),
-        targetPos,
-        Constants.COMBAT.PROJECTILES.ender_pearl.VELOCITY,
-        Constants.COMBAT.PROJECTILES.ender_pearl.GRAVITY,
-        Constants.COMBAT.PROJECTILES.ender_pearl.DRAG,
-        1.5,
-        0.5,
-      );
-      if (trajectory) {
-        const horizontalDist = Math.hypot(
-          targetPos.x - this._enemyAboveLaunchPoint.x - 0, // eye offset doesn't change XZ
-          targetPos.z - this._enemyAboveLaunchPoint.z - 0,
-        );
-        // Account for eye height offset in horizontal dist calc (XZ unchanged by Y offset)
-        const hDist = Math.hypot(
-          targetPos.x - (this._enemyAboveLaunchPoint.x),
-          targetPos.z - (this._enemyAboveLaunchPoint.z),
-        );
-        let offset: number;
-        if (hDist < 1e-6) {
-          offset = targetPos.y > eyePos.y ? 5 : -5;
-        } else {
-          offset = hDist * Math.tan(trajectory.pitch * Math.PI / 180);
-        }
-        return {
-          canMitigate: true,
-          launchPos: this._enemyAboveLaunchPoint,
-          targetPos,
-          flightTime: trajectory.flightTime,
-          offset,
-        };
-      }
-      // Trajectory no longer valid (target moved), clear cache
-      this._enemyAboveLaunchPoint = null;
-      this._enemyAboveGoalKey = null;
-    }
-
     // Find a valid launch point
     const launchPos = this._findEnemyAboveLaunchPoint(target);
     if (!launchPos) return { canMitigate: false };
@@ -1262,6 +1222,8 @@ class CombatManager {
         candidates.push(launchPos);
       }
     }
+
+    if (candidates.length === 0) return null;
 
     // Sort by distance to bot (prefer closer launch points)
     candidates.sort((a, b) =>

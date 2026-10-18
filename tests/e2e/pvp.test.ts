@@ -747,6 +747,117 @@ describeE2E("E2E PvP Tests", () => {
     TIMEOUT_MS * 3,
   );
 
+  test(
+    "mitigates an enemy above by throwing an ender pearl to teleport up",
+    async () => {
+      const cm: any = getCm();
+      const combatTick = (): void => {
+        void cm.doDecide();
+      };
+      bot.on("physicsTick", combatTick);
+
+      let target: Bot | undefined;
+
+      try {
+        // Neutralize resistance so fall damage and pearl damage are real.
+        await serverCommand(
+          bot,
+          effectClearCmd(bot.username, VERSION),
+        );
+
+        await ensureSurvival(bot);
+
+        // Set combat mode to Players (All) so the bot targets the enemy bot.
+        cm.setMode(2);
+
+        // Give ender pearl (no totem — pearl is the only mitigation).
+        await giveAndWait("ender_pearl");
+
+        // Create a pillar for the target to stand on above the bot.
+        await serverCommand(
+          bot,
+          `fill ${POSITION.x} ${POSITION.y + 5} ${POSITION.z} ` +
+            `${POSITION.x} ${POSITION.y + 5} ${POSITION.z} stone`,
+        );
+        await bot.waitForTicks!(5);
+
+        // Create a target bot standing on the pillar above the main bot.
+        target = await createBot({
+          username: getUsername("pvt"),
+          timeoutMs: TIMEOUT_MS,
+        });
+        await tpTo(
+          target,
+          POSITION.x,
+          POSITION.y + 6,
+          POSITION.z,
+        );
+        await target.waitForTicks!(5);
+
+        // Wait for the main bot to see the target.
+        await pollUntil(
+          bot,
+          () => {
+            const t = (bot as any).pvp?.target;
+            return !!t && t.username === target!.username;
+          },
+          100,
+          "combat loop to acquire the target above",
+        );
+
+        // Confirm the enemy-above pearl mitigation is available.
+        const pearlStatus = cm.getEnemyAbovePearlMitigation();
+        expect(pearlStatus.canMitigate).toBe(true);
+        expect(pearlStatus.launchPos).toBeDefined();
+        expect(pearlStatus.targetPos).toBeDefined();
+
+        // Wait for the bot to pathfind to the launch point and throw the pearl.
+        await pollUntil(
+          bot,
+          () => bot.inventoryManager.getItemCount("ender_pearl") === 0,
+          200,
+          "ender pearl to be thrown at target above",
+        );
+
+        // Bot should have teleported to the target's location (or near it).
+        await pollUntil(
+          bot,
+          () => bot.entity.onGround,
+          200,
+          "bot to land after pearl teleport",
+        );
+        expect((bot.health ?? 0)).toBeGreaterThan(0);
+
+        // Clean up the target bot.
+        await target.quit!();
+        await target.end!();
+        target = undefined;
+
+        // Restore position and creative mode.
+        await tpTo(bot, POSITION.x, POSITION.y, POSITION.z);
+        await ensureCreative(bot);
+
+        // Restore the suite's 900s resistance layer for later scenarios.
+        await serverCommand(
+          bot,
+          effectGiveCmd(bot.username, "resistance", 900, 255, VERSION),
+        );
+      } finally {
+        bot.removeListener("physicsTick", combatTick);
+        cm.setMode(0);
+        if (target) {
+          try {
+            await target.quit!();
+            await target.end!();
+          } catch {
+            // ignore
+          }
+        }
+      }
+    },
+    TIMEOUT_MS * 4,
+  );
+
   // ═══════════════════════════════════════════════════════════════════
   // Category 6: Decision Engine
   // ═══════════════════════════════════════════════════════════════════
