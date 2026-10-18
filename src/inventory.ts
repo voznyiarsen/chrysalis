@@ -1013,9 +1013,33 @@ class InventoryManager {
     }
     this._pearlThrowActive = true;
     try {
-      const equipped = await this._equipItem(itemType, "hand");
+      // Equip the projectile to hand. _equipItem returns true once the
+      // window op settles, but the server may not have confirmed the held
+      // item yet — poll with retries instead of failing immediately.
+      let equipped = false;
+      for (let attempt = 0; attempt < 3 && !equipped; attempt++) {
+        equipped = await this._equipItem(itemType, "hand");
+        if (equipped) {
+          // Wait for the server to confirm the held item settles.
+          for (let i = 0; i < 15; i++) {
+            if (this.bot.heldItem?.name === itemType) {
+              equipped = true;
+              break;
+            }
+            await this.bot.waitForTicks!(1);
+          }
+        }
+        if (!equipped && attempt < 2) {
+          this.logger.debug(
+            `Pearl: equip attempt ${attempt + 1} not confirmed as held, retrying`,
+            "Inventory",
+          );
+        }
+      }
       if (!equipped) {
-        throw new Error(`Cannot throw ${itemType}: not found in inventory`);
+        throw new Error(
+          `Cannot throw ${itemType}: not held after equip (holding ${this.bot.heldItem?.name ?? "nothing"})`,
+        );
       }
 
       this.bot.clearControlStates();

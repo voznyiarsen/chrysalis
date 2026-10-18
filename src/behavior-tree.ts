@@ -170,7 +170,15 @@ export function buildCombatTree(ctx: CombatTreeContext): Node {
                 // Defer if a gapple eat is in progress (e.g. we just
                 // started eating because pearl teleport would be lethal).
                 if (inv.isItemUseActive()) return;
-                void inv.equipPearl(mitigation.targetPos!, mitigation.offset!);
+                void inv
+                  .equipPearl(mitigation.targetPos!, mitigation.offset!)
+                  .catch((error: unknown) => {
+                    const err = error as Error;
+                    c.logger.debug(
+                      `Fall pearl: equip/throw failed: ${err.message}`,
+                      "Combat",
+                    );
+                  });
                 cm._lastFallPearlTime = Date.now();
               }),
             ],
@@ -249,7 +257,15 @@ export function buildCombatTree(ctx: CombatTreeContext): Node {
               const targetPos = target.position.offset(0, target.height / 2, 0);
               const result = c.getBestPearlOffset(eyePos, targetPos, "low");
               if (!result) return;
-              c.inv().equipPearl(targetPos, result.offset);
+              c.inv()
+                .equipPearl(targetPos, result.offset)
+                .catch((error: unknown) => {
+                  const err = error as Error;
+                  c.logger.debug(
+                    `Pearl: combat throw failed: ${err.message}`,
+                    "Combat",
+                  );
+                });
               c.setLastPearlTime(Date.now());
             }),
           ],

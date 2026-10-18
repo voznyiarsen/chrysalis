@@ -38,7 +38,7 @@ function makeCtx(overrides: {
     equipWeapon: () => invCalls.push("equipWeapon"),
     equipGapple: () => invCalls.push("equipGapple"),
     equipTotem: () => invCalls.push("equipTotem"),
-    equipPearl: () => invCalls.push("equipPearl"),
+    equipPearl: async () => invCalls.push("equipPearl"),
     equipBuff: () => invCalls.push("equipBuff"),
     equipFood: () => invCalls.push("equipFood"),
     equipUtility: () => invCalls.push("equipUtility"),
