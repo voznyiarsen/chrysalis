@@ -1228,6 +1228,15 @@ class InventoryManager {
    * Equip the best weapon (sword/axe/pickaxe/shovel/hoe) based on DPS score.
    */
   async equipWeapon(): Promise<void> {
+    // Prevent displacing an ender pearl mid-throw while falling.
+    if (this._pearlThrowActive) {
+      this.logger.debug(
+        `Weapon: pearl throw in flight, deferring equip`,
+        "Inventory",
+      );
+      return;
+    }
+
     const materialStats = Constants.MATERIALS.WEAPONS;
     const weapons = this.bot.inventory
       .items()
