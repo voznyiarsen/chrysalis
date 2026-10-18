@@ -142,6 +142,7 @@ describe("CombatManager - Health Status", () => {
           if (d <= 3) return 0;
           return Math.floor(d - 3);
         },
+        getFallTicks: () => 999,
         isJumpPathClear: () => true,
         getJumpVelocity: () => ({ x: 0, y: 0.42, z: 0 }),
       },
@@ -241,6 +242,80 @@ describe("CombatManager - Health Status", () => {
       mockBot.utilsManager.getFallDamage = () => 27;
       const status = manager.getFallProtectionStatus();
       expect(status.isDangerous).toBe(true);
+    });
+
+    test("safe fall below danger threshold takes no action", () => {
+      mockBot.health = 20;
+      mockBot.entity.metadata[11] = 0;
+      mockBot.entity.onGround = false;
+      mockBot.entity.velocity.y = -0.5;
+      mockBot.entity.position.y = 10;
+      mockBot.utilsManager.getGroundBelow = () => 0;
+      mockBot.utilsManager.getFallDamage = (d: number) => Math.floor(d - 3);
+      (manager as any).lastMaxFallY = 10;
+
+      const status = manager.getFallProtectionStatus();
+      expect(status.isDangerous).toBe(false);
+      expect(status.predictedDamage).toBe(7); // (10 - 3) * 1
+    });
+
+    test("dangerous fall too fast to eat equips totem (regular gapple case)", () => {
+      mockBot.health = 20;
+      mockBot.entity.metadata[11] = 0;
+      mockBot.entity.onGround = false;
+      mockBot.entity.velocity.y = -0.5;
+      mockBot.entity.position.y = 25;
+      mockBot.utilsManager.getGroundBelow = () => 0;
+      mockBot.utilsManager.getFallDamage = (d: number) => Math.floor(d - 3);
+      mockBot.utilsManager.getFallTicks = () => 15; // impact before 42-tick eat budget
+      (manager as any).lastMaxFallY = 25;
+
+      const status = manager.getFallProtectionStatus();
+      expect(status.isDangerous).toBe(true); // 22 >= 18
+      expect(status.hasTimeToEat).toBe(false);
+      expect(status.canEatGapple).toBe(false);
+      expect(status.canEatEGapple).toBe(false);
+      expect(status.needsTotem).toBe(true);
+    });
+
+    test("very long fall equips totem and cannot be saved by eating", () => {
+      mockBot.health = 20;
+      mockBot.entity.metadata[11] = 0;
+      mockBot.entity.onGround = false;
+      mockBot.entity.velocity.y = -0.5;
+      mockBot.entity.position.y = 50;
+      mockBot.utilsManager.getGroundBelow = () => 0;
+      mockBot.utilsManager.getFallDamage = (d: number) => Math.floor(d - 3);
+      mockBot.utilsManager.getFallTicks = () => 20; // still too fast to eat
+      (manager as any).lastMaxFallY = 50;
+
+      const status = manager.getFallProtectionStatus();
+      expect(status.isDangerous).toBe(true); // 47 >= 18
+      expect(status.predictedDamage).toBe(47);
+      expect(status.hasTimeToEat).toBe(false);
+      expect(status.needsTotem).toBe(true);
+    });
+
+    test("dangerous fall fast enough to eat equips enchanted gapple when held", () => {
+      mockBot.health = 20;
+      mockBot.entity.metadata[11] = 0;
+      mockBot.entity.onGround = false;
+      mockBot.entity.velocity.y = -0.01; // slow fall
+      mockBot.entity.position.y = 60;
+      mockBot.utilsManager.getGroundBelow = () => 0;
+      mockBot.utilsManager.getFallDamage = (d: number) => Math.floor(d - 3);
+      mockBot.utilsManager.getFallTicks = () => 50; // more than 42-tick eat budget
+      (manager as any).lastMaxFallY = 60;
+
+      const status = manager.getFallProtectionStatus();
+      expect(status.isDangerous).toBe(true); // 57 >= 18
+      expect(status.predictedDamage).toBe(57);
+      expect(status.hasTimeToEat).toBe(true);
+      // Regular gapple alone (28 HP) can't survive 57 damage.
+      expect(status.canEatGapple).toBe(false);
+      // Enchanted gapple: 57*0.8 = 45.6 damage vs 52 HP threshold → survives.
+      expect(status.canEatEGapple).toBe(true);
+      expect(status.needsTotem).toBe(false);
     });
   });
 

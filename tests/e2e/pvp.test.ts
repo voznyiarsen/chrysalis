@@ -563,7 +563,120 @@ describeE2E("E2E PvP Tests", () => {
   });
 
   // ══════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════════
+  // Category 6: Fall Mitigation Scenario
+  // ═══════════════════════════════════════════════════════════════════
+
+  /**
+   * Scenario: bot given a totem of undying + golden apple, teleported to
+   * various heights. Verifies fall-damage prediction picks the right
+   * mitigation at each height and that the totem actually equips mid-fall
+   * for dangerous falls.
+   *
+   * Expected outcomes (full health 20, DANGER_HP=2, regular gapple +8 absorb,
+   * 42-tick eat budget):
+   *   +10  → damage 7,  not dangerous            → no action, lands intact
+   *   +25  → damage 22, dangerous, needs totem   → totem equips mid-fall
+   *   +50  → damage 47, dangerous, needs totem   → totem equips mid-fall
+   */
+  describe("Fall Mitigation Scenario", () => {
+    const FALL_HEIGHTS = [
+      { height: 10, dangerous: false, mitigate: "none" as const },
+      { height: 25, dangerous: true, mitigate: "totem" as const },
+      { height: 50, dangerous: true, mitigate: "totem" as const },
+    ];
+
+    async function giveTotemAndGapple(): Promise<void> {
+      await giveAndWait("totem_of_undying");
+      await giveAndWait("golden_apple");
+    }
+
+    async function runFallCase(
+      height: number,
+      expectedDangerous: boolean,
+      expectedMitigate: "none" | "totem",
+    ): Promise<void> {
+      const cm: any = getCm();
+      const combatTick = (): void => {
+        void cm.doDecide();
+      };
+      bot.on("physicsTick", combatTick);
+
+      try {
+        // Neutralize the suite's 900s resistance so fall damage is real.
+        await serverCommand(
+          bot,
+          effectClearCmd(bot.username, VERSION),
+        );
+
+        await ensureSurvival(bot);
+        await giveTotemAndGapple();
+
+        await tpTo(bot, POSITION.x, POSITION.y + height, POSITION.z);
+        await pollFalling(bot);
+
+        const status = cm.getFallProtectionStatus();
+        expect(status.isDangerous).toBe(expectedDangerous);
+        expect(status.predictedDamage).toBeDefined();
+        expect(status.ticksToImpact).toBeDefined();
+        expect(status.hasTimeToEat).toBeDefined();
+
+        if (expectedMitigate === "totem") {
+          expect(status.needsTotem).toBe(true);
+          // Mitigation: totem equips to off-hand mid-fall.
+          await pollUntil(
+            bot,
+            () => {
+              const slot = bot.getEquipmentDestSlot("off-hand");
+              return bot.inventory.slots[slot]?.name === "totem_of_undying";
+            },
+            100,
+            "totem to equip to off-hand during fall",
+          );
+        } else {
+          expect(status.needsTotem).toBe(false);
+        }
+
+        // Land and survive.
+        await pollUntil(
+          bot,
+          () => bot.entity.onGround,
+          200,
+          "bot to land after fall",
+        );
+        expect((bot.health ?? 0)).toBeGreaterThan(0);
+
+        // Teleport back and restore creative mode.
+        await tpTo(bot, POSITION.x, POSITION.y, POSITION.z);
+        await ensureCreative(bot);
+
+        // Restore the suite's 900s resistance layer for later scenarios.
+        await serverCommand(
+          bot,
+          effectGiveCmd(bot.username, "resistance", 900, 255, VERSION),
+        );
+      } finally {
+        bot.removeListener("physicsTick", combatTick);
+        cm.setMode(0);
+      }
+    }
+
+    for (const { height, dangerous, mitigate } of FALL_HEIGHTS) {
+      test(
+        `fall from +${height} blocks: ${
+          dangerous ? "dangerous" : "safe"
+        }${mitigate === "totem" ? " → totem" : " → no action"}`,
+        async () => {
+          await runFallCase(height, dangerous, mitigate);
+        },
+        TIMEOUT_MS * 3,
+      );
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════
   // Category 6: Decision Engine
+  // ═══════════════════════════════════════════════════════════════════
   // ══════════════════════════════════════════════════════════════════
 
   describe("Decision Engine", () => {

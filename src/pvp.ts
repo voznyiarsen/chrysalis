@@ -449,6 +449,8 @@ class CombatManager {
   modeFilterCache: ((e: any) => boolean) | null;
   lastMode: number;
   lastPearlTime: number;
+  /** Peak Y of the current falling sequence, used as the fall origin for fall-damage prediction. Reset when grounded. */
+  lastMaxFallY: number;
   public decisions: CombatDecision[];
   _isDeciding: boolean;
   private _tree: BTNode | null = null;
@@ -469,6 +471,7 @@ class CombatManager {
     this.modeFilterCache = null;
     this.lastMode = -1;
     this.lastPearlTime = 0;
+    this.lastMaxFallY = -Infinity;
     this.decisions = [];
     this._isDeciding = false;
 
@@ -951,26 +954,50 @@ class CombatManager {
       EAT_BUFFER,
     } = Constants.COMBAT.SURVIVAL;
     const { totalHealth } = this.getHealthStatus();
-    const velY = this.bot.entity.velocity.y;
+    const entity = this.bot.entity;
+    const velY = entity.velocity.y;
 
-    if (velY >= 0 || this.bot.entity.onGround) {
+    if (velY >= 0 || entity.onGround) {
       return { isDangerous: false };
     }
 
-    const groundY = this.bot.utilsManager.getGroundBelow();
-    const fallDistance = this.bot.entity!.position.y - groundY;
+    // Ground: shallow scan for nearby support first, then a deep scan for
+    // the real landing ground. Fall-damage prediction needs ground far
+    // below a high fall; the default 5-block scan only finds local support.
+    let groundY = this.bot.utilsManager.getGroundBelow();
+    if (groundY <= -64) {
+      groundY = this.bot.utilsManager.getGroundBelow(
+        Constants.MOVEMENT.FALL_GROUND_SCAN_DEPTH,
+      );
+    }
+    // Fall origin is the peak Y of this falling sequence (tracked in
+    // doDecide). Falling from a teleport or jump starts there; damage is
+    // sized from the fall origin, not the current (lower) position.
+    const fallOriginY =
+      this.lastMaxFallY !== -Infinity ? this.lastMaxFallY : entity.position.y;
+    const fallDistance = fallOriginY - groundY;
     const predictedDamage = this.bot.utilsManager.getFallDamage(fallDistance);
 
-    // Tolerance: 32 ticks (1.6s) to eat + 10 ticks buffer = 42 ticks
+    // Tolerance: 32 ticks (1.6s) to eat + 10 ticks buffer = 42 ticks.
     const EAT_TICKS_WITH_TOLERANCE = EAT_TICKS + EAT_BUFFER;
-    // Rough time to impact: distance / average velocity (simplified)
-    // Using current velocity as a lower bound for time (conservative)
-    const ticksToImpact = Math.abs(fallDistance / (velY || -0.01));
+    // Time remaining until impact, simulated with vanilla fall physics
+    // (gravity + drag, terminal clamp) from current height/velocity.
+    const ticksToImpact = this.bot.utilsManager.getFallTicks(
+      entity.position.y,
+      velY,
+      groundY,
+    );
     const hasTimeToEat = ticksToImpact > EAT_TICKS_WITH_TOLERANCE;
 
     const isDangerous = predictedDamage >= totalHealth - DANGER_HP;
     if (!isDangerous) {
-      return { isDangerous: false };
+      return {
+        isDangerous: false,
+        predictedDamage,
+        ticksToImpact,
+        hasTimeToEat,
+        needsTotem: false,
+      };
     }
 
     // Survival with Regular Gapple: +8 Absorption HP
@@ -984,7 +1011,7 @@ class CombatManager {
     const needsTotem = !canEatGapple && !canEatEGapple;
 
     this.logger.debug(
-      `Fall: DANGEROUS. Predicted damage: ${predictedDamage.toFixed(1)} HP, total health: ${totalHealth.toFixed(1)} HP, ticks to impact: ${ticksToImpact.toFixed(0)}. Can eat gapple: ${canEatGapple}, can eat enchanted gapple: ${canEatEGapple}, needs totem: ${needsTotem}`,
+      `Fall: DANGEROUS. Predicted damage: ${predictedDamage.toFixed(1)} HP, total health: ${totalHealth.toFixed(1)} HP, fall distance: ${fallDistance.toFixed(1)} blocks, ticks to impact: ${ticksToImpact.toFixed(0)}. Can eat gapple: ${canEatGapple}, can eat enchanted gapple: ${canEatEGapple}, needs totem: ${needsTotem}`,
       "Combat",
     );
 
@@ -1010,6 +1037,17 @@ class CombatManager {
       this.updateTarget();
       this.doAvoid();
       this.doEdgeProtection();
+      // Track the peak Y of the current falling sequence so fall-damage
+      // prediction uses the fall origin, not the current (lower) position.
+      // Reset the baseline whenever the bot is grounded.
+      const entity = this.bot.entity;
+      if (entity) {
+        if (entity.onGround) {
+          this.lastMaxFallY = -Infinity;
+        } else {
+          this.lastMaxFallY = Math.max(this.lastMaxFallY, entity.position.y);
+        }
+      }
       await this.executeDecisions();
     } catch (error: unknown) {
       const err = error as Error;

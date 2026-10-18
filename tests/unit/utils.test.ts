@@ -262,6 +262,50 @@ describe("Fall Damage Calculations", () => {
   });
 });
 
+describe("Fall Time Prediction", () => {
+  let utilsManager: any;
+
+  beforeAll(() => {
+    const mockBot: any = {
+      version: "1.12.2",
+      registry: { blocksByName: {} },
+      entity: { effects: {} },
+      blockAt: () => null,
+    };
+    utilsManager = new UtilsManager(mockBot);
+  });
+
+  test("a fall reaching ground within the cap reports exact ticks", () => {
+    // Start at ground: lands on the very first tick.
+    expect(utilsManager.getFallTicks(10, -0.08, 10)).toBe(1);
+  });
+
+  test("a short fall reports ticks", () => {
+    // Y=4 above ground at rest: tick1 -> vel=-0.0784, y=3.9216; ... lands by tick ~14
+    const ticks = utilsManager.getFallTicks(4, 0, 0);
+    expect(ticks).toBeGreaterThanOrEqual(1);
+    expect(ticks).toBeLessThan(200);
+  });
+
+  test("a high fall reports more ticks than a short fall", () => {
+    const short = utilsManager.getFallTicks(10, 0, 0);
+    const tall = utilsManager.getFallTicks(100, 0, 0);
+    expect(tall).toBeGreaterThan(short);
+  });
+
+  test("upward velocity delays impact (more ticks than from rest)", () => {
+    const fromRest = utilsManager.getFallTicks(10, 0, 0);
+    const rising = utilsManager.getFallTicks(10, 0.5, 0);
+    expect(rising).toBeGreaterThanOrEqual(fromRest);
+  });
+
+  test("never reaching ground within the cap returns the cap", () => {
+    expect(
+      utilsManager.getFallTicks(1000, 0, -100, 5),
+    ).toBe(5);
+  });
+});
+
 describe("Projectile Trajectory Prediction", () => {
   let utilsManager: any;
 

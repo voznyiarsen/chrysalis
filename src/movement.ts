@@ -540,11 +540,23 @@ export function clearSolidCache(cache: Map<string, SolidCacheEntry>): void {
 
 /**
  * Find the Y coordinate of the ground surface below a position.
+ *
+ * Scans downward from the feet, looking at at most `maxDepth` blocks below
+ * the starting level (default 5 — the shallow support check used by edge
+ * protection and jump logic). Fall-damage prediction passes a much larger
+ * depth: it needs the real landing ground, not just nearby support.
+ * The scan never goes below the -64 void sentinel; finding nothing returns
+ * that sentinel.
  */
-export function getGroundBelow(pos: Vec3, blockAt: (pos: Vec3) => any): number {
+export function getGroundBelow(
+  pos: Vec3,
+  blockAt: (pos: Vec3) => any,
+  maxDepth = 5,
+): number {
   const startY = Math.floor(pos.y);
+  const minY = Math.max(startY - maxDepth, -64);
   let maxGroundY = -64;
-  for (let y = startY; y >= startY - 5; y--) {
+  for (let y = startY; y >= minY; y--) {
     const block = blockAt(new Vec3(pos.x, y, pos.z));
     if (block && block.boundingBox !== "empty") {
       if (block.shapes) {
@@ -646,4 +658,34 @@ export function getFallDamage(distance: number): number {
     0,
     Math.floor((distance - safeFallDistance) * fallDamageMultiplier),
   );
+}
+
+// ---------------------------------------------------------------------------
+// getFallTicks
+// ---------------------------------------------------------------------------
+
+/**
+ * Simulate how many ticks an entity falling from `posY` with `velocityY`
+ * needs to reach `groundY`, using vanilla fall physics: each tick applies
+ * gravity (0.08) and drag (0.98), clamped at terminal velocity (-3.92).
+ *
+ * A positive starting velocity (still rising) is honored — the entity
+ * decelerates first. Returns `maxTicks` when the ground is never reached
+ * within the cap (e.g. the -64 void sentinel).
+ */
+export function getFallTicks(
+  posY: number,
+  velocityY: number,
+  groundY: number,
+  maxTicks = 200,
+): number {
+  const { GRAVITY, DRAG, TERMINAL_VELOCITY } = Constants.PHYSICS;
+  let velocity = velocityY;
+  let y = posY;
+  for (let ticks = 1; ticks <= maxTicks; ticks++) {
+    velocity = Math.max((velocity - GRAVITY) * DRAG, TERMINAL_VELOCITY);
+    y += velocity;
+    if (y <= groundY) return ticks;
+  }
+  return maxTicks;
 }

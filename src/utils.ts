@@ -19,6 +19,7 @@ import {
   clearSolidCache,
   getGroundBelow,
   getFallDamage,
+  getFallTicks,
   isPositionClear,
 } from "./movement";
 
@@ -679,14 +680,20 @@ export class UtilsManager {
     clearSolidCache(this._solidCache);
   }
 
-  getGroundBelow(): number {
-    return getGroundBelow(this.bot.entity.position, (pos: Vec3) =>
-      this.bot.blockAt(pos),
+  getGroundBelow(maxDepth?: number): number {
+    return getGroundBelow(
+      this.bot.entity.position,
+      (pos: Vec3) => this.bot.blockAt(pos),
+      maxDepth,
     );
   }
 
   getFallDamage(distance: number): number {
     return getFallDamage(distance);
+  }
+
+  getFallTicks(posY: number, velocityY: number, groundY: number, maxTicks?: number): number {
+    return getFallTicks(posY, velocityY, groundY, maxTicks);
   }
 
   /**

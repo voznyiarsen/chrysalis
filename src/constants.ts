@@ -115,6 +115,13 @@ export const Constants = {
     SPRINT_AIR_SPEED: 0.026,
     /** Velocity used for fine-tuned horizontal positioning (e.g., micro-adjustments) */
     FLAT_SPEED: 0.05,
+    /**
+     * Maximum blocks below the feet that fall-damage prediction scans to
+     * find the real landing ground. A shallow (5-block) scan only catches
+     * nearby support; fall prediction must see ground far below a high fall
+     * to size predicted damage correctly.
+     */
+    FALL_GROUND_SCAN_DEPTH: 300,
     /** Maximum allowed horizontal velocity per axis (X or Z) for movement impulses */
     MAX_AXIS_SPEED: 0.35635,
     /** Radius (in blocks) to search for solid floor blocks */
