@@ -487,6 +487,9 @@ class CombatManager {
       getBestPearlOffset: (source, target, arc) => this.getBestPearlOffset(source, target, arc),
       lastDamage: this.lastDamage,
       lastPearlTime: this.lastPearlTime,
+      setLastPearlTime: (ts: number) => {
+        this.lastPearlTime = ts;
+      },
       logger: this.logger,
     };
     this._tree = buildCombatTree(ctx);
@@ -814,6 +817,9 @@ class CombatManager {
       getBestPearlOffset: (source, target, arc) => this.getBestPearlOffset(source, target, arc),
       lastDamage: this.lastDamage,
       lastPearlTime: this.lastPearlTime,
+      setLastPearlTime: (ts: number) => {
+        this.lastPearlTime = ts;
+      },
       logger: this.logger,
     };
   }

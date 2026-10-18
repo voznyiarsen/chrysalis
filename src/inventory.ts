@@ -53,6 +53,17 @@ class InventoryManager {
   /** Tail of the serialized window-operation chain. */
   private _windowChain: Promise<unknown> = Promise.resolve();
 
+  // ── Use-flow (eat/drink) non-reentrancy ─────────────────────────────
+  // The heal/food/buff decisions dispatch fire-and-forget EVERY tick while
+  // their condition holds. A consume takes 32 ticks (~1600ms) of holding
+  // "use"; an overlapping second activation re-sends the use packet and
+  // restarts the server-side consume bar, so the item never finishes and
+  // every flow ends in "timeout reached" (the gapple-eat choke). While a
+  // use is active, later dispatches must defer to the running flow
+  // instead of starting their own.
+  /** True while an eat/drink flow holds an item in a "using" state. */
+  private _itemUseActive = false;
+
   /**
    * Run `fn` as an exclusive window operation: nothing else in this
    * manager touches the inventory window until it settles.
@@ -65,6 +76,31 @@ class InventoryManager {
     // later op. Errors stay visible through the returned promise.
     this._windowChain = run.catch(() => undefined);
     return run;
+  }
+
+  /**
+   * Everything the bot carries in the player window: items() covers the
+   * main inventory (9-35) plus the quick bar (36-44); the armor slots (5-8)
+   * and the off-hand slot (45) are NOT part of that range and are read
+   * from their window slots directly. While a click transaction is mid-
+   * flight (e.g. an equip), the stack being moved sits on the mouse cursor
+   * and is in no slot at all — include it too, or a scan in that instant
+   * reports a false "not in inventory". The main hand is skipped — it
+   * always points into the quick bar and would double-count.
+   * @private
+   */
+  private _carriedItems(): any[] {
+    const results: any[] = [...this.bot.inventory.items()];
+    for (const destination of ["head", "torso", "legs", "feet", "off-hand"]) {
+      const slot = this.bot.getEquipmentDestSlot(destination);
+      const item = this.bot.inventory.slots[slot];
+      if (item) results.push(item);
+    }
+    // Window updates apply server state, so the cursor stack is not also in
+    // a slot; the identity check keeps that guarantee under any harness.
+    const cursor = (this.bot.inventory as any).selectedItem;
+    if (cursor && !results.includes(cursor)) results.push(cursor);
+    return results;
   }
 
   /**
@@ -91,34 +127,10 @@ class InventoryManager {
       item.name === itemName && item.metadata === metadata;
     const matches = metadata !== undefined ? matchFull : matchName;
 
-    // bot.inventory.items() returns slots inventoryStart..inventoryEnd,
-    // which excludes armor (slots 5-8). bot.entity.equipment covers
-    // hand, off-hand, and armor — but hand/off-hand overlap with items().
-    // To avoid double-counting, search items() for the main inventory
-    // and only add equipment entries that aren't already covered
-    // (armor slots: equipment indices 2-4 = helmet, chestplate, leggings, boots).
     const results: any[] = [];
-
-    for (const item of this.bot.inventory.items()) {
+    for (const item of this._carriedItems()) {
       if (matches(item) && (!notFull || item.count < item.stackSize)) {
         results.push(item);
-      }
-    }
-
-    // entity.equipment: [0]=hand, [1]=off-hand, [2]=feet, [3]=legs, [4]=chest, [5]=head (varies by version)
-    // Indices 0 and 1 overlap with inventory items(), so skip them.
-    // Armor entries (2+) are NOT in items() and must be checked separately.
-    const equipment = this.bot.entity.equipment;
-    if (equipment) {
-      for (let i = 2; i < equipment.length; i++) {
-        const item = equipment[i];
-        if (
-          item &&
-          matches(item) &&
-          (!notFull || item.count < item.stackSize)
-        ) {
-          results.push(item);
-        }
       }
     }
 
@@ -741,9 +753,10 @@ class InventoryManager {
    * @param activate - Whether to eat the apple after equipping (default: true)
    */
   async equipGapple(activate: boolean = true): Promise<void> {
-    const items = this.bot.inventory
-      .items()
-      .filter((i: any) => i.name === "golden_apple");
+    // findItem covers the off-hand slot too: once a gapple stack is equipped
+    // there, a plain items() scan no longer sees it and later re-eats would
+    // report "no golden apples in inventory" while holding one.
+    const items = this.findItem("golden_apple");
     if (items.length === 0) {
       this.logger.debug(`Gapple: no golden apples in inventory`, "Inventory");
       return;
@@ -772,7 +785,9 @@ class InventoryManager {
       this.logger.inventory(
         `Equipping ${bestGapple.displayName} to off-hand...`,
       );
-      await this.bot.equip!(bestGapple, "off-hand" as any);
+      await this._withWindow(async () => {
+        await this.bot.equip!(bestGapple, "off-hand" as any);
+      });
       await this.bot.waitForTicks!(Constants.TIMING.EQUIP_TICKS);
     }
 
@@ -792,7 +807,21 @@ class InventoryManager {
       return;
     }
 
-    await this._useItemUntilEffect("10", bestGapple.displayName);
+    await this._useItemUntilEffect(
+      "10",
+      bestGapple.displayName,
+      // Abort the wait early if something (e.g. a crisis totem equip) swaps
+      // the apple out of the off-hand mid-eat — a stale wait would otherwise
+      // spin to the timeout while blocking the next heal dispatch.
+      () => {
+        const held = this.bot.inventory.slots[destSlot];
+        return (
+          !!held &&
+          held.name === bestGapple.name &&
+          held.metadata === bestGapple.metadata
+        );
+      },
+    );
   }
 
   /**
@@ -808,12 +837,21 @@ class InventoryManager {
    * Skips if food or health is full, or if regeneration is active.
    */
   async equipFood(): Promise<void> {
+    // Another flow is consuming an item (e.g. the heal gapple eat); swapping
+    // the off-hand food in mid-eat would break that consume.
+    if (this._itemUseActive) {
+      this.logger.debug(
+        `Food: another item use is active, deferring eat`,
+        "Inventory",
+      );
+      return;
+    }
+
     if (this.bot.entity.effects["10"]) return;
 
-    const inventory: any[] = [
-      ...this.bot.inventory.items(),
-      ...Object.values(this.bot.entity.equipment).filter((i: any) => i != null),
-    ];
+    // Carried items only — a bare items() scan misses the off-hand and the
+    // armor slots (see _carriedItems).
+    const inventory: any[] = this._carriedItems();
 
     const foodsByName = this.bot.registry?.foodsByName ?? {};
     const items = inventory.filter(
@@ -851,11 +889,12 @@ class InventoryManager {
     // Food is not full — eat it
     const expectedHunger = this.bot.food! + foodsByName[food.name].foodPoints;
     this.logger.inventory(`Using ${food.displayName}...`);
+    this._itemUseActive = true;
     try {
       this.bot.activateItem(true);
       const t0 = Date.now();
       while (this.bot.food! < expectedHunger && this.bot.food! < 20) {
-        if (Date.now() - t0 > Constants.TIMING.DEFAULT_TIMEOUT) {
+        if (Date.now() - t0 > Constants.TIMING.USE_ITEM_TIMEOUT) {
           throw new Error(`Timeout reached while eating ${food.displayName}`);
         }
         await this.bot.waitForTicks!(2);
@@ -867,6 +906,7 @@ class InventoryManager {
       this.logger.error(err, "Inventory");
     } finally {
       this.bot.deactivateItem();
+      this._itemUseActive = false;
     }
   }
 
@@ -875,10 +915,9 @@ class InventoryManager {
    * Prefers strong_strength over regular strength.
    */
   async equipBuff(): Promise<void> {
-    const inventory: any[] = [
-      ...this.bot.inventory.items(),
-      ...Object.values(this.bot.entity.equipment).filter((i: any) => i != null),
-    ];
+    // Carried items only — a bare items() scan misses the off-hand and the
+    // armor slots (see _carriedItems).
+    const inventory: any[] = this._carriedItems();
     const potions = inventory.filter((item: any) => item.name === "potion");
     const potion =
       potions.find(
@@ -1051,17 +1090,27 @@ class InventoryManager {
     cleanup: () => void,
     display?: string,
   ): Promise<void> {
-    const label = display ?? itemName;
-    if (!(await this._equipItem(itemName, targetSlot))) {
-      this.logger.warn(`Use: ${label} not found in inventory`, "Inventory");
+    // Guard covers the whole flow (equip + use): equipping the potion into
+    // the off-hand mid-consume would break an active eat.
+    if (this._itemUseActive) {
+      this.logger.debug(
+        `Use: another item use is active, skipping ${display ?? itemName}`,
+        "Inventory",
+      );
       return;
     }
-    this.logger.inventory(`Using ${label}...`);
+    this._itemUseActive = true;
     try {
+      const label = display ?? itemName;
+      if (!(await this._equipItem(itemName, targetSlot))) {
+        this.logger.warn(`Use: ${label} not found in inventory`, "Inventory");
+        return;
+      }
+      this.logger.inventory(`Using ${label}...`);
       activate();
       const t0 = Date.now();
       while (condition()) {
-        if (Date.now() - t0 > Constants.TIMING.DEFAULT_TIMEOUT) {
+        if (Date.now() - t0 > Constants.TIMING.USE_ITEM_TIMEOUT) {
           throw new Error(`Timeout reached while using ${label}`);
         }
         await this.bot.waitForTicks!(2);
@@ -1069,28 +1118,51 @@ class InventoryManager {
       this.logger.inventory(`Used ${label} successfully`);
     } catch (error: unknown) {
       const err = error as Error;
-      err.message = `Failed to use ${label}: ${err.message}`;
+      err.message = `Failed to use ${display ?? itemName}: ${err.message}`;
       this.logger.error(err, "Inventory");
     } finally {
       cleanup();
+      this._itemUseActive = false;
     }
   }
 
   /**
    * Equip and use an item until a specific Minecraft status effect is active.
+   * Non-reentrant: while a use flow is active, later dispatches (the heal
+   * decision fires every tick) defer to the running flow instead of
+   * re-activating the item and restarting the ~32-tick consume bar.
    * @param effectId - Minecraft effect ID string (e.g. "5" for strength, "10" for regeneration)
    * @param display - Display name for logging
+   * @param stillHeld - Optional check that the used item is still in its slot;
+   *   if it stops holding (swapped out mid-eat), the wait aborts early instead
+   *   of spinning to the timeout.
    */
   private async _useItemUntilEffect(
     effectId: string,
     display: string,
+    stillHeld?: () => boolean,
   ): Promise<void> {
-    this.logger.inventory(`Using ${display}...`);
+    if (this._itemUseActive) {
+      this.logger.debug(
+        `Use: another item use is active, skipping ${display}`,
+        "Inventory",
+      );
+      return;
+    }
+    this._itemUseActive = true;
     try {
+      this.logger.inventory(`Using ${display}...`);
       this.bot.activateItem(true);
       const t0 = Date.now();
       while (!this.bot.entity.effects[effectId as any]) {
-        if (Date.now() - t0 > Constants.TIMING.DEFAULT_TIMEOUT) {
+        if (stillHeld && !stillHeld()) {
+          this.logger.debug(
+            `Use: ${display} no longer in its slot — abandoning use wait`,
+            "Inventory",
+          );
+          return;
+        }
+        if (Date.now() - t0 > Constants.TIMING.USE_ITEM_TIMEOUT) {
           throw new Error(`Timeout reached while using ${display}`);
         }
         await this.bot.waitForTicks!(2);
@@ -1102,6 +1174,7 @@ class InventoryManager {
       this.logger.error(err, "Inventory");
     } finally {
       this.bot.deactivateItem();
+      this._itemUseActive = false;
     }
   }
 

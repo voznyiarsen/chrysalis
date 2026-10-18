@@ -285,6 +285,13 @@ export const Constants = {
     EQUIP_TICKS: 2,
     /** Default timeout for asynchronous operations */
     DEFAULT_TIMEOUT: 2000,
+    /**
+     * Timeout for wait-until-effect item use flows (eat/drink). A vanilla
+     * consume takes 32 ticks (~1600ms) of holding "use" before the item
+     * lands, plus the effect-packet round trip — DEFAULT_TIMEOUT leaves
+     * almost no margin, so eats spuriously "time out" on slow ticks.
+     */
+    USE_ITEM_TIMEOUT: 4000,
   },
 
   // ============================================================================

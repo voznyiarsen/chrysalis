@@ -23,7 +23,9 @@ import { renderTopDownView } from "../../src/movement";
 import {
   createBot,
   e2eTimeoutMs,
+  effectClearCmd,
   effectGiveCmd,
+  buildServerGiveCmd,
   ensureReady,
   ensureTestEnvironment,
   e2eVersion,
@@ -1675,6 +1677,174 @@ describeE2E("E2E PvP Tests", () => {
             ATTACKER_POSITION.x,
             ATTACKER_POSITION.y,
             ATTACKER_POSITION.z,
+          );
+          await attacker.waitForTicks!(2);
+        }
+      },
+      TIMEOUT_MS * 2,
+    );
+
+    // ── User-reported scenario helpers ──────────────────────────────
+
+    /** Give an item to the attacker via RCON and wait for it to arrive. */
+    async function givePvpAttacker(
+      item: string,
+      count: number = 1,
+      metadata?: number,
+    ): Promise<void> {
+      await serverCommand(
+        attacker,
+        buildServerGiveCmd(
+          attacker.username,
+          item,
+          { count, metadata },
+          VERSION,
+          undefined,
+        ),
+      );
+      await pollUntil(
+        attacker,
+        () => attacker.inventoryManager.getItemCount(item) >= count,
+        120,
+        `${count}x ${item} in inventory after /give`,
+      );
+      await attacker.waitForTicks!(Constants.TIMING.EQUIP_TICKS);
+    }
+
+    /** Get the item equipped in a destination slot ("head" | "hand" | …). */
+    function getEquippedPvp(
+      destination: string,
+    ): { name: string } | null {
+      const slot = attacker.getEquipmentDestSlot(destination);
+      return attacker.inventory.slots[slot] ?? null;
+    }
+
+    /**
+     * User-reported scenario: survival bot at full health takes instant
+     * damage, then combat mode must equip its utilities and eat the golden
+     * apple without the eat timing out. The eat once failed in 2s blocks:
+     * the per-tick heal dispatch re-activated the item mid-consume
+     * (restarting the ~32-tick consume bar), and the 2s deadline left no
+     * margin for a vanilla eat (~1600ms + effect packet lag).
+     *
+     * Amplifier 0 keeps the outcome deterministic regardless of whether the
+     * server reports effect damage through entityHurt: at 6 damage (20→14
+     * HP) the heal branch fires whether lastDamage tracked the hit
+     * (14 > 6×2) or not (14 > 1×2), and the critical-totem branch never
+     * does. The creative statue is allied out of targeting: this scenario
+     * has no enemies.
+     */
+    test(
+      "eats a golden apple after instant damage and restores health",
+      async () => {
+        const cm: any = (attacker as any).combatManager;
+        const pvp: any = (attacker as any).pvp;
+        cm.setMode(2);
+        cm.addAlly(target.username);
+
+        const combatTick = (): void => {
+          void cm.doDecide();
+        };
+        attacker.on("physicsTick", combatTick);
+
+        // Capture eat/timeout errors through the bot's logger facade
+        // (InventoryManager logs them to bot.__logger.error).
+        const log: any = (attacker as any).__logger;
+        const originalError = log.error.bind(log);
+        const eatErrors: string[] = [];
+        log.error = (err: unknown, channel?: string): void => {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (/Failed to use|Failed to eat/.test(msg)) eatErrors.push(msg);
+          originalError(err, channel);
+        };
+
+        try {
+          // Survival, full health: neutralize the suite's 900s resistance
+          // so the instant damage effect lands.
+          await serverCommand(
+            attacker,
+            effectClearCmd(attacker.username, VERSION),
+          );
+          await pollUntil(
+            attacker,
+            () => (attacker.health ?? 0) >= 19,
+            40,
+            "bot at full health before the damage",
+          );
+
+          // Inventory per the scenario: 64 enchanted golden apples (the
+          // failing log showed "Enchanted Golden Apple"), full armor set,
+          // sword, totem.
+          await givePvpAttacker("golden_apple", 64, 1);
+          await givePvpAttacker("diamond_helmet", 1);
+          await givePvpAttacker("diamond_chestplate", 1);
+          await givePvpAttacker("diamond_leggings", 1);
+          await givePvpAttacker("diamond_boots", 1);
+          await givePvpAttacker("iron_sword", 1);
+          await givePvpAttacker("totem_of_undying", 1);
+          expect(
+            attacker.inventoryManager.getItemCount("golden_apple"),
+          ).toBe(64);
+
+          // Instant Damage I: 3 hearts (6 HP) — 20 → 14.
+          await serverCommand(
+            attacker,
+            effectGiveCmd(
+              attacker.username,
+              "instant_damage",
+              1,
+              0,
+              VERSION,
+            ),
+          );
+          await pollUntil(
+            attacker,
+            () => (attacker.health ?? 20) <= 15,
+            40,
+            "health to drop after the instant damage effect",
+          );
+
+          // The heal decision eats an apple; its regeneration carries the
+          // health back up.
+          await pollUntil(
+            attacker,
+            () => (attacker.health ?? 0) >= 19,
+            260,
+            "health to recover through the heal gapple eat",
+          );
+
+          // The eat completed without hitting the use-flow timeout.
+          expect(eatErrors).toEqual([]);
+
+          // At least one apple was consumed by the eat.
+          expect(
+            attacker.inventoryManager.getItemCount("golden_apple"),
+          ).toBeLessThan(64);
+
+          // Utilities keep themselves equipped in the background.
+          expect(getEquippedPvp("head")?.name).toBe("diamond_helmet");
+          expect(getEquippedPvp("torso")?.name).toBe("diamond_chestplate");
+          expect(getEquippedPvp("legs")?.name).toBe("diamond_leggings");
+          expect(getEquippedPvp("feet")?.name).toBe("diamond_boots");
+          expect(getEquippedPvp("hand")?.name).toBe("iron_sword");
+          // The heal flow leaves the remaining apples in the off-hand.
+          expect(getEquippedPvp("off-hand")?.name).toBe("golden_apple");
+        } finally {
+          log.error = originalError;
+          attacker.removeListener("physicsTick", combatTick);
+          cm.removeAlly(target.username);
+          pvp.forceStop();
+          cm.setMode(0);
+          // Restore the suite's 900s resistance layer for later scenarios.
+          await serverCommand(
+            attacker,
+            effectGiveCmd(
+              attacker.username,
+              "resistance",
+              900,
+              255,
+              VERSION,
+            ),
           );
           await attacker.waitForTicks!(2);
         }
