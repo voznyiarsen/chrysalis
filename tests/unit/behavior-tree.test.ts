@@ -79,12 +79,9 @@ function makeCtx(overrides: {
       isDangerous: fallStatus.isDangerous,
       needsTotem: (fallStatus as any).needsTotem,
     }),
-    getFallPearlMitigation: () => ({
-      canMitigate: overrides.pearlMitigation ?? false,
-    }),
-    getEnemyAbovePearlMitigation: () => ({
-      canMitigate: overrides.enemyAbovePearlMitigation ?? false,
-      launchPos: overrides.enemyAbovePearlMitigation
+    getPearlMitigation: () => ({
+      canMitigate: (overrides.pearlMitigation ?? false) && lastPearlTime === 0,
+      launchPos: overrides.pearlMitigation
         ? new Vec3(0, 64, 0) // at bot's position, so distToLaunch <= 1
         : undefined,
     }),
@@ -164,6 +161,8 @@ describe("combat tree dispatch", () => {
     tree.run({ ctx: h.nextRunCtx() });
 
     expect(h.invCalls.filter((c) => c.startsWith("equip"))).toEqual([
+      "equipArmor",
+      "equipWeapon",
       "equipPearl",
     ]);
   });
@@ -186,7 +185,7 @@ describe("combat tree dispatch", () => {
   test("fall pearl does nothing when not dangerous", () => {
     const h = makeCtx({
       fall: { isDangerous: false, needsTotem: true },
-      pearlMitigation: true,
+      pearlMitigation: false,
       has: { ender_pearl: true },
     });
     const tree = h.build();
@@ -216,7 +215,7 @@ describe("combat tree dispatch", () => {
   test("enemy above pearl equips pearl when dangerous, no totem, can mitigate", () => {
     const h = makeCtx({
       fall: { isDangerous: false },
-      enemyAbovePearlMitigation: true,
+      pearlMitigation: true,
       has: { ender_pearl: true },
     });
     const tree = h.build();
@@ -230,7 +229,7 @@ describe("combat tree dispatch", () => {
   test("enemy above pearl does nothing when cannot mitigate", () => {
     const h = makeCtx({
       fall: { isDangerous: false },
-      enemyAbovePearlMitigation: false,
+      pearlMitigation: false,
       has: { ender_pearl: true },
     });
     const tree = h.build();
@@ -244,7 +243,7 @@ describe("combat tree dispatch", () => {
   test("enemy above pearl does nothing when not dangerous", () => {
     const h = makeCtx({
       fall: { isDangerous: false },
-      enemyAbovePearlMitigation: false,
+      pearlMitigation: false,
       has: { ender_pearl: true },
     });
     const tree = h.build();
@@ -327,6 +326,7 @@ describe("combat tree dispatch", () => {
   test("pearl branch honors the cooldown through setLastPearlTime", () => {
     const h = makeCtx({
       target: true,
+      pearlMitigation: true,
       pearlOffset: 2,
       has: { ender_pearl: true },
     });
@@ -350,8 +350,8 @@ describe("combat tree dispatch", () => {
       c.startsWith("equip"),
     );
     expect(run2).toEqual(["equipArmor", "equipWeapon"]);
-    // The condition must have been blocked before reaching the offset probe.
-    expect(h.pearlCondPastCooldown.length).toBe(2);
+    // The cooldown prevented a second setLastPearlTime call.
+    expect(h.setPearlCalls.length).toBe(1);
   });
 
   test("crisis selectors fall through to maintenance when nothing is critical", () => {

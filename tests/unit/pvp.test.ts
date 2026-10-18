@@ -317,7 +317,7 @@ describe("CombatManager - Health Status", () => {
     });
   });
 
-  describe("getFallPearlMitigation", () => {
+  describe("getPearlMitigation", () => {
     beforeEach(() => {
       // Default: dangerous fall, has pearl, ground at 0, pearl can reach
       mockBot.health = 20;
@@ -348,20 +348,20 @@ describe("CombatManager - Health Status", () => {
     test("returns canMitigate false when not falling", () => {
       mockBot.entity.onGround = true;
       mockBot.entity.velocity.y = 0;
-      const result = manager.getFallPearlMitigation();
+      const result = manager.getPearlMitigation();
       expect(result.canMitigate).toBe(false);
     });
 
     test("returns canMitigate false when no ender pearl", () => {
       mockBot.inventoryManager.hasItem = (name: string) => name === "totem_of_undying";
-      const result = manager.getFallPearlMitigation();
+      const result = manager.getPearlMitigation();
       expect(result.canMitigate).toBe(false);
     });
 
     test("returns canMitigate false when no ground found", () => {
       mockBot.utilsManager.getGroundBelow = () => -64;
       mockBot.utilsManager.getGroundAbove = () => -64;
-      const result = manager.getFallPearlMitigation();
+      const result = manager.getPearlMitigation();
       expect(result.canMitigate).toBe(false);
     });
 
@@ -381,7 +381,7 @@ describe("CombatManager - Health Status", () => {
       mockBot.utilsManager.getFallDamage = (d: number) => Math.floor(d - 3);
       (manager as any).lastMaxFallY = 25;
 
-      const result = manager.getFallPearlMitigation();
+      const result = manager.getPearlMitigation();
       expect(result.canMitigate).toBe(true);
       expect(result.targetPos?.y).toBe(65);
       expect(result.flightTime).toBe(10);
@@ -391,7 +391,7 @@ describe("CombatManager - Health Status", () => {
     test("returns canMitigate false when no ground below or above", () => {
       mockBot.utilsManager.getGroundBelow = () => -64;
       mockBot.utilsManager.getGroundAbove = () => -64;
-      const result = manager.getFallPearlMitigation();
+      const result = manager.getPearlMitigation();
       expect(result.canMitigate).toBe(false);
     });
 
@@ -403,12 +403,12 @@ describe("CombatManager - Health Status", () => {
         landingPoint: { x: 0, y: 0, z: 0 },
         landingDist: 0,
       });
-      const result = manager.getFallPearlMitigation();
+      const result = manager.getPearlMitigation();
       expect(result.canMitigate).toBe(false);
     });
 
     test("returns canMitigate true with target and flight time", () => {
-      const result = manager.getFallPearlMitigation();
+      const result = manager.getPearlMitigation();
       expect(result.canMitigate).toBe(true);
       expect(result.targetPos).toEqual({ x: 0, y: 0, z: 0 });
       expect(result.flightTime).toBe(10);
@@ -427,7 +427,7 @@ describe("CombatManager - Health Status", () => {
     });
   });
 
-  describe("getEnemyAbovePearlMitigation", () => {
+  describe("getPearlMitigation (enemy above)", () => {
     beforeEach(() => {
       // Default: target above bot, has pearl, ground at 0, valid trajectory
       mockBot.health = 20;
@@ -466,52 +466,74 @@ describe("CombatManager - Health Status", () => {
 
     test("returns canMitigate false when no target", () => {
       mockBot.pvp.target = null;
-      const result = manager.getEnemyAbovePearlMitigation();
+      const result = manager.getPearlMitigation();
       expect(result.canMitigate).toBe(false);
     });
 
     test("returns canMitigate false when target not above bot", () => {
       mockBot.pvp.target.position = new Vec3(0, 1, 0); // only 1 block above, below MIN_HEIGHT=2
-      const result = manager.getEnemyAbovePearlMitigation();
+      const result = manager.getPearlMitigation();
       expect(result.canMitigate).toBe(false);
     });
 
     test("returns canMitigate false when target in melee range", () => {
       mockBot.pvp.target.position = new Vec3(0, 3, 0); // distance 3 = attackRange
-      const result = manager.getEnemyAbovePearlMitigation();
+      const result = manager.getPearlMitigation();
       expect(result.canMitigate).toBe(false);
     });
 
     test("returns canMitigate false when no ender pearl", () => {
       mockBot.inventoryManager.hasItem = (name: string) => name === "totem_of_undying";
-      const result = manager.getEnemyAbovePearlMitigation();
+      const result = manager.getPearlMitigation();
       expect(result.canMitigate).toBe(false);
     });
 
     test("returns canMitigate false when on cooldown", () => {
       (manager as any).lastPearlTime = Date.now() - 1000; // 1s ago, cooldown is 10000ms
-      const result = manager.getEnemyAbovePearlMitigation();
+      const result = manager.getPearlMitigation();
       expect(result.canMitigate).toBe(false);
     });
 
-    test("returns canMitigate false when no ground below", () => {
+    test("returns canMitigate true when no ground below (target in range)", () => {
       mockBot.utilsManager.getGroundBelow = () => -64;
-      const result = manager.getEnemyAbovePearlMitigation();
-      expect(result.canMitigate).toBe(false);
+      const result = manager.getPearlMitigation();
+      expect(result.canMitigate).toBe(true);
     });
 
     test("returns canMitigate false when no valid trajectory", () => {
       mockBot.utilsManager.getBestPearlTrajectory = () => null;
-      const result = manager.getEnemyAbovePearlMitigation();
+      const result = manager.getPearlMitigation();
       expect(result.canMitigate).toBe(false);
     });
 
-    test("returns canMitigate true with valid launch point and trajectory", () => {
-      const result = manager.getEnemyAbovePearlMitigation();
+    test("returns canMitigate true with direct trajectory (no launch point needed)", () => {
+      const result = manager.getPearlMitigation();
+      expect(result.canMitigate).toBe(true);
+      expect(result.launchPos).toBeUndefined();
+      expect(result.targetPos).toBeDefined();
+      expect(result.flightTime).toBe(10);
+      expect(result.offset).toBeDefined();
+    });
+
+    test("returns canMitigate true with launch point when direct trajectory blocked", () => {
+      // Direct trajectory blocked from current position, but launch point works
+      mockBot.utilsManager.getBestPearlTrajectory = (source, target) => {
+        // Block direct trajectory from current position (x=0, z=0)
+        if (source.x === 0 && source.z === 0) return null;
+        // Allow trajectory from launch point (non-zero x or z)
+        return {
+          pitch: 45,
+          arc: "high" as const,
+          flightTime: 12,
+          landingPoint: { x: 0, y: 10, z: 0 },
+          landingDist: 0,
+        };
+      };
+      const result = manager.getPearlMitigation();
       expect(result.canMitigate).toBe(true);
       expect(result.launchPos).toBeDefined();
       expect(result.targetPos).toBeDefined();
-      expect(result.flightTime).toBe(10);
+      expect(result.flightTime).toBe(12);
       expect(result.offset).toBeDefined();
     });
   });

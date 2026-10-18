@@ -35,13 +35,7 @@ export interface CombatTreeContext {
     ticksToImpact?: number;
     needsTotem?: boolean;
   };
-  getFallPearlMitigation: () => {
-    canMitigate: boolean;
-    targetPos?: Vec3;
-    flightTime?: number;
-    offset?: number;
-  };
-  getEnemyAbovePearlMitigation: () => {
+  getPearlMitigation: () => {
     canMitigate: boolean;
     launchPos?: Vec3;
     targetPos?: Vec3;
@@ -119,11 +113,10 @@ function maintenance(name: string, children: Node[]): Node {
  * Maintenance (dispatched together every non-crisis tick):
  *   4. Armor
  *   5. Weapon
- *   6. Pearl throw
- *   7. Enemy above pearl
- *   8. Buff (strength potion)
- *   9. Food
- *   10. Gapple utility
+ *   6. Pearl mitigation (combat throw + fall mitigation)
+ *   7. Buff (strength potion)
+ *   8. Food
+ *   9. Gapple utility
  * All branches can be toggled individually via the `tg` command.
  */
 export function buildCombatTree(ctx: CombatTreeContext): Node {
@@ -143,57 +136,6 @@ export function buildCombatTree(ctx: CombatTreeContext): Node {
               condition("totemEnabled", (c) => (c.bot as any).combatManager.isFeatureEnabled("totem")),
               condition("hasTotem", (c) => c.inv().hasItem("totem_of_undying")),
               action("mitigateFall", (c) => { c.inv().equipTotem(); }),
-            ],
-          }),
-
-          // 2. Fall protection — ender pearl teleport to solid ground
-          // Used when no totem is available: throw a pearl at solid ground
-          // before impact. If health is below pearl damage (5 HP) and no
-          // armor is worn, eat a golden apple first so the teleport isn't
-          // lethal.
-          new Sequence({
-            name: "fallPearl",
-            nodes: [
-              condition("isFallDangerous", (c) => c.getFallProtectionStatus().isDangerous),
-              condition("pearlEnabled", (c) => (c.bot as any).combatManager.isFeatureEnabled("pearl")),
-              condition("canMitigateFallWithPearl", (c) => c.getFallPearlMitigation().canMitigate),
-              action("mitigateFallWithPearl", (c) => {
-                const mitigation = c.getFallPearlMitigation();
-                const inv = c.inv();
-                const healthStatus = c.getHealthStatus();
-                const { PEARL_DAMAGE, EAT_TICKS } = Constants.COMBAT.SURVIVAL;
-                const ticksToImpact = c.getFallProtectionStatus().ticksToImpact ?? 0;
-                const hasArmor = (c.bot as any).combatManager?._hasAnyArmor?.();
-                const cm = c.bot.combatManager;
-
-                // If pearl teleport would be lethal and we have a gapple,
-                // eat first — but only if we have time before impact.
-                if (
-                  healthStatus.healthPoints < PEARL_DAMAGE &&
-                  !hasArmor &&
-                  inv.hasItem("golden_apple") &&
-                  ticksToImpact > EAT_TICKS + 5
-                ) {
-                  inv.equipGapple();
-                  return;
-                }
-
-                // Throw pearl at solid ground (fire-and-forget; the tree
-                // re-evaluates next tick while the throw is in flight).
-                // Defer if a gapple eat is in progress (e.g. we just
-                // started eating because pearl teleport would be lethal).
-                if (inv.isItemUseActive()) return;
-                void inv
-                  .equipPearl(mitigation.targetPos!, mitigation.offset!)
-                  .catch((error: unknown) => {
-                    const err = error as Error;
-                    c.logger.debug(
-                      `Fall pearl: equip/throw failed: ${err.message}`,
-                      "Combat",
-                    );
-                  });
-                cm._lastFallPearlTime = Date.now();
-              }),
             ],
           }),
 
@@ -249,94 +191,56 @@ export function buildCombatTree(ctx: CombatTreeContext): Node {
           ],
         }),
 
-        // 6. Pearl throw
+        // 6. Pearl mitigation — throw ender pearl at a target (combat throw)
+        // or teleport to solid ground/ceiling to mitigate a dangerous fall.
+        // If a valid trajectory exists from the current position, throw immediately.
+        // Otherwise, pathfind to a nearby launch point and throw from there.
         new Sequence({
-          name: "pearl",
+          name: "pearlMitigation",
           nodes: [
             condition("pearlEnabled", (c) => (c.bot as any).combatManager.isFeatureEnabled("pearl")),
-            condition("hasTargetForPearl", (c) => {
-              const target = (c.bot as any).pvp?.target;
-              if (!target) return false;
-              const { COOLDOWN } = Constants.COMBAT.ENDER_PEARL;
-              if (Date.now() - c.lastPearlTime < COOLDOWN) return false;
-              const dist = c.bot.entity!.position.distanceTo(target.position);
-              const hasPearls = c.inv().hasItem("ender_pearl");
-              if (!hasPearls || dist <= (c.bot as any).pvp.attackRange || dist > 50) return false;
-              const eyePos = c.bot.entity!.position.offset(0, Constants.PHYSICS.EYE_HEIGHT, 0);
-              const targetPos = target.position.offset(0, target.height / 2, 0);
-              return c.getBestPearlOffset(eyePos, targetPos, "low") !== null;
-            }),
-            action("throwPearl", (c) => {
-              const target = (c.bot as any).pvp?.target;
-              if (!target) return;
-              const eyePos = c.bot.entity!.position.offset(0, Constants.PHYSICS.EYE_HEIGHT, 0);
-              const targetPos = target.position.offset(0, target.height / 2, 0);
-              const result = c.getBestPearlOffset(eyePos, targetPos, "low");
-              if (!result) return;
-              c.inv()
-                .equipPearl(targetPos, result.offset)
-                .catch((error: unknown) => {
-                  const err = error as Error;
-                  c.logger.debug(
-                    `Pearl: combat throw failed: ${err.message}`,
-                    "Combat",
-                  );
-                });
-              c.setLastPearlTime(Date.now());
-            }),
-          ],
-        }),
-
-        // 7. Enemy above — pearl teleport to reach enemy on elevated position
-        // Used when a target is standing on a block above the bot and out
-        // of melee reach. Finds a valid launch point near the bot, pathfinds
-        // to it, then throws a pearl at the enemy to teleport up.
-        new Sequence({
-          name: "enemyAbovePearl",
-          nodes: [
-            condition("enemyAbovePearlEnabled", (c) => (c.bot as any).combatManager.isFeatureEnabled("enemyAbovePearl")),
-            condition("canReachEnemyWithPearl", (c) =>
-              c.getEnemyAbovePearlMitigation().canMitigate,
-            ),
-            action("reachEnemyWithPearl", (c) => {
-              const mitigation = c.getEnemyAbovePearlMitigation();
+            condition("canPearlMitigate", (c) => c.getPearlMitigation().canMitigate),
+            action("mitigateWithPearl", (c) => {
+              const mitigation = c.getPearlMitigation();
               const inv = c.inv();
               const cm = c.bot.combatManager;
               const entity = c.bot.entity;
-              const launchPos = mitigation.launchPos!;
+              const launchPos = mitigation.launchPos;
 
-              // If not yet at the launch point, pathfind to it.
-              const distToLaunch = entity.position.distanceTo(launchPos);
-              if (distToLaunch > 1) {
-                cm._enemyAboveLaunchPoint = launchPos;
-                const key = `${Math.round(launchPos.x)}:${Math.round(launchPos.z)}`;
-                const pf = c.bot.pathfinder;
-                if (
-                  pf &&
-                  (cm._enemyAboveGoalKey !== key ||
-                    !pf.goal ||
-                    pf.movements !== (c.bot.combatManager as any).movements)
-                ) {
-                  pf.setMovements((c.bot.combatManager as any).movements);
-                  pf.setGoal(
-                    new goals.GoalNear(
-                      launchPos.x,
-                      launchPos.y,
-                      launchPos.z,
-                      1,
-                    ),
-                    true,
-                  );
-                  cm._enemyAboveGoalKey = key;
+              // If a launch point was found, pathfind to it before throwing.
+              if (launchPos) {
+                const distToLaunch = entity.position.distanceTo(launchPos);
+                if (distToLaunch > 1) {
+                  cm._enemyAboveLaunchPoint = launchPos;
+                  const key = `${Math.round(launchPos.x)}:${Math.round(launchPos.z)}`;
+                  const pf = c.bot.pathfinder;
+                  if (
+                    pf &&
+                    (cm._enemyAboveGoalKey !== key ||
+                      !pf.goal ||
+                      pf.movements !== (c.bot.combatManager as any).movements)
+                  ) {
+                    pf.setMovements((c.bot.combatManager as any).movements);
+                    pf.setGoal(
+                      new goals.GoalNear(
+                        launchPos.x,
+                        launchPos.y,
+                        launchPos.z,
+                        1,
+                      ),
+                      true,
+                    );
+                    cm._enemyAboveGoalKey = key;
+                  }
+                  return; // Wait for arrival before throwing
                 }
-                return; // Wait for arrival before throwing
-              }
 
-              // Arrived at launch point: throw pearl at target.
-              cm._enemyAboveLaunchPoint = null;
-              cm._enemyAboveGoalKey = null;
-              const pf = c.bot.pathfinder;
-              if (pf) pf.setGoal(null);
+                // Arrived at launch point: clear pathfinding state.
+                cm._enemyAboveLaunchPoint = null;
+                cm._enemyAboveGoalKey = null;
+                const pf = c.bot.pathfinder;
+                if (pf) pf.setGoal(null);
+              }
 
               if (inv.isItemUseActive()) return;
               void inv
@@ -344,11 +248,11 @@ export function buildCombatTree(ctx: CombatTreeContext): Node {
                 .catch((error: unknown) => {
                   const err = error as Error;
                   c.logger.debug(
-                    `Enemy above pearl: equip/throw failed: ${err.message}`,
+                    `Pearl: equip/throw failed: ${err.message}`,
                     "Combat",
                   );
                 });
-              cm.lastPearlTime = Date.now();
+              c.setLastPearlTime(Date.now());
             }),
           ],
         }),

@@ -120,11 +120,11 @@ declare class CombatManager {
   lastPearlTime: number;
   /** Timestamp of the last fall-mitigation pearl equip. */
   _lastFallPearlTime: number;
-  /** Launch point for enemy-above pearl mitigation pathfinding goal. Null when not pathfinding. */
+  /** Launch point for pearl mitigation pathfinding goal. Null when not pathfinding. */
   _enemyAboveLaunchPoint: Vec3 | null;
-  /** Key for the enemy-above pathfinder goal. */
+  /** Key for the pearl mitigation pathfinder goal. */
   _enemyAboveGoalKey: string | null;
-  getEnemyAbovePearlMitigation(): {
+  getPearlMitigation(): {
     canMitigate: boolean;
     launchPos?: Vec3;
     targetPos?: Vec3;
