@@ -20,6 +20,7 @@ function makeCtx(overrides: {
   fall?: { isDangerous: boolean; needsTotem?: boolean };
   target?: boolean;
   pearlOffset?: number | null;
+  pearlMitigation?: boolean;
   food?: number;
 }) {
   const has: Record<string, number | boolean> = overrides.has ?? {};
@@ -40,6 +41,7 @@ function makeCtx(overrides: {
     equipPearl: () => invCalls.push("equipPearl"),
     equipBuff: () => invCalls.push("equipBuff"),
     equipFood: () => invCalls.push("equipFood"),
+    isItemUseActive: () => false,
   };
 
   const pvp = overrides.target
@@ -54,6 +56,7 @@ function makeCtx(overrides: {
       height: 1.8,
     },
     food: overrides.food ?? 20,
+    combatManager: { _lastFallPearlTime: 0 },
   };
 
   let lastPearlTime = 0;
@@ -71,6 +74,9 @@ function makeCtx(overrides: {
     getFallProtectionStatus: () => ({
       isDangerous: fallStatus.isDangerous,
       needsTotem: (fallStatus as any).needsTotem,
+    }),
+    getFallPearlMitigation: () => ({
+      canMitigate: overrides.pearlMitigation ?? false,
     }),
     getBestPearlOffset: () => {
       // Only reachable if the cooldown check already passed.
@@ -126,6 +132,66 @@ describe("combat tree dispatch", () => {
     const h = makeCtx({
       fall: { isDangerous: true, needsTotem: true },
       has: { totem_of_undying: true },
+    });
+    const tree = h.build();
+
+    tree.run({ ctx: h.nextRunCtx() });
+
+    expect(h.invCalls.filter((c) => c.startsWith("equip"))).toEqual([
+      "equipTotem",
+    ]);
+  });
+
+  test("fall pearl equips pearl when dangerous fall, no totem, can mitigate", () => {
+    const h = makeCtx({
+      fall: { isDangerous: true, needsTotem: true },
+      pearlMitigation: true,
+      has: { ender_pearl: true },
+    });
+    const tree = h.build();
+
+    tree.run({ ctx: h.nextRunCtx() });
+
+    expect(h.invCalls.filter((c) => c.startsWith("equip"))).toEqual([
+      "equipPearl",
+    ]);
+  });
+
+  test("fall pearl does nothing when no totem and cannot mitigate", () => {
+    const h = makeCtx({
+      fall: { isDangerous: true, needsTotem: true },
+      pearlMitigation: false,
+      has: {},
+    });
+    const tree = h.build();
+
+    tree.run({ ctx: h.nextRunCtx() });
+
+    const dispatches = h.invCalls.filter((c) => c.startsWith("equip"));
+    // Maintenance armor + weapon always run; no fall mitigation.
+    expect(dispatches).toEqual(["equipArmor", "equipWeapon"]);
+  });
+
+  test("fall pearl does nothing when not dangerous", () => {
+    const h = makeCtx({
+      fall: { isDangerous: false, needsTotem: true },
+      pearlMitigation: true,
+      has: { ender_pearl: true },
+    });
+    const tree = h.build();
+
+    tree.run({ ctx: h.nextRunCtx() });
+
+    const dispatches = h.invCalls.filter((c) => c.startsWith("equip"));
+    // No crisis, maintenance armor + weapon run.
+    expect(dispatches).toEqual(["equipArmor", "equipWeapon"]);
+  });
+
+  test("totem takes priority over pearl when both available", () => {
+    const h = makeCtx({
+      fall: { isDangerous: true, needsTotem: true },
+      pearlMitigation: true,
+      has: { totem_of_undying: true, ender_pearl: true },
     });
     const tree = h.build();
 

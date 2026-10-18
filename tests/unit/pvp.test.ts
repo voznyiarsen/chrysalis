@@ -5,6 +5,7 @@
 
 import { CombatDecision, CombatManager } from "../../src/pvp";
 import { Constants } from "../../src/constants";
+import { Vec3 } from "vec3";
 
 describe("CombatDecision", () => {
   test("creates a decision with condition, action, and name", () => {
@@ -71,12 +72,13 @@ describe("CombatManager - Health Status", () => {
       entity: {
         metadata: {},
         effects: {},
-        position: { x: 0, y: 0, z: 0 },
+        position: new Vec3(0, 0, 0),
         velocity: { x: 0, y: 0, z: 0 },
         onGround: true,
         width: 0.6,
         height: 1.8,
       },
+      getEquipmentDestSlot: (dest: string) => ({ head: 5, torso: 6, legs: 7, feet: 8, "off-hand": 45 }[dest] ?? 0),
       inventory: {
         items: () => [],
         slots: [],
@@ -311,6 +313,85 @@ describe("CombatManager - Health Status", () => {
       // Even with plenty of time, gapple mid-fall is not a mitigation;
       // only a totem handles dangerous falls.
       expect(status.needsTotem).toBe(true);
+    });
+  });
+
+  describe("getFallPearlMitigation", () => {
+    beforeEach(() => {
+      // Default: dangerous fall, has pearl, ground at 0, pearl can reach
+      mockBot.health = 20;
+      mockBot.entity.metadata[11] = 0;
+      mockBot.entity.onGround = false;
+      mockBot.entity.velocity.y = -0.5;
+      mockBot.entity.position.y = 25;
+      mockBot.entity.height = 1.8;
+      mockBot.utilsManager.getGroundBelow = () => 0;
+      mockBot.utilsManager.getFallTicks = () => 20;
+      mockBot.utilsManager.getFallDamage = (d: number) => Math.floor(d - 3);
+      mockBot.utilsManager.getBestPearlTrajectory = () => ({
+        pitch: -45,
+        arc: "low" as const,
+        flightTime: 10,
+        landingPoint: { x: 0, y: 0, z: 0 },
+        landingDist: 0,
+      });
+      mockBot.inventoryManager = {
+        hasItem: (name: string) => name === "ender_pearl",
+        equipPearl: async () => {},
+        equipGapple: async () => {},
+      };
+      mockBot.inventory = { slots: [] };
+      (manager as any).lastMaxFallY = 25;
+    });
+
+    test("returns canMitigate false when not falling", () => {
+      mockBot.entity.onGround = true;
+      mockBot.entity.velocity.y = 0;
+      const result = manager.getFallPearlMitigation();
+      expect(result.canMitigate).toBe(false);
+    });
+
+    test("returns canMitigate false when no ender pearl", () => {
+      mockBot.inventoryManager.hasItem = (name: string) => name === "totem_of_undying";
+      const result = manager.getFallPearlMitigation();
+      expect(result.canMitigate).toBe(false);
+    });
+
+    test("returns canMitigate false when no ground found", () => {
+      mockBot.utilsManager.getGroundBelow = () => -64;
+      const result = manager.getFallPearlMitigation();
+      expect(result.canMitigate).toBe(false);
+    });
+
+    test("returns canMitigate false when pearl flight too slow", () => {
+      mockBot.utilsManager.getBestPearlTrajectory = () => ({
+        pitch: -45,
+        arc: "low" as const,
+        flightTime: 30, // >= ticksToImpact (20)
+        landingPoint: { x: 0, y: 0, z: 0 },
+        landingDist: 0,
+      });
+      const result = manager.getFallPearlMitigation();
+      expect(result.canMitigate).toBe(false);
+    });
+
+    test("returns canMitigate true with target and flight time", () => {
+      const result = manager.getFallPearlMitigation();
+      expect(result.canMitigate).toBe(true);
+      expect(result.targetPos).toEqual({ x: 0, y: 1, z: 0 });
+      expect(result.flightTime).toBe(10);
+      expect(result.offset).toBeDefined();
+    });
+
+    test("_hasAnyArmor returns false with empty armor slots", () => {
+      mockBot.inventory = { slots: [] };
+      expect((manager as any)._hasAnyArmor()).toBe(false);
+    });
+
+    test("_hasAnyArmor returns true with armor in a slot", () => {
+      mockBot.inventory = { slots: [null, null, null, null, null, { name: "iron_helmet" }] };
+      mockBot.getEquipmentDestSlot = (dest: string) => ({ head: 5, torso: 6, legs: 7, feet: 8, "off-hand": 45 }[dest] ?? 0);
+      expect((manager as any)._hasAnyArmor()).toBe(true);
     });
   });
 

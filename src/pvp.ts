@@ -449,6 +449,8 @@ class CombatManager {
   modeFilterCache: ((e: any) => boolean) | null;
   lastMode: number;
   lastPearlTime: number;
+  /** Timestamp of the last fall-mitigation pearl equip, to prevent repeated fire-and-forget calls while the first is in flight. */
+  _lastFallPearlTime: number;
   /** Peak Y of the current falling sequence, used as the fall origin for fall-damage prediction. Reset when grounded. */
   lastMaxFallY: number;
   public decisions: CombatDecision[];
@@ -471,6 +473,7 @@ class CombatManager {
     this.modeFilterCache = null;
     this.lastMode = -1;
     this.lastPearlTime = 0;
+    this._lastFallPearlTime = 0;
     this.lastMaxFallY = -Infinity;
     this.decisions = [];
     this._isDeciding = false;
@@ -487,6 +490,7 @@ class CombatManager {
       inv: () => this.bot.inventoryManager,
       getHealthStatus: () => this.getHealthStatus(),
       getFallProtectionStatus: () => this.getFallProtectionStatus(),
+      getFallPearlMitigation: () => this.getFallPearlMitigation(),
       getBestPearlOffset: (source, target, arc) => this.getBestPearlOffset(source, target, arc),
       lastDamage: this.lastDamage,
       lastPearlTime: this.lastPearlTime,
@@ -799,6 +803,7 @@ class CombatManager {
       inv: () => this.bot.inventoryManager,
       getHealthStatus: () => this.getHealthStatus(),
       getFallProtectionStatus: () => this.getFallProtectionStatus(),
+      getFallPearlMitigation: () => this.getFallPearlMitigation(),
       getBestPearlOffset: (source, target, arc) => this.getBestPearlOffset(source, target, arc),
       lastDamage: this.lastDamage,
       lastPearlTime: this.lastPearlTime,
@@ -980,6 +985,98 @@ class CombatManager {
       ticksToImpact,
       needsTotem,
     };
+  }
+
+  /**
+   * Determine whether an ender pearl can mitigate the current dangerous fall
+   * by teleporting the bot to solid ground before impact.
+   *
+   * Ender pearl teleport deals PEARL_DAMAGE (5 HP). If the bot's health is
+   * below that and it has no armor, the pearl itself would be lethal — the
+   * caller should eat a golden apple first in that case.
+   *
+   * @returns Whether pearl mitigation is viable, plus target position and flight time.
+   */
+  getFallPearlMitigation(): {
+    canMitigate: boolean;
+    targetPos?: Vec3;
+    flightTime?: number;
+    offset?: number;
+  } {
+    const status = this.getFallProtectionStatus();
+    if (!status.isDangerous) return { canMitigate: false };
+
+    // Cooldown: don't re-dispatch while a previous fall-pearl equip is in flight.
+    if (Date.now() - this._lastFallPearlTime < 1500) {
+      return { canMitigate: false };
+    }
+
+    const inv = this.bot.inventoryManager;
+    if (!inv.hasItem("ender_pearl")) return { canMitigate: false };
+
+    // Find solid ground below (deep scan for high falls)
+    let groundY = this.bot.utilsManager.getGroundBelow();
+    if (groundY <= -64) {
+      groundY = this.bot.utilsManager.getGroundBelow(
+        Constants.MOVEMENT.FALL_GROUND_SCAN_DEPTH,
+      );
+    }
+    if (groundY <= -64) return { canMitigate: false }; // No ground (void)
+
+    const entity = this.bot.entity;
+    // Target one block above the ground surface so the projectile path
+    // ends in air (isProjectilePathClear rejects paths ending inside a
+    // block). The bot teleports there and falls ~1 block (no damage).
+    const targetPos = new Vec3(entity.position.x, groundY + 1.0, entity.position.z);
+
+    // Calculate ballistic trajectory to the ground
+    const eyePos = entity.position.offset(0, entity.height!, 0);
+    const trajectory = this.bot.utilsManager.getBestPearlTrajectory(
+      eyePos,
+      targetPos,
+      Constants.COMBAT.PROJECTILES.ender_pearl.VELOCITY,
+      Constants.COMBAT.PROJECTILES.ender_pearl.GRAVITY,
+      Constants.COMBAT.PROJECTILES.ender_pearl.DRAG,
+      1.5, // toleranceRadius
+      0.5, // sampleStep
+    );
+
+    if (!trajectory) return { canMitigate: false };
+
+    // Pearl must arrive before the bot hits the ground
+    if (trajectory.flightTime >= (status.ticksToImpact ?? 0)) {
+      return { canMitigate: false };
+    }
+
+    // Convert pitch to vertical aim offset for equipPearl:
+    // offset = horizontal_distance * tan(pitch)
+    const horizontalDist = Math.hypot(
+      targetPos.x - eyePos.x,
+      targetPos.z - eyePos.z,
+    );
+    let offset: number;
+    if (horizontalDist < 1e-6) {
+      // Target is directly below: aim straight down with a negative offset.
+      offset = -5;
+    } else {
+      offset = horizontalDist * Math.tan(trajectory.pitch * Math.PI / 180);
+    }
+
+    return { canMitigate: true, targetPos, flightTime: trajectory.flightTime, offset };
+  }
+
+  /**
+   * Whether the bot is wearing any armor (any armor slot occupied).
+   * Used to judge whether ender pearl teleport damage (5 HP) is lethal.
+   * @private
+   */
+  private _hasAnyArmor(): boolean {
+    for (const slot of ["head", "torso", "legs", "feet"]) {
+      const slotNum = this.bot.getEquipmentDestSlot(slot);
+      const item = this.bot.inventory.slots[slotNum];
+      if (item) return true;
+    }
+    return false;
   }
 
   /**

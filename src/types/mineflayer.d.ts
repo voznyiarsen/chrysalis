@@ -117,6 +117,8 @@ declare class CombatManager {
   ): Promise<void>;
   _waitUntilSettled(): Promise<void>;
   lastPearlTime: number;
+  /** Timestamp of the last fall-mitigation pearl equip. */
+  _lastFallPearlTime: number;
 }
 
 declare class CommandManager {

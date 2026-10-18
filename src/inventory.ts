@@ -64,6 +64,14 @@ class InventoryManager {
   /** True while an eat/drink flow holds an item in a "using" state. */
   private _itemUseActive = false;
 
+  /** True while a pearl-throw flow holds an item and is aiming/activating. */
+  private _pearlThrowActive = false;
+
+  /** Whether an eat/drink flow is currently active (e.g. gapple heal). */
+  isItemUseActive(): boolean {
+    return this._itemUseActive;
+  }
+
   /**
    * Run `fn` as an exclusive window operation: nothing else in this
    * manager touches the inventory window until it settles.
@@ -994,80 +1002,94 @@ class InventoryManager {
     itemType: string = "ender_pearl",
     sourcePos?: Vec3,
   ): Promise<void> {
-    const equipped = await this._equipItem(itemType, "hand");
-    if (!equipped) {
-      throw new Error(`Cannot throw ${itemType}: not found in inventory`);
-    }
-
-    this.bot.clearControlStates();
-    await this.bot.pathfinder.stop();
-    await this.bot.waitForTicks!(1);
-
-    // The offset is relative to the source Y level (where the projectile
-    // is launched from). Use sourcePos if provided, otherwise fall back
-    // to the bot's eye position.
-    const srcY = sourcePos
-      ? sourcePos.y
-      : this.bot.entity!.position.y + this.bot.entity!.height!;
-    const aimPoint = targetPos.clone();
-    aimPoint.y = srcY + offset;
-
-    // Verify the server agrees the item is held before activating: rapid
-    // give/equip/clear sequences can leave the client's hand ahead of the
-    // server's, and activating an (server-side) empty hand silently throws
-    // nothing. Poll briefly for the held item to settle.
-    const countBefore = this.getItemCount(itemType);
-    for (let i = 0; i < 10; i++) {
-      if (this.bot.heldItem?.name === itemType) break;
-      await this.bot.waitForTicks!(1);
-    }
-    if (this.bot.heldItem?.name !== itemType) {
-      throw new Error(
-        `Cannot throw ${itemType}: not held after equip (holding ${this.bot.heldItem?.name ?? "nothing"})`,
-      );
-    }
-
-    // Use lookAt which handles the pitch/yaw calculation internally
-    await this.bot.lookAt!(aimPoint, true);
-    await this.bot.waitForTicks!(1);
-
-    // Activate, then verify consumption. If the use packet raced still-
-    // in-flight window confirms, the server ignores it; re-aim and retry
-    // once while the item is verifiably still held.
-    let consumed = this.getItemCount(itemType) < countBefore;
-    for (let attempt = 0; attempt < 2 && !consumed; attempt++) {
-      this.bot.activateItem(false); // Right click once
-      const t0 = Date.now();
-      while (Date.now() - t0 < Constants.TIMING.DEFAULT_TIMEOUT) {
-        await this.bot.waitForTicks!(2);
-        if (this.getItemCount(itemType) < countBefore) break;
-      }
-      consumed = this.getItemCount(itemType) < countBefore;
-      if (!consumed && this.bot.heldItem?.name === itemType) {
-        this.logger.debug(
-          `Pearl: throw attempt ${attempt + 1} not consumed, retrying`,
-          "Inventory",
-        );
-        await this.bot.lookAt!(aimPoint, true);
-        await this.bot.waitForTicks!(1);
-      }
-    }
-    if (!consumed && this.bot.heldItem?.name === itemType) {
-      throw new Error(
-        `Failed to throw ${itemType}: still held with unchanged count after retries`,
-      );
-    }
-    if (consumed) {
-      this.logger.inventory(
-        `Tossed ${itemType} with offset ${offset.toFixed(2)} successfully`,
-      );
-    } else {
-      // Left the hand without a count change (client/server inventory
-      // desync); the throw may still have fired. Callers verify by polling.
+    // Prevent overlapping pearl-throw flows (e.g. fire-and-forget dispatch
+    // every tick while falling). Only one throw can be in flight at a time.
+    if (this._pearlThrowActive) {
       this.logger.debug(
-        `Pearl: ${itemType} left hand with unchanged count — possible desync`,
+        `Pearl: another throw is in flight, deferring ${itemType}`,
         "Inventory",
       );
+      return;
+    }
+    this._pearlThrowActive = true;
+    try {
+      const equipped = await this._equipItem(itemType, "hand");
+      if (!equipped) {
+        throw new Error(`Cannot throw ${itemType}: not found in inventory`);
+      }
+
+      this.bot.clearControlStates();
+      await this.bot.pathfinder.stop();
+      await this.bot.waitForTicks!(1);
+
+      // The offset is relative to the source Y level (where the projectile
+      // is launched from). Use sourcePos if provided, otherwise fall back
+      // to the bot's eye position.
+      const srcY = sourcePos
+        ? sourcePos.y
+        : this.bot.entity!.position.y + this.bot.entity!.height!;
+      const aimPoint = targetPos.clone();
+      aimPoint.y = srcY + offset;
+
+      // Verify the server agrees the item is held before activating: rapid
+      // give/equip/clear sequences can leave the client's hand ahead of the
+      // server's, and activating an (server-side) empty hand silently throws
+      // nothing. Poll briefly for the held item to settle.
+      const countBefore = this.getItemCount(itemType);
+      for (let i = 0; i < 10; i++) {
+        if (this.bot.heldItem?.name === itemType) break;
+        await this.bot.waitForTicks!(1);
+      }
+      if (this.bot.heldItem?.name !== itemType) {
+        throw new Error(
+          `Cannot throw ${itemType}: not held after equip (holding ${this.bot.heldItem?.name ?? "nothing"})`,
+        );
+      }
+
+      // Use lookAt which handles the pitch/yaw calculation internally
+      await this.bot.lookAt!(aimPoint, true);
+      await this.bot.waitForTicks!(1);
+
+      // Activate, then verify consumption. If the use packet raced still-
+      // in-flight window confirms, the server ignores it; re-aim and retry
+      // once while the item is verifiably still held.
+      let consumed = this.getItemCount(itemType) < countBefore;
+      for (let attempt = 0; attempt < 2 && !consumed; attempt++) {
+        this.bot.activateItem(false); // Right click once
+        const t0 = Date.now();
+        while (Date.now() - t0 < Constants.TIMING.DEFAULT_TIMEOUT) {
+          await this.bot.waitForTicks!(2);
+          if (this.getItemCount(itemType) < countBefore) break;
+        }
+        consumed = this.getItemCount(itemType) < countBefore;
+        if (!consumed && this.bot.heldItem?.name === itemType) {
+          this.logger.debug(
+            `Pearl: throw attempt ${attempt + 1} not consumed, retrying`,
+            "Inventory",
+          );
+          await this.bot.lookAt!(aimPoint, true);
+          await this.bot.waitForTicks!(1);
+        }
+      }
+      if (!consumed && this.bot.heldItem?.name === itemType) {
+        throw new Error(
+          `Failed to throw ${itemType}: still held with unchanged count after retries`,
+        );
+      }
+      if (consumed) {
+        this.logger.inventory(
+          `Tossed ${itemType} with offset ${offset.toFixed(2)} successfully`,
+        );
+      } else {
+        // Left the hand without a count change (client/server inventory
+        // desync); the throw may still have fired. Callers verify by polling.
+        this.logger.debug(
+          `Pearl: ${itemType} left hand with unchanged count — possible desync`,
+          "Inventory",
+        );
+      }
+    } finally {
+      this._pearlThrowActive = false;
     }
   }
 

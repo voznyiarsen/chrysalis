@@ -218,6 +218,10 @@ export const Constants = {
     SURVIVAL: {
       MAX_HP: 20,
       DANGER_HP: 2,
+      /** Damage dealt by an ender pearl teleport (vanilla: 5 HP / 2.5 hearts) */
+      PEARL_DAMAGE: 5,
+      /** Ticks to consume a food item (vanilla: 32 ticks ~ 1.6s) */
+      EAT_TICKS: 32,
     },
   },
 

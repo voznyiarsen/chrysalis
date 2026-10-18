@@ -34,6 +34,12 @@ export interface CombatTreeContext {
     ticksToImpact?: number;
     needsTotem?: boolean;
   };
+  getFallPearlMitigation: () => {
+    canMitigate: boolean;
+    targetPos?: Vec3;
+    flightTime?: number;
+    offset?: number;
+  };
   getBestPearlOffset: (source: Vec3, target: Vec3, arc?: "low" | "high") => { offset: number; arc: "low" | "high" } | null;
   lastDamage: number;
   lastPearlTime: number;
@@ -118,18 +124,54 @@ export function buildCombatTree(ctx: CombatTreeContext): Node {
       new Selector({
         name: "crisis",
         nodes: [
-          // 1. Fall protection
+          // 1. Fall protection — totem of undying (highest priority)
           new Sequence({
             name: "fallProtection",
             nodes: [
               condition("isFallDangerous", (c) => c.getFallProtectionStatus().isDangerous),
-              action("mitigateFall", (c) => {
-                const status = c.getFallProtectionStatus();
+              condition("hasTotem", (c) => c.inv().hasItem("totem_of_undying")),
+              action("mitigateFall", (c) => { c.inv().equipTotem(); }),
+            ],
+          }),
+
+          // 2. Fall protection — ender pearl teleport to solid ground
+          // Used when no totem is available: throw a pearl at solid ground
+          // before impact. If health is below pearl damage (5 HP) and no
+          // armor is worn, eat a golden apple first so the teleport isn't
+          // lethal.
+          new Sequence({
+            name: "fallPearl",
+            nodes: [
+              condition("isFallDangerous", (c) => c.getFallProtectionStatus().isDangerous),
+              condition("canMitigateFallWithPearl", (c) => c.getFallPearlMitigation().canMitigate),
+              action("mitigateFallWithPearl", (c) => {
+                const mitigation = c.getFallPearlMitigation();
                 const inv = c.inv();
-                // Totem of Undying is the only fall mitigation.
-                if (!status.needsTotem) return;
-                if (!inv.hasItem("totem_of_undying")) return;
-                inv.equipTotem();
+                const healthStatus = c.getHealthStatus();
+                const { PEARL_DAMAGE, EAT_TICKS } = Constants.COMBAT.SURVIVAL;
+                const ticksToImpact = c.getFallProtectionStatus().ticksToImpact ?? 0;
+                const hasArmor = (c.bot as any).combatManager?._hasAnyArmor?.();
+                const cm = c.bot.combatManager;
+
+                // If pearl teleport would be lethal and we have a gapple,
+                // eat first — but only if we have time before impact.
+                if (
+                  healthStatus.healthPoints < PEARL_DAMAGE &&
+                  !hasArmor &&
+                  inv.hasItem("golden_apple") &&
+                  ticksToImpact > EAT_TICKS + 5
+                ) {
+                  inv.equipGapple();
+                  return;
+                }
+
+                // Throw pearl at solid ground (fire-and-forget; the tree
+                // re-evaluates next tick while the throw is in flight).
+                // Defer if a gapple eat is in progress (e.g. we just
+                // started eating because pearl teleport would be lethal).
+                if (inv.isItemUseActive()) return;
+                void inv.equipPearl(mitigation.targetPos!, mitigation.offset!);
+                cm._lastFallPearlTime = Date.now();
               }),
             ],
           }),

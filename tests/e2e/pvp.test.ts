@@ -673,6 +673,80 @@ describeE2E("E2E PvP Tests", () => {
     }
   });
 
+  test(
+    "mitigates a dangerous fall by throwing an ender pearl at solid ground",
+    async () => {
+      const cm: any = getCm();
+      const combatTick = (): void => {
+        void cm.doDecide();
+      };
+      bot.on("physicsTick", combatTick);
+
+      try {
+        // Neutralize resistance so fall damage is real.
+        await serverCommand(
+          bot,
+          effectClearCmd(bot.username, VERSION),
+        );
+
+        await ensureSurvival(bot);
+
+        // Give ender pearl (no totem — pearl is the only mitigation).
+        await giveAndWait("ender_pearl");
+
+        // Teleport up high to create a dangerous fall.
+        await tpTo(bot, POSITION.x, POSITION.y + 25, POSITION.z);
+        await pollFalling(bot);
+
+        // Confirm the fall is predicted dangerous.
+        const status = cm.getFallProtectionStatus();
+        expect(status.isDangerous).toBe(true);
+
+        // Wait for the bot to equip the pearl for fall mitigation.
+        await pollUntil(
+          bot,
+          () => {
+            const slot = bot.getEquipmentDestSlot("hand");
+            return bot.inventory.slots[slot]?.name === "ender_pearl";
+          },
+          100,
+          "ender pearl to be equipped for fall mitigation",
+        );
+
+        // Wait for the pearl to be consumed (thrown at the ground).
+        await pollUntil(
+          bot,
+          () => bot.inventoryManager.getItemCount("ender_pearl") === 0,
+          100,
+          "ender pearl to be thrown",
+        );
+
+        // Land and survive (takes 5 HP pearl damage, should be at ~15 HP).
+        await pollUntil(
+          bot,
+          () => bot.entity.onGround,
+          200,
+          "bot to land after fall",
+        );
+        expect((bot.health ?? 0)).toBeGreaterThan(0);
+
+        // Restore position and creative mode.
+        await tpTo(bot, POSITION.x, POSITION.y, POSITION.z);
+        await ensureCreative(bot);
+
+        // Restore the suite's 900s resistance layer for later scenarios.
+        await serverCommand(
+          bot,
+          effectGiveCmd(bot.username, "resistance", 900, 255, VERSION),
+        );
+      } finally {
+        bot.removeListener("physicsTick", combatTick);
+        cm.setMode(0);
+      }
+    },
+    TIMEOUT_MS * 3,
+  );
+
   // ═══════════════════════════════════════════════════════════════════
   // Category 6: Decision Engine
   // ═══════════════════════════════════════════════════════════════════
