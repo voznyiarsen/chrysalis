@@ -453,6 +453,10 @@ class CombatManager {
   _lastFallPearlTime: number;
   /** Peak Y of the current falling sequence, used as the fall origin for fall-damage prediction. Reset when grounded. */
   lastMaxFallY: number;
+  /** Launch point for enemy-above pearl mitigation pathfinding goal. Null when not pathfinding. */
+  _enemyAboveLaunchPoint: Vec3 | null;
+  /** Key for the enemy-above pathfinder goal, to avoid re-issuing every tick. */
+  _enemyAboveGoalKey: string | null;
   public decisions: CombatDecision[];
   _isDeciding: boolean;
   private _tree: BTNode | null = null;
@@ -475,6 +479,8 @@ class CombatManager {
     this.lastPearlTime = 0;
     this._lastFallPearlTime = 0;
     this.lastMaxFallY = -Infinity;
+    this._enemyAboveLaunchPoint = null;
+    this._enemyAboveGoalKey = null;
     this.decisions = [];
     this._isDeciding = false;
 
@@ -491,6 +497,7 @@ class CombatManager {
       getHealthStatus: () => this.getHealthStatus(),
       getFallProtectionStatus: () => this.getFallProtectionStatus(),
       getFallPearlMitigation: () => this.getFallPearlMitigation(),
+      getEnemyAbovePearlMitigation: () => this.getEnemyAbovePearlMitigation(),
       getBestPearlOffset: (source, target, arc) => this.getBestPearlOffset(source, target, arc),
       lastDamage: this.lastDamage,
       lastPearlTime: this.lastPearlTime,
@@ -804,6 +811,7 @@ class CombatManager {
       getHealthStatus: () => this.getHealthStatus(),
       getFallProtectionStatus: () => this.getFallProtectionStatus(),
       getFallPearlMitigation: () => this.getFallPearlMitigation(),
+      getEnemyAbovePearlMitigation: () => this.getEnemyAbovePearlMitigation(),
       getBestPearlOffset: (source, target, arc) => this.getBestPearlOffset(source, target, arc),
       lastDamage: this.lastDamage,
       lastPearlTime: this.lastPearlTime,
@@ -1080,6 +1088,204 @@ class CombatManager {
     }
 
     return { canMitigate: true, targetPos, flightTime: trajectory.flightTime, offset };
+  }
+
+  /**
+   * Determine whether an ender pearl can be used to reach an enemy
+   * standing on an elevated position (e.g. on a block above the bot).
+   * Finds valid launch points near the bot, then the behavior tree
+   * pathfinds to one and throws a pearl at the enemy to teleport up.
+   *
+   * Ender pearl teleport deals PEARL_DAMAGE (5 HP). If the bot's health is
+   * below that and it has no armor, the pearl itself would be lethal.
+   *
+   * @returns Whether pearl mitigation is viable, plus launch point, target position, flight time and offset.
+   */
+  getEnemyAbovePearlMitigation(): {
+    canMitigate: boolean;
+    launchPos?: Vec3;
+    targetPos?: Vec3;
+    flightTime?: number;
+    offset?: number;
+  } {
+    const target = (this.bot as any).pvp?.target;
+    if (!target) return { canMitigate: false };
+
+    const entity = this.bot.entity;
+    const { MIN_HEIGHT } = Constants.COMBAT.ENEMY_ABOVE_PEARL;
+
+    // Target must be above the bot
+    if (target.position.y <= entity.position.y + MIN_HEIGHT) {
+      return { canMitigate: false };
+    }
+
+    // Must be out of melee range
+    const dist = entity.position.distanceTo(target.position);
+    const pvp = this.bot as any;
+    const attackRange = pvp.attackRange ?? Constants.COMBAT.ATTACK_RANGE;
+    if (dist <= attackRange) return { canMitigate: false };
+
+    // Must have pearls
+    const inv = this.bot.inventoryManager;
+    if (!inv.hasItem("ender_pearl")) return { canMitigate: false };
+
+    // Cooldown
+    if (Date.now() - this.lastPearlTime < Constants.COMBAT.ENDER_PEARL.COOLDOWN) {
+      return { canMitigate: false };
+    }
+
+    const eyePos = entity.position.offset(0, entity.height!, 0);
+    const targetPos = target.position.offset(0, target.height / 2, 0);
+
+    // If we already have a cached launch point (pathfinding in progress), reuse it
+    if (this._enemyAboveLaunchPoint) {
+      const trajectory = this.bot.utilsManager.getBestPearlTrajectory(
+        this._enemyAboveLaunchPoint.offset(0, entity.height!, 0),
+        targetPos,
+        Constants.COMBAT.PROJECTILES.ender_pearl.VELOCITY,
+        Constants.COMBAT.PROJECTILES.ender_pearl.GRAVITY,
+        Constants.COMBAT.PROJECTILES.ender_pearl.DRAG,
+        1.5,
+        0.5,
+      );
+      if (trajectory) {
+        const horizontalDist = Math.hypot(
+          targetPos.x - this._enemyAboveLaunchPoint.x - 0, // eye offset doesn't change XZ
+          targetPos.z - this._enemyAboveLaunchPoint.z - 0,
+        );
+        // Account for eye height offset in horizontal dist calc (XZ unchanged by Y offset)
+        const hDist = Math.hypot(
+          targetPos.x - (this._enemyAboveLaunchPoint.x),
+          targetPos.z - (this._enemyAboveLaunchPoint.z),
+        );
+        let offset: number;
+        if (hDist < 1e-6) {
+          offset = targetPos.y > eyePos.y ? 5 : -5;
+        } else {
+          offset = hDist * Math.tan(trajectory.pitch * Math.PI / 180);
+        }
+        return {
+          canMitigate: true,
+          launchPos: this._enemyAboveLaunchPoint,
+          targetPos,
+          flightTime: trajectory.flightTime,
+          offset,
+        };
+      }
+      // Trajectory no longer valid (target moved), clear cache
+      this._enemyAboveLaunchPoint = null;
+      this._enemyAboveGoalKey = null;
+    }
+
+    // Find a valid launch point
+    const launchPos = this._findEnemyAboveLaunchPoint(target);
+    if (!launchPos) return { canMitigate: false };
+
+    // Cache it for pathfinding
+    this._enemyAboveLaunchPoint = launchPos;
+
+    const trajectory = this.bot.utilsManager.getBestPearlTrajectory(
+      launchPos.offset(0, entity.height!, 0),
+      targetPos,
+      Constants.COMBAT.PROJECTILES.ender_pearl.VELOCITY,
+      Constants.COMBAT.PROJECTILES.ender_pearl.GRAVITY,
+      Constants.COMBAT.PROJECTILES.ender_pearl.DRAG,
+      1.5,
+      0.5,
+    );
+
+    if (!trajectory) {
+      this._enemyAboveLaunchPoint = null;
+      return { canMitigate: false };
+    }
+
+    const hDist = Math.hypot(
+      targetPos.x - launchPos.x,
+      targetPos.z - launchPos.z,
+    );
+    let offset: number;
+    if (hDist < 1e-6) {
+      offset = targetPos.y > eyePos.y ? 5 : -5;
+    } else {
+      offset = hDist * Math.tan(trajectory.pitch * Math.PI / 180);
+    }
+
+    return {
+      canMitigate: true,
+      launchPos,
+      targetPos,
+      flightTime: trajectory.flightTime,
+      offset,
+    };
+  }
+
+  /**
+   * Find a valid launch point near the bot from which an ender pearl can
+   * reach the target. Launch points are ground-level positions adjacent to
+   * the bot with solid ground below, air above, and a clear trajectory to
+   * the target.
+   * @private
+   */
+  private _findEnemyAboveLaunchPoint(target: any): Vec3 | null {
+    const entity = this.bot.entity;
+    const { LAUNCH_SEARCH_RADIUS } = Constants.COMBAT.ENEMY_ABOVE_PEARL;
+
+    const groundY = this.bot.utilsManager.getGroundBelow();
+    if (groundY <= -64) return null;
+
+    const candidates: Vec3[] = [];
+
+    // Scan in a radius around the bot
+    for (let dx = -LAUNCH_SEARCH_RADIUS; dx <= LAUNCH_SEARCH_RADIUS; dx++) {
+      for (let dz = -LAUNCH_SEARCH_RADIUS; dz <= LAUNCH_SEARCH_RADIUS; dz++) {
+        if (dx === 0 && dz === 0) continue; // skip bot's own position
+
+        const launchPos = new Vec3(
+          entity.position.x + dx,
+          groundY,
+          entity.position.z + dz,
+        );
+
+        // Position must be clear (air at feet and head level), ground below must be solid
+        const blockAtFeet = this.bot.blockAt(launchPos);
+        const blockAbove = this.bot.blockAt(
+          new Vec3(launchPos.x, launchPos.y + 1, launchPos.z),
+        );
+        const blockBelow = this.bot.blockAt(
+          new Vec3(launchPos.x, launchPos.y - 1, launchPos.z),
+        );
+
+        if (!blockBelow || blockBelow.boundingBox === "empty") continue; // no ground below
+        if (blockAtFeet && blockAtFeet.boundingBox !== "empty") continue; // feet blocked
+        if (blockAbove && blockAbove.boundingBox !== "empty") continue; // head blocked
+
+        candidates.push(launchPos);
+      }
+    }
+
+    // Sort by distance to bot (prefer closer launch points)
+    candidates.sort((a, b) =>
+      a.distanceTo(entity.position) - b.distanceTo(entity.position),
+    );
+
+    // Return first candidate with valid trajectory to target
+    const targetPos = target.position.offset(0, target.height / 2, 0);
+
+    for (const launchPos of candidates) {
+      const launchEyePos = launchPos.offset(0, entity.height!, 0);
+      const trajectory = this.bot.utilsManager.getBestPearlTrajectory(
+        launchEyePos,
+        targetPos,
+        Constants.COMBAT.PROJECTILES.ender_pearl.VELOCITY,
+        Constants.COMBAT.PROJECTILES.ender_pearl.GRAVITY,
+        Constants.COMBAT.PROJECTILES.ender_pearl.DRAG,
+        1.5,
+        0.5,
+      );
+      if (trajectory) return launchPos;
+    }
+
+    return null;
   }
 
   /**

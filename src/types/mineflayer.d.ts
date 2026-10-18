@@ -71,6 +71,7 @@ declare class InventoryManager {
 declare class CombatManager {
   bot: Bot;
   logger: Logger;
+  movements?: Movements;
   alliesSet: Set<string>;
   debounce: boolean;
   lastDamage: number;
@@ -119,6 +120,17 @@ declare class CombatManager {
   lastPearlTime: number;
   /** Timestamp of the last fall-mitigation pearl equip. */
   _lastFallPearlTime: number;
+  /** Launch point for enemy-above pearl mitigation pathfinding goal. Null when not pathfinding. */
+  _enemyAboveLaunchPoint: Vec3 | null;
+  /** Key for the enemy-above pathfinder goal. */
+  _enemyAboveGoalKey: string | null;
+  getEnemyAbovePearlMitigation(): {
+    canMitigate: boolean;
+    launchPos?: Vec3;
+    targetPos?: Vec3;
+    flightTime?: number;
+    offset?: number;
+  };
 }
 
 declare class CommandManager {

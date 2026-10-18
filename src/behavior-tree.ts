@@ -20,6 +20,7 @@
  */
 
 import { Selector, Sequence, Node, SUCCESS, FAILURE, RUNNING } from "behaviortree";
+import { goals } from "mineflayer-pathfinder";
 import { Vec3 } from "vec3";
 import type { Bot } from "mineflayer";
 import { Constants } from "./constants";
@@ -36,6 +37,13 @@ export interface CombatTreeContext {
   };
   getFallPearlMitigation: () => {
     canMitigate: boolean;
+    targetPos?: Vec3;
+    flightTime?: number;
+    offset?: number;
+  };
+  getEnemyAbovePearlMitigation: () => {
+    canMitigate: boolean;
+    launchPos?: Vec3;
     targetPos?: Vec3;
     flightTime?: number;
     offset?: number;
@@ -112,8 +120,10 @@ function maintenance(name: string, children: Node[]): Node {
  *   4. Armor
  *   5. Weapon
  *   6. Pearl throw
- *   7. Buff (strength potion)
- *   8. Food
+ *   7. Enemy above pearl
+ *   8. Buff (strength potion)
+ *   9. Food
+ *   10. Gapple utility
  */
 export function buildCombatTree(ctx: CombatTreeContext): Node {
   const { CRITICAL_HP_MULT, LOW_FOOD } = Constants.COMBAT;
@@ -184,7 +194,7 @@ export function buildCombatTree(ctx: CombatTreeContext): Node {
             ],
           }),
 
-          // 2. Critical HP totem
+          // 3. Critical HP totem
           new Sequence({
             name: "criticalTotem",
             nodes: [
@@ -271,7 +281,72 @@ export function buildCombatTree(ctx: CombatTreeContext): Node {
           ],
         }),
 
-        // 7. Buff
+        // 7. Enemy above — pearl teleport to reach enemy on elevated position
+        // Used when a target is standing on a block above the bot and out
+        // of melee reach. Finds a valid launch point near the bot, pathfinds
+        // to it, then throws a pearl at the enemy to teleport up.
+        new Sequence({
+          name: "enemyAbovePearl",
+          nodes: [
+            condition("canReachEnemyWithPearl", (c) =>
+              c.getEnemyAbovePearlMitigation().canMitigate,
+            ),
+            action("reachEnemyWithPearl", (c) => {
+              const mitigation = c.getEnemyAbovePearlMitigation();
+              const inv = c.inv();
+              const cm = c.bot.combatManager;
+              const entity = c.bot.entity;
+              const launchPos = mitigation.launchPos!;
+
+              // If not yet at the launch point, pathfind to it.
+              const distToLaunch = entity.position.distanceTo(launchPos);
+              if (distToLaunch > 1) {
+                cm._enemyAboveLaunchPoint = launchPos;
+                const key = `${Math.round(launchPos.x)}:${Math.round(launchPos.z)}`;
+                const pf = c.bot.pathfinder;
+                if (
+                  pf &&
+                  (cm._enemyAboveGoalKey !== key ||
+                    !pf.goal ||
+                    pf.movements !== (c.bot.combatManager as any).movements)
+                ) {
+                  pf.setMovements((c.bot.combatManager as any).movements);
+                  pf.setGoal(
+                    new goals.GoalNear(
+                      launchPos.x,
+                      launchPos.y,
+                      launchPos.z,
+                      1,
+                    ),
+                    true,
+                  );
+                  cm._enemyAboveGoalKey = key;
+                }
+                return; // Wait for arrival before throwing
+              }
+
+              // Arrived at launch point: throw pearl at target.
+              cm._enemyAboveLaunchPoint = null;
+              cm._enemyAboveGoalKey = null;
+              const pf = c.bot.pathfinder;
+              if (pf) pf.setGoal(null);
+
+              if (inv.isItemUseActive()) return;
+              void inv
+                .equipPearl(mitigation.targetPos!, mitigation.offset!)
+                .catch((error: unknown) => {
+                  const err = error as Error;
+                  c.logger.debug(
+                    `Enemy above pearl: equip/throw failed: ${err.message}`,
+                    "Combat",
+                  );
+                });
+              cm.lastPearlTime = Date.now();
+            }),
+          ],
+        }),
+
+        // 8. Buff
         new Sequence({
           name: "buff",
           nodes: [

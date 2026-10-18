@@ -21,6 +21,7 @@ function makeCtx(overrides: {
   target?: boolean;
   pearlOffset?: number | null;
   pearlMitigation?: boolean;
+  enemyAbovePearlMitigation?: boolean;
   food?: number;
 }) {
   const has: Record<string, number | boolean> = overrides.has ?? {};
@@ -80,6 +81,12 @@ function makeCtx(overrides: {
     }),
     getFallPearlMitigation: () => ({
       canMitigate: overrides.pearlMitigation ?? false,
+    }),
+    getEnemyAbovePearlMitigation: () => ({
+      canMitigate: overrides.enemyAbovePearlMitigation ?? false,
+      launchPos: overrides.enemyAbovePearlMitigation
+        ? new Vec3(0, 64, 0) // at bot's position, so distToLaunch <= 1
+        : undefined,
     }),
     getBestPearlOffset: () => {
       // Only reachable if the cooldown check already passed.
@@ -204,6 +211,48 @@ describe("combat tree dispatch", () => {
     expect(h.invCalls.filter((c) => c.startsWith("equip"))).toEqual([
       "equipTotem",
     ]);
+  });
+
+  test("enemy above pearl equips pearl when dangerous, no totem, can mitigate", () => {
+    const h = makeCtx({
+      fall: { isDangerous: false },
+      enemyAbovePearlMitigation: true,
+      has: { ender_pearl: true },
+    });
+    const tree = h.build();
+
+    tree.run({ ctx: h.nextRunCtx() });
+
+    const dispatches = h.invCalls.filter((c) => c.startsWith("equip"));
+    expect(dispatches).toEqual(["equipArmor", "equipWeapon", "equipPearl"]);
+  });
+
+  test("enemy above pearl does nothing when cannot mitigate", () => {
+    const h = makeCtx({
+      fall: { isDangerous: false },
+      enemyAbovePearlMitigation: false,
+      has: { ender_pearl: true },
+    });
+    const tree = h.build();
+
+    tree.run({ ctx: h.nextRunCtx() });
+
+    const dispatches = h.invCalls.filter((c) => c.startsWith("equip"));
+    expect(dispatches).toEqual(["equipArmor", "equipWeapon"]);
+  });
+
+  test("enemy above pearl does nothing when not dangerous", () => {
+    const h = makeCtx({
+      fall: { isDangerous: false },
+      enemyAbovePearlMitigation: false,
+      has: { ender_pearl: true },
+    });
+    const tree = h.build();
+
+    tree.run({ ctx: h.nextRunCtx() });
+
+    const dispatches = h.invCalls.filter((c) => c.startsWith("equip"));
+    expect(dispatches).toEqual(["equipArmor", "equipWeapon"]);
   });
 
   test("heal crisis dispatches the gapple eat", () => {

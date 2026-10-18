@@ -427,6 +427,95 @@ describe("CombatManager - Health Status", () => {
     });
   });
 
+  describe("getEnemyAbovePearlMitigation", () => {
+    beforeEach(() => {
+      // Default: target above bot, has pearl, ground at 0, valid trajectory
+      mockBot.health = 20;
+      mockBot.entity.metadata[11] = 0;
+      mockBot.entity.position = new Vec3(0, 0, 0);
+      mockBot.entity.height = 1.8;
+      mockBot.entity.onGround = true;
+      mockBot.utilsManager.getGroundBelow = () => 0;
+      mockBot.utilsManager.getBestPearlTrajectory = () => ({
+        pitch: 45,
+        arc: "high" as const,
+        flightTime: 10,
+        landingPoint: { x: 0, y: 10, z: 0 },
+        landingDist: 0,
+      });
+      // Ground block at y=-1 below launch positions, air elsewhere
+      mockBot.blockAt = (pos: Vec3) => {
+        if (pos.y === -1) return { name: "grass", boundingBox: "block" };
+        return null;
+      };
+      mockBot.inventoryManager = {
+        hasItem: (name: string) => name === "ender_pearl",
+        equipPearl: async () => {},
+        equipGapple: async () => {},
+      };
+      mockBot.inventory = { slots: [] };
+      mockBot.pvp = {
+        target: {
+          position: new Vec3(0, 5, 0),
+          height: 1.8,
+        },
+        attackRange: 3,
+      };
+      (manager as any).lastPearlTime = 0;
+    });
+
+    test("returns canMitigate false when no target", () => {
+      mockBot.pvp.target = null;
+      const result = manager.getEnemyAbovePearlMitigation();
+      expect(result.canMitigate).toBe(false);
+    });
+
+    test("returns canMitigate false when target not above bot", () => {
+      mockBot.pvp.target.position = new Vec3(0, 1, 0); // only 1 block above, below MIN_HEIGHT=2
+      const result = manager.getEnemyAbovePearlMitigation();
+      expect(result.canMitigate).toBe(false);
+    });
+
+    test("returns canMitigate false when target in melee range", () => {
+      mockBot.pvp.target.position = new Vec3(0, 3, 0); // distance 3 = attackRange
+      const result = manager.getEnemyAbovePearlMitigation();
+      expect(result.canMitigate).toBe(false);
+    });
+
+    test("returns canMitigate false when no ender pearl", () => {
+      mockBot.inventoryManager.hasItem = (name: string) => name === "totem_of_undying";
+      const result = manager.getEnemyAbovePearlMitigation();
+      expect(result.canMitigate).toBe(false);
+    });
+
+    test("returns canMitigate false when on cooldown", () => {
+      (manager as any).lastPearlTime = Date.now() - 1000; // 1s ago, cooldown is 10000ms
+      const result = manager.getEnemyAbovePearlMitigation();
+      expect(result.canMitigate).toBe(false);
+    });
+
+    test("returns canMitigate false when no ground below", () => {
+      mockBot.utilsManager.getGroundBelow = () => -64;
+      const result = manager.getEnemyAbovePearlMitigation();
+      expect(result.canMitigate).toBe(false);
+    });
+
+    test("returns canMitigate false when no valid trajectory", () => {
+      mockBot.utilsManager.getBestPearlTrajectory = () => null;
+      const result = manager.getEnemyAbovePearlMitigation();
+      expect(result.canMitigate).toBe(false);
+    });
+
+    test("returns canMitigate true with valid launch point and trajectory", () => {
+      const result = manager.getEnemyAbovePearlMitigation();
+      expect(result.canMitigate).toBe(true);
+      expect(result.launchPos).toBeDefined();
+      expect(result.targetPos).toBeDefined();
+      expect(result.flightTime).toBe(10);
+      expect(result.offset).toBeDefined();
+    });
+  });
+
   describe("getLastDamage", () => {
     test("records positive health delta as damage", () => {
       mockBot.health = 20;

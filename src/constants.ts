@@ -214,6 +214,15 @@ export const Constants = {
       MAX_RANGE: 50,
       COOLDOWN: 10000,
     },
+    /** Enemy-above pearl mitigation settings */
+    ENEMY_ABOVE_PEARL: {
+      /** Minimum height difference (blocks) for target to be considered "above" the bot */
+      MIN_HEIGHT: 2,
+      /** Radius (blocks) around the bot to search for valid launch points */
+      LAUNCH_SEARCH_RADIUS: 5,
+      /** Maximum horizontal distance from launch point to target (blocks) */
+      MAX_LAUNCH_TO_TARGET_DIST: 40,
+    },
     /** HP and Survival settings */
     SURVIVAL: {
       MAX_HP: 20,
