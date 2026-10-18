@@ -18,6 +18,7 @@ import {
   getSolidBlocks,
   clearSolidCache,
   getGroundBelow,
+  getGroundAbove,
   getFallDamage,
   getFallTicks,
   isPositionClear,
@@ -682,6 +683,14 @@ export class UtilsManager {
 
   getGroundBelow(maxDepth?: number): number {
     return getGroundBelow(
+      this.bot.entity.position,
+      (pos: Vec3) => this.bot.blockAt(pos),
+      maxDepth,
+    );
+  }
+
+  getGroundAbove(maxDepth?: number): number {
+    return getGroundAbove(
       this.bot.entity.position,
       (pos: Vec3) => this.bot.blockAt(pos),
       maxDepth,

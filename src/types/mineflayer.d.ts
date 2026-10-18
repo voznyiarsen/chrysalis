@@ -232,6 +232,7 @@ declare class UtilsManager {
     yVel: number,
   ): Vec3;
   getGroundBelow(maxDepth?: number): number;
+  getGroundAbove(maxDepth?: number): number;
   getFallDamage(fallDistance: number): number;
   getFallTicks(posY: number, velocityY: number, groundY: number, maxTicks?: number): number;
   clearSolidCache(): void;

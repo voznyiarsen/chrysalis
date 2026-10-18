@@ -140,6 +140,7 @@ describe("CombatManager - Health Status", () => {
         applyImpulse: () => {},
         getHorizontalSpeed: () => 0,
         getGroundBelow: () => 0,
+        getGroundAbove: () => -64,
         getFallDamage: (d: number) => {
           if (d <= 3) return 0;
           return Math.floor(d - 3);
@@ -359,6 +360,37 @@ describe("CombatManager - Health Status", () => {
 
     test("returns canMitigate false when no ground found", () => {
       mockBot.utilsManager.getGroundBelow = () => -64;
+      mockBot.utilsManager.getGroundAbove = () => -64;
+      const result = manager.getFallPearlMitigation();
+      expect(result.canMitigate).toBe(false);
+    });
+
+    test("returns canMitigate true when void below but overhead blocks exist", () => {
+      mockBot.utilsManager.getGroundBelow = () => -64; // void below
+      mockBot.utilsManager.getGroundAbove = () => 65; // ceiling above
+      mockBot.utilsManager.getBestPearlTrajectory = () => ({
+        pitch: 45,
+        arc: "high" as const,
+        flightTime: 10,
+        landingPoint: { x: 0, y: 64, z: 0 },
+        landingDist: 0,
+      });
+      mockBot.entity.position.y = 25;
+      mockBot.entity.height = 1.8;
+      mockBot.utilsManager.getFallTicks = () => 20;
+      mockBot.utilsManager.getFallDamage = (d: number) => Math.floor(d - 3);
+      (manager as any).lastMaxFallY = 25;
+
+      const result = manager.getFallPearlMitigation();
+      expect(result.canMitigate).toBe(true);
+      expect(result.targetPos?.y).toBe(64);
+      expect(result.flightTime).toBe(10);
+      expect(result.offset).toBeDefined();
+    });
+
+    test("returns canMitigate false when no ground below or above", () => {
+      mockBot.utilsManager.getGroundBelow = () => -64;
+      mockBot.utilsManager.getGroundAbove = () => -64;
       const result = manager.getFallPearlMitigation();
       expect(result.canMitigate).toBe(false);
     });

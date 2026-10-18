@@ -1014,23 +1014,42 @@ class CombatManager {
     const inv = this.bot.inventoryManager;
     if (!inv.hasItem("ender_pearl")) return { canMitigate: false };
 
-    // Find solid ground below (deep scan for high falls)
+    const entity = this.bot.entity;
+    const eyePos = entity.position.offset(0, entity.height!, 0);
+
+    // Try downward ground first (normal fall case).
     let groundY = this.bot.utilsManager.getGroundBelow();
     if (groundY <= -64) {
       groundY = this.bot.utilsManager.getGroundBelow(
         Constants.MOVEMENT.FALL_GROUND_SCAN_DEPTH,
       );
     }
-    if (groundY <= -64) return { canMitigate: false }; // No ground (void)
 
-    const entity = this.bot.entity;
-    // Target one block above the ground surface so the projectile path
-    // ends in air (isProjectilePathClear rejects paths ending inside a
-    // block). The bot teleports there and falls ~1 block (no damage).
-    const targetPos = new Vec3(entity.position.x, groundY + 1.0, entity.position.z);
+    let targetPos: Vec3 | null = null;
 
-    // Calculate ballistic trajectory to the ground
-    const eyePos = entity.position.offset(0, entity.height!, 0);
+    if (groundY > -64) {
+      // Solid ground below: aim at it. Target one block above the surface so
+      // the projectile path ends in air (isProjectilePathClear rejects paths
+      // ending inside a block). Bot teleports there and falls ~1 block.
+      targetPos = new Vec3(entity.position.x, groundY + 1.0, entity.position.z);
+    } else {
+      // No ground below (void): scan upward for overhead blocks. Ender pearls
+      // teleport on collision with ANY solid block, so a ceiling block above
+      // is a valid mitigation target.
+      let ceilingY = this.bot.utilsManager.getGroundAbove();
+      if (ceilingY <= -64) {
+        ceilingY = this.bot.utilsManager.getGroundAbove(
+          Constants.MOVEMENT.FALL_GROUND_SCAN_DEPTH,
+        );
+      }
+      if (ceilingY <= -64) return { canMitigate: false }; // No ground above either
+
+      // Aim at the underside of the ceiling block. Target one block below the
+      // ceiling surface so the projectile path ends in air.
+      targetPos = new Vec3(entity.position.x, ceilingY - 1.0, entity.position.z);
+    }
+
+    // Calculate ballistic trajectory to the target (downward or upward).
     const trajectory = this.bot.utilsManager.getBestPearlTrajectory(
       eyePos,
       targetPos,
@@ -1043,7 +1062,7 @@ class CombatManager {
 
     if (!trajectory) return { canMitigate: false };
 
-    // Pearl must arrive before the bot hits the ground
+    // Pearl must arrive before the bot hits the ground/void.
     if (trajectory.flightTime >= (status.ticksToImpact ?? 0)) {
       return { canMitigate: false };
     }
@@ -1056,8 +1075,8 @@ class CombatManager {
     );
     let offset: number;
     if (horizontalDist < 1e-6) {
-      // Target is directly below: aim straight down with a negative offset.
-      offset = -5;
+      // Target is directly above/below: aim straight up/down.
+      offset = targetPos.y > eyePos.y ? 5 : -5;
     } else {
       offset = horizontalDist * Math.tan(trajectory.pitch * Math.PI / 180);
     }

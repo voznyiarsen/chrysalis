@@ -572,6 +572,38 @@ export function getGroundBelow(
   return maxGroundY;
 }
 
+/**
+ * Find the Y coordinate of the first solid block above a position.
+ *
+ * Scans upward from the feet, looking at at most `maxDepth` blocks above
+ * the starting level (default 5). Used for overhead fall mitigation:
+ * when the floor below is void, an ender pearl can be thrown upward to
+ * collide with a ceiling block and teleport the bot to safety.
+ * The scan never goes above the world height (256); finding nothing
+ * returns -64.
+ */
+export function getGroundAbove(
+  pos: Vec3,
+  blockAt: (pos: Vec3) => any,
+  maxDepth = 5,
+): number {
+  const startY = Math.floor(pos.y);
+  const maxY = Math.min(startY + maxDepth, 255);
+  for (let y = startY; y <= maxY; y++) {
+    const block = blockAt(new Vec3(pos.x, y, pos.z));
+    if (block && block.boundingBox !== "empty") {
+      if (block.shapes) {
+        for (const shape of block.shapes) {
+          const shapeBottom = y + shape[Constants.SHAPE.MIN_Y];
+          if (shapeBottom <= y) return y;
+        }
+      }
+      return y;
+    }
+  }
+  return -64;
+}
+
 // ---------------------------------------------------------------------------
 // renderTopDownView
 // ---------------------------------------------------------------------------
