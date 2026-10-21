@@ -7,7 +7,9 @@ import {
   getProjectileOffset,
   isProjectilePathClear,
   getBestPearlTrajectory,
+  findPearlTopLanding,
   type PearlTrajectoryResult,
+  type PearlTopLanding,
 } from "./projectile";
 import {
   isJumpPathClear,
@@ -19,6 +21,7 @@ import {
   clearSolidCache,
   getGroundBelow,
   getGroundAbove,
+  getGroundTopAbove,
   getFallDamage,
   getFallTicks,
   isPositionClear,
@@ -185,6 +188,17 @@ export class AABB {
     const tNear = Math.max(tmin, 0);
     if (tmax >= tNear + EPS) return [tNear, tmax];
     return [Infinity, Infinity];
+  }
+
+  /**
+   * Distance from a point to the closest point on this AABB.
+   * Returns 0 when the point is inside the box.
+   */
+  distanceToPoint(p: Vec3): number {
+    const dx = Math.max(this.minX - p.x, 0, p.x - this.maxX);
+    const dy = Math.max(this.minY - p.y, 0, p.y - this.maxY);
+    const dz = Math.max(this.minZ - p.z, 0, p.z - this.maxZ);
+    return Math.sqrt(dx * dx + dy * dy + dz * dz);
   }
 
   /**
@@ -613,6 +627,32 @@ export class UtilsManager {
     );
   }
 
+  /**
+   * Throw that lands an ender pearl on the upper surface of the block the
+   * aim point belongs to — the throw an elevated enemy needs.
+   * @param source - Projectile spawn point (the thrower's hand: eye height
+   *   minus 0.1), i.e. where the flight starts.
+   * @param aim - Point on the surface the pearl must land on
+   * @returns The landing solution, or null when no throw reaches the surface
+   */
+  getPearlTopLanding(
+    source: Vec3,
+    aim: Vec3,
+    velocity: number = Constants.COMBAT.PROJECTILES.ender_pearl.VELOCITY,
+    gravity: number = Constants.COMBAT.PROJECTILES.ender_pearl.GRAVITY,
+    drag: number = Constants.COMBAT.PROJECTILES.ender_pearl.DRAG,
+  ): PearlTopLanding | null {
+    return findPearlTopLanding(
+      source,
+      aim,
+      velocity,
+      gravity,
+      drag,
+      (pos: Vec3) => this.bot.blockAt(pos),
+      Object.values(this.bot.entities),
+    );
+  }
+
   // ---------------------------------------------------------------------------
   // Movement physics — delegated to movement.ts
   // ---------------------------------------------------------------------------
@@ -697,6 +737,14 @@ export class UtilsManager {
     );
   }
 
+  getGroundTopAbove(maxDepth?: number): number {
+    return getGroundTopAbove(
+      this.bot.entity.position,
+      (pos: Vec3) => this.bot.blockAt(pos),
+      maxDepth,
+    );
+  }
+
   getFallDamage(distance: number): number {
     return getFallDamage(distance);
   }
@@ -720,6 +768,16 @@ export class UtilsManager {
   // Production testable action: jumpViaOffset
   // ---------------------------------------------------------------------------
 
+  /**
+   * Jump towards a point and report how far the bot landed from it.
+   *
+   * The impulse is applied directly — no override of `applyImpulse`: a
+   * wrapper around it changes nothing (it forwards the call unchanged)
+   * and only leaves a closure behind that is never removed.
+   *
+   * @param offset - Offset from the current position to jump towards
+   * @returns The horizontal distance to the target after the jump
+   */
   async jumpViaOffset(offset?: Vec3): Promise<number> {
     const targetPos = offset
       ? this.bot.entity.position.plus(offset)
@@ -727,15 +785,6 @@ export class UtilsManager {
     const jumpSource = this.bot.entity.position.clone();
     const impulse = this.getJumpVelocity(jumpSource, targetPos);
     if (!impulse) return -1;
-    const original = this.applyImpulse.bind(this);
-    const startTick = this.bot.time.age;
-    this.applyImpulse = (imp: Vec3, mode = "add", force = false) => {
-      const r = original(imp, mode, force);
-      if (this.bot.time.age - startTick >= 40) {
-        this.applyImpulse = original;
-      }
-      return r;
-    };
     this.applyImpulse(impulse, "set", true);
     await this.bot.waitForTicks!(1);
     await this._waitUntilSettled();

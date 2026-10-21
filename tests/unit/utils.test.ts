@@ -4,6 +4,7 @@
  */
 
 import { AABB, UtilsManager } from "../../src/utils";
+import { Constants } from "../../src/constants";
 import { Vec3 } from "vec3";
 
 describe("AABB - Collision Detection", () => {
@@ -75,6 +76,32 @@ describe("AABB - Collision Detection", () => {
       expect(expanded.maxX).toBe(3.5);
       expect(expanded.maxY).toBe(3.5);
       expect(expanded.maxZ).toBe(3.5);
+    });
+  });
+
+  describe("distanceToPoint", () => {
+    test("returns 0 when the point is inside the box", () => {
+      const box = new AABB(0, 0, 0, 2, 2, 2);
+      expect(box.distanceToPoint(new Vec3(1, 1, 1))).toBe(0);
+    });
+
+    test("returns 0 when the point is on a face", () => {
+      const box = new AABB(0, 0, 0, 2, 2, 2);
+      expect(box.distanceToPoint(new Vec3(2, 1, 1))).toBe(0);
+    });
+
+    test("returns the perpendicular distance outside one axis", () => {
+      const box = new AABB(0, 0, 0, 1, 1, 1);
+      expect(box.distanceToPoint(new Vec3(3, 0.5, 0.5))).toBe(2);
+      expect(box.distanceToPoint(new Vec3(0.5, -2, 0.5))).toBe(2);
+      expect(box.distanceToPoint(new Vec3(0.5, 0.5, 4))).toBe(3);
+    });
+
+    test("returns the diagonal distance outside a corner", () => {
+      const box = new AABB(0, 0, 0, 1, 1, 1);
+      expect(box.distanceToPoint(new Vec3(2, 2, 2))).toBeCloseTo(
+        Math.sqrt(3),
+      );
     });
   });
 
@@ -419,9 +446,9 @@ describe("getBestPearlTrajectory", () => {
     expect(result).toHaveProperty("flightTime");
     expect(result).toHaveProperty("landingPoint");
     expect(result).toHaveProperty("landingDist");
-    // The landing point should be within 2.5 blocks of the target
-    // (tolerance radius 1.5 + end-trigger radius 1.0)
-    expect(result!.landingDist).toBeLessThanOrEqual(2.6);
+    // The landing must be at the target — the tolerance sampling may pick a
+    // neighbouring aim point, but a landing anywhere else is a miss.
+    expect(result!.landingDist).toBeLessThanOrEqual(1.0);
   });
 
   test("returns null for unreachable target (too far/too steep)", () => {
@@ -439,32 +466,36 @@ describe("getBestPearlTrajectory", () => {
     expect(result).toBeNull();
   });
 
-  test("tolerance sphere allows hitting near the target when direct path is blocked", () => {
-    // Create a mock where blockAt returns blocks near the direct target
-    // but clear for offset targets within tolerance
+  test("a landing short of the target is a miss, not a usable throw", () => {
+    // A wall at x=10..11 whose top face is the landing surface. Aiming at
+    // the far edge (x=10.5) is out of reach — the pearl hits the near face
+    // one block short, which is not where the bot wants to be.
     const source = new Vec3(0, 0, 0);
-    const target = new Vec3(10, 0, 0);
 
     const originalBlockAt = mockBot.blockAt;
-    const blockPos = new Vec3(10, 0, 0);
     const solidBlock = {
       boundingBox: "block",
       shapes: [[0, 0, 0, 1, 1, 1]],
-      position: blockPos,
+      position: new Vec3(10, 0, 0),
     };
+    mockBot.blockAt = (pos: any) =>
+      Math.floor(pos.x) === 10 && Math.floor(pos.y) === 0 && Math.floor(pos.z) === 0
+        ? solidBlock
+        : null;
 
-    mockBot.blockAt = (pos: any) => {
-      // Block positions near the direct target
-      const dist = Math.sqrt(
-        (pos.x - 10) ** 2 + (pos.y - 0) ** 2 + (pos.z - 0) ** 2,
-      );
-      if (dist < 2.0) return solidBlock;
-      return null;
-    };
-
-    const result = utilsManager.getBestPearlTrajectory(
+    const short = utilsManager.getBestPearlTrajectory(
       source,
-      target,
+      new Vec3(10.5, 0, 0),
+      1.5,
+      0.03,
+      0.99,
+      1.5,
+      1.0,
+    );
+    // Aiming at the wall's own x column lands on its top face.
+    const onFace = utilsManager.getBestPearlTrajectory(
+      source,
+      new Vec3(10.0, 0, 0),
       1.5,
       0.03,
       0.99,
@@ -474,19 +505,19 @@ describe("getBestPearlTrajectory", () => {
 
     mockBot.blockAt = originalBlockAt;
 
-    // Should find an alternative path via tolerance sampling
-    expect(result).not.toBeNull();
-    if (result) {
-      expect(result.landingDist).toBeLessThanOrEqual(2.6);
-    }
+    // The pearl stops at the near face (x=10), one block short of the aim
+    // point, so the throw is rejected.
+    expect(short).toBeNull();
+    expect(onFace).not.toBeNull();
+    expect(onFace!.landingDist).toBeLessThan(0.6);
   });
 
-  test("returns null when all paths (including tolerance samples) are blocked", () => {
+  test("null when every path lands off the target", () => {
     const source = new Vec3(0, 0, 0);
     const target = new Vec3(10, 0, 0);
 
-    // Mock bot.blockAt to return a solid block everywhere.
-    // The block has a huge shape so isPointInBlock always returns true.
+    // A wall spanning the whole world: every throw lands on it, far from the
+    // wanted target.
     const mockBlock = {
       boundingBox: "block",
       shapes: [[-1000, -1000, -1000, 1000, 1000, 1000]],
@@ -514,7 +545,9 @@ describe("getBestPearlTrajectory", () => {
     const source = new Vec3(0, 0, 0);
     const target = new Vec3(10, 0, 0);
 
-    // Mock water blocks along the path
+    // Mock water blocks along the path. Water is not solid, so it must not
+    // register as a landing; the pearl passes through and still lands on the
+    // target.
     const waterBlock = {
       boundingBox: "block",
       shapes: [[0, 0, 0, 1, 1, 1]],
@@ -522,23 +555,10 @@ describe("getBestPearlTrajectory", () => {
       name: "water",
     };
     const originalBlockAt = mockBot.blockAt;
-    mockBot.blockAt = (pos: any) => {
-      if (
-        pos.x >= 4 &&
-        pos.x <= 6 &&
-        pos.y >= -1 &&
-        pos.y <= 1 &&
-        pos.z >= -1 &&
-        pos.z <= 1
-      ) {
-        return waterBlock;
-      }
-      return null;
-    };
-
-    // Mock isPointInBlock to return false (no solid collision)
-    const originalIsPointInBlock = utilsManager.isPointInBlock;
-    utilsManager.isPointInBlock = () => false;
+    mockBot.blockAt = (pos: any) =>
+      pos.x >= 4 && pos.x <= 6 && pos.y >= -1 && pos.y <= 1 && pos.z >= -1 && pos.z <= 1
+        ? waterBlock
+        : null;
 
     const result = utilsManager.getBestPearlTrajectory(
       source,
@@ -551,9 +571,8 @@ describe("getBestPearlTrajectory", () => {
     );
 
     mockBot.blockAt = originalBlockAt;
-    utilsManager.isPointInBlock = originalIsPointInBlock;
 
-    // Should still find a path (water doesn't block, just changes drag)
+    // Water does not block: the throw still reaches the target.
     expect(result).not.toBeNull();
   });
 
@@ -578,10 +597,6 @@ describe("getBestPearlTrajectory", () => {
       return null;
     };
 
-    // Mock isPointInBlock to return false (no solid collision)
-    const originalIsPointInBlock = utilsManager.isPointInBlock;
-    utilsManager.isPointInBlock = () => false;
-
     // This should not throw an error - just verify the function handles water transitions
     expect(() => {
       utilsManager.getBestPearlTrajectory(
@@ -596,7 +611,6 @@ describe("getBestPearlTrajectory", () => {
     }).not.toThrow();
 
     mockBot.blockAt = originalBlockAt;
-    utilsManager.isPointInBlock = originalIsPointInBlock;
   });
 
   test("uses correct pearl hitbox size (0.25) for entity collision", () => {
@@ -628,14 +642,11 @@ describe("getBestPearlTrajectory", () => {
     mockBot.blockAt = originalBlockAt;
     mockBot.entities = originalEntities;
 
-    // Entity at (5,0,0) with width 0.6 should be hit by pearl (0.25 radius)
-    // The path goes directly through the entity, so collision should be detected
-    // However, the tolerance sampling might find an alternative path
-    // Let's check if the result shows the entity was considered
-    if (result) {
-      // If a path was found, verify it's not the direct path
-      expect(result.landingDist).toBeGreaterThan(0.5); // Should have some deviation
-    }
+    // Entity at (5,0,0) with width 0.6 should be hit by pearl (0.25 radius).
+    // The direct path goes through the entity, so the sampler must pick an
+    // offset aim point that misses it.
+    expect(result).not.toBeNull();
+    expect(result!.landingDist).toBeLessThan(0.6);
   });
 
   test("selects fastest clear arc (min flight time)", () => {
@@ -656,6 +667,154 @@ describe("getBestPearlTrajectory", () => {
     // New scoring: minimum flight time wins, not low-arc preference
     expect(result!.flightTime).toBeGreaterThan(0);
     expect(result!.landingDist).toBeLessThanOrEqual(1.5);
+  });
+});
+
+/**
+ * Enemy-above scenarios: the target stands on a platform above the bot. The
+ * pearl has to land on the platform's TOP surface — a throw that clips the
+ * platform's side face teleports the bot against the wall, not up onto it.
+ */
+describe("getBestPearlTrajectory - enemy-above platforms", () => {
+  const V = Constants.COMBAT.ENDER_PEARL.VELOCITY;
+  const G = Constants.COMBAT.ENDER_PEARL.GRAVITY;
+  const D = Constants.COMBAT.ENDER_PEARL.DRAG;
+
+  /** Full-cube block at an integer position. */
+  const cube = (x: number, y: number, z: number) => ({
+    position: new Vec3(x, y, z),
+    boundingBox: "block",
+    shapes: [[0, 0, 0, 1, 1, 1]],
+    name: "stone",
+  });
+
+  /**
+   * Scenario 1: a 1x1 pillar one block above the bot's ground level, with
+   * the target standing on top of it.
+   */
+  function pillarBlockAt(pos: Vec3) {
+    const x = Math.floor(pos.x);
+    const y = Math.floor(pos.y);
+    const z = Math.floor(pos.z);
+    // Ground plane (surface at y=1).
+    if (y === 0 && x >= -4 && x <= 4 && z >= -4 && z <= 4) {
+      return { ...cube(x, y, z), name: "grass" };
+    }
+    // 1x1 pillar, top surface at y=5.
+    if (x === 2 && z === 2 && y >= 1 && y <= 4) return cube(x, y, z);
+    return null;
+  }
+
+  const PILLAR_TOP = new Vec3(2.5, 5, 2.5);
+  const BOT_FEET = new Vec3(2.5, 1, 3.5);
+  const BOT_EYE = BOT_FEET.offset(0, 1.8, 0);
+
+  test("a throw aimed at the platform's side face is not a usable throw", () => {
+    // Aiming at the pillar's own body column (y=3, mid-pillar): the pearl
+    // hits the side face and stops short of the top.
+    const result = new UtilsManager({
+      version: "1.12.2",
+      registry: { blocksByName: {} },
+      entity: { effects: {} },
+      blockAt: pillarBlockAt,
+      entities: {},
+    } as any).getBestPearlTrajectory(
+      BOT_EYE,
+      new Vec3(2.5, 3, 2.5),
+      V,
+      G,
+      D,
+      1.5,
+      0.5,
+    );
+
+    // Whatever pitch is chosen, the pearl lands on a side face below the
+    // platform top, so the throw is rejected.
+    if (result) expect(result.landingPoint.y).toBeLessThan(5);
+  });
+
+  test("aiming at the platform top lands the pearl on the top surface", () => {
+    const utils = new UtilsManager({
+      version: "1.12.2",
+      registry: { blocksByName: {} },
+      entity: { effects: {} },
+      blockAt: pillarBlockAt,
+      entities: {},
+    } as any);
+
+    // From the bot's own position (adjacent to the pillar).
+    const direct = utils.getBestPearlTrajectory(
+      BOT_EYE,
+      PILLAR_TOP,
+      V,
+      G,
+      D,
+      1.5,
+      0.5,
+    );
+    expect(direct).not.toBeNull();
+    expect(direct!.landingPoint.y).toBeCloseTo(5, 5);
+    expect(direct!.landingDist).toBeLessThan(0.6);
+
+    // From a launch point one block further back.
+    const launchEye = new Vec3(2.5, 2.8, 4.5);
+    const fromLaunch = utils.getBestPearlTrajectory(
+      launchEye,
+      PILLAR_TOP,
+      V,
+      G,
+      D,
+      1.5,
+      0.5,
+    );
+    expect(fromLaunch).not.toBeNull();
+    expect(fromLaunch!.landingPoint.y).toBeCloseTo(5, 5);
+    expect(fromLaunch!.landingDist).toBeLessThan(0.6);
+  });
+
+  test("a 3x3 platform top is reachable from a surrounding launch point", () => {
+    // Scenario 2: a 3x3 platform at y=1..4, target standing in the middle.
+    const blockAt = (pos: Vec3) => {
+      const x = Math.floor(pos.x);
+      const y = Math.floor(pos.y);
+      const z = Math.floor(pos.z);
+      if (y === 0 && x >= -5 && x <= 5 && z >= -5 && z <= 5) {
+        return { ...cube(x, y, z), name: "grass" };
+      }
+      if (x >= 1 && x <= 3 && z >= 1 && z <= 3 && y >= 1 && y <= 4) {
+        return cube(x, y, z);
+      }
+      return null;
+    };
+    const utils = new UtilsManager({
+      version: "1.12.2",
+      registry: { blocksByName: {} },
+      entity: { effects: {} },
+      blockAt,
+      entities: {},
+    } as any);
+
+    // Bot at the platform's edge, launch point one block outside it.
+    const eye = new Vec3(2.5, 2.8, 0.5);
+    const top = new Vec3(2.5, 5, 2.5);
+
+    const direct = utils.getBestPearlTrajectory(eye, top, V, G, D, 1.5, 0.5);
+    expect(direct).not.toBeNull();
+    expect(direct!.landingPoint.y).toBeCloseTo(5, 5);
+    expect(direct!.landingDist).toBeLessThan(0.6);
+
+    const fromLaunch = utils.getBestPearlTrajectory(
+      new Vec3(2.5, 2.8, -1.5),
+      top,
+      V,
+      G,
+      D,
+      1.5,
+      0.5,
+    );
+    expect(fromLaunch).not.toBeNull();
+    expect(fromLaunch!.landingPoint.y).toBeCloseTo(5, 5);
+    expect(fromLaunch!.landingDist).toBeLessThan(0.6);
   });
 });
 

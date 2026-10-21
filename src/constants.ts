@@ -54,6 +54,13 @@ export const Constants = {
     PLAYER_OFFSET: 0.3,
     /** Vertical offset from position to eye level */
     EYE_HEIGHT: 1.62,
+    /**
+     * Height above the player's feet a thrown ender pearl spawns at.
+     * Vanilla spawns the projectile at the eye height minus 0.1
+     * (EntityProjectile's spawn offset), so the pearl leaves the hand at
+     * 1.52 and its velocity comes from the look vector alone.
+     */
+    PEARL_SPAWN_OFFSET: 1.52,
     /** Small offset used to prevent precision-related collision issues (1/16th of a block) */
     COLLISION_OFFSET: 0.0625,
   },
@@ -168,12 +175,42 @@ export const Constants = {
   // COMBAT SETTINGS
   // ============================================================================
   COMBAT: {
-    /** Maximum reach distance for melee attacks */
+    /**
+     * Maximum melee reach (eye to target hitbox) when the target is visible.
+     * This is the pre-1.20.5 default; from 1.20.5 on the server enforces a
+     * 3.0 entity interaction range and bots downgrade to that value.
+     */
     ATTACK_RANGE: 3.5,
+    /**
+     * Melee reach used when no line of sight to the target exists: blocks
+     * between attacker and target reduce effective reach (walls range).
+     */
+    WALLS_RANGE: 3.0,
     /** Preferred distance to maintain behind/around a target while following */
     FOLLOW_RANGE: 2.99,
-    /** Maximum distance to track/respond to entities */
-    VIEW_DISTANCE: 128,
+    /**
+     * Maximum distance to acquire/track entities — the bot's combat area.
+     *
+     * The server broadcasts entities over a much larger radius (ten
+     * chunks), so the bot used to ignore enemies that were already
+     * visible to it. The area is deliberately below the server's range:
+     * a target that drops out of the server's broadcast would be
+     * untrackable.
+     */
+    VIEW_DISTANCE: 96,
+    /**
+     * Ticks of damage immunity an entity has after being hit (vanilla hurt
+     * resistance). Attacks inside this window are absorbed, so the attack
+     * loop waits it out instead of spending swings.
+     */
+    HURT_IMMUNITY_TICKS: 10,
+    /**
+     * Attack interval on versions without an attack cooldown (<= 1.8):
+     * swings are limited by the hurt-immunity window.
+     */
+    LEGACY_HIT_INTERVAL: 10,
+    /** Ticks the shield stays lowered before it is raised again after an attack */
+    SHIELD_REBLOCK_TICKS: 3,
     /** Multiplier to prioritize actions when health is dangerously low */
     CRITICAL_HP_MULT: 2,
     /** Food level below which sprinting and health regeneration are disabled */
@@ -211,8 +248,21 @@ export const Constants = {
       VELOCITY: 1.5,
       GRAVITY: 0.03,
       DRAG: 0.99,
-      MAX_RANGE: 50,
+      /**
+       * How far a pearl can be thrown. The throw speed is 1.5 blocks per
+       * tick with a 0.99 drag, so the projectile carries over a hundred
+       * blocks in theory; the practical limit is where the flight ends
+       * against the ground or a wall, which is well past sixty blocks.
+       */
+      MAX_RANGE: 64,
       COOLDOWN: 10000,
+      /**
+       * Ticks between the throw being re-planned and the pearl actually
+       * leaving the hand. The aim is solved for the spot the bot will be
+       * at when the pearl is released, so a bot that is still moving
+       * throws at where it is going, not where it is.
+       */
+      RELEASE_DELAY_TICKS: 2,
     },
     /** Enemy-above pearl mitigation settings */
     ENEMY_ABOVE_PEARL: {
@@ -222,6 +272,42 @@ export const Constants = {
       LAUNCH_SEARCH_RADIUS: 5,
       /** Maximum horizontal distance from launch point to target (blocks) */
       MAX_LAUNCH_TO_TARGET_DIST: 40,
+      /**
+       * Maximum launch-point candidates to test per search (closest first).
+       * A full-radius search is up to 120 candidates, each with a full
+       * trajectory simulation — too costly to run on every client tick.
+       */
+      LAUNCH_SEARCH_MAX_CANDIDATES: 40,
+      /**
+       * How long a found launch point may be reused while the target stays
+       * put. Without this the search runs 2-3 times per tick while the bot
+       * pathfinds to the launch point, saturating the client tick loop.
+       */
+      LAUNCH_CACHE_MS: 10000,
+      /**
+       * How close (blocks, horizontal) the bot must be to the launch point
+       * before it throws from it. The trajectory is recomputed from the
+       * bot's real position, so a small deviation only shifts the landing
+       * slightly. Must stay below 1 block: a launch point one block away
+       * has to be walked to, otherwise the bot would keep re-picking the
+       * spot it is already standing on.
+       */
+      LAUNCH_ARRIVAL_RADIUS: 0.75,
+      /**
+       * How far the bot's feet may be from the launch point's ground
+       * level and still throw from it. The throw is solved for the launch
+       * point's eye level, so throwing from a different height tilts the
+       * arc — the pearl lands beside the platform instead of on it. The
+       * launch point's height is the ground surface, so the bot standing
+       * on it is within a few tenths of a block.
+       */
+      LAUNCH_HEIGHT_TOLERANCE: 0.6,
+      /**
+       * Height difference (blocks) beyond which a target cannot be hit with
+       * a melee swing, no matter how close it is in 3D: the platform between
+       * bot and target blocks the hit.
+       */
+      MELEE_HEIGHT_LIMIT: 1.5,
     },
     /** HP and Survival settings */
     SURVIVAL: {

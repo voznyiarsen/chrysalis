@@ -62,6 +62,28 @@ describe("RuntimeConfig", () => {
     });
   });
 
+  describe("has", () => {
+    test("returns false when no override is registered", () => {
+      expect(config.has("COMBAT", "ATTACK_RANGE")).toBe(false);
+    });
+
+    test("returns true for a registered override", () => {
+      config.set("COMBAT", "ATTACK_RANGE", 4.0);
+      expect(config.has("COMBAT", "ATTACK_RANGE")).toBe(true);
+    });
+
+    test("is category-specific", () => {
+      config.set("COMBAT", "ATTACK_RANGE", 4.0);
+      expect(config.has("MOVEMENT", "ATTACK_RANGE")).toBe(false);
+    });
+
+    test("returns false again after reset", () => {
+      config.set("COMBAT", "ATTACK_RANGE", 4.0);
+      config.reset("COMBAT", "ATTACK_RANGE");
+      expect(config.has("COMBAT", "ATTACK_RANGE")).toBe(false);
+    });
+  });
+
   describe("getAllOverrides", () => {
     test("returns empty object when no overrides", () => {
       expect(config.getAllOverrides()).toEqual({});

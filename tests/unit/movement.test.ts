@@ -7,7 +7,11 @@
  */
 
 import { Vec3 } from "vec3";
-import { getJumpVelocity, renderTopDownView } from "../../src/movement";
+import {
+  getGroundTopAbove,
+  getJumpVelocity,
+  renderTopDownView,
+} from "../../src/movement";
 import { Constants } from "../../src/constants";
 
 // ---------------------------------------------------------------------------
@@ -266,5 +270,53 @@ describe("renderTopDownView", () => {
     // No support found: level = floor(1) - 1 = 0.
     expect(lines[0]).toContain("y=0");
     expect(lines[5]).toContain("air ");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getGroundTopAbove
+// ---------------------------------------------------------------------------
+
+describe("getGroundTopAbove", () => {
+  /** World with a single full block at y=12. */
+  const fullBlockWorld = (pos: Vec3): any => {
+    if (Math.floor(pos.y) === 12) {
+      return {
+        name: "stone",
+        boundingBox: "block",
+        shapes: [[0, 0, 0, 1, 1, 1]],
+      };
+    }
+    return null;
+  };
+
+  /** World with a single slab (bottom half) at y=12. */
+  const slabWorld = (pos: Vec3): any => {
+    if (Math.floor(pos.y) === 12) {
+      return {
+        name: "slab",
+        boundingBox: "block",
+        shapes: [[0, 0, 0, 1, 0.5, 1]],
+      };
+    }
+    return null;
+  };
+
+  test("returns the top surface of a full block above", () => {
+    // Bot at y=8: the block at y=12 is the first solid block above.
+    expect(getGroundTopAbove(new Vec3(0, 8, 0), fullBlockWorld)).toBe(13);
+  });
+
+  test("returns the shape top of a slab above", () => {
+    expect(getGroundTopAbove(new Vec3(0, 8, 0), slabWorld)).toBe(12.5);
+  });
+
+  test("returns -64 when nothing is above", () => {
+    expect(getGroundTopAbove(new Vec3(0, 5, 0), () => null)).toBe(-64);
+  });
+
+  test("does not look past the scan depth", () => {
+    // The block at y=12 is out of reach for a 5-block scan from y=5.
+    expect(getGroundTopAbove(new Vec3(0, 5, 0), fullBlockWorld, 5)).toBe(-64);
   });
 });

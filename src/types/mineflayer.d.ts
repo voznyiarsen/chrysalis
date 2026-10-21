@@ -7,14 +7,13 @@
 import "mineflayer";
 import type { Bot } from "mineflayer";
 import type { Entity } from "prismarine-entity";
-import type { goals, Movements } from "mineflayer-pathfinder";
+import type { Movements } from "mineflayer-pathfinder";
 import type { Vec3 } from "vec3";
 import type { Logger } from "../logger";
 import type { AABB } from "../utils";
 import type { RuntimeConfig } from "../config";
 import type { ListenerManager } from "../listener-manager";
-import type { CombatDecision } from "../pvp";
-import type { PearlTrajectoryResult } from "../projectile";
+import type { PearlTrajectoryResult, PearlTopLanding } from "../projectile";
 
 // Forward-declare manager classes to avoid circular imports
 declare class PVPManager {
@@ -26,6 +25,12 @@ declare class PVPManager {
   attackRange: number;
   followRange: number;
   viewDistance: number;
+  /** Tick at which each entity's hurt immunity expires, keyed by entity id. */
+  hurtTimers: Map<number, number>;
+  /** Ticks remaining before the offhand shield is raised again after an attack. */
+  _shieldRearmTicks: number;
+  /** Ticks spent waiting for a shield-break axe swap to land in the hand. */
+  _shieldBreakWaitTicks: number;
   movements: Movements;
   goal: Vec3 | null;
   attack(target: Entity): Promise<void>;
@@ -33,6 +38,15 @@ declare class PVPManager {
   forceStop(): void;
   setGoal(pos: Vec3 | null): void;
   clearGoal(): void;
+  getEyePosition(): Vec3;
+  getTargetBox(target: Entity): AABB;
+  getTargetDistance(target: Entity): number;
+  getAimInfo(target: Entity): { point: Vec3; visible: boolean };
+  inAttackReach(target: Entity): boolean;
+  markHurt(entity: Entity): void;
+  getHurtTicks(entity: Entity): number;
+  targetHasShield(target: Entity): boolean;
+  targetIsBlocking(target: Entity): boolean;
 }
 
 declare class InventoryManager {
@@ -40,11 +54,22 @@ declare class InventoryManager {
   getItemCount(itemName: string): number;
   hasItem(itemName: string, metadata?: number): boolean;
   hasFood(): boolean;
+  isItemUseActive(): boolean;
+  isMainHandUseActive(): boolean;
+  isPearlThrowActive(): boolean;
+  isShieldBreakActive(): boolean;
+  equipShieldBreaker(): Promise<void>;
+  releaseShieldBreaker(): void;
   clearInventory(): Promise<void>;
   setGamemode(mode: number, timeout?: number): Promise<void>;
   recordInventory(slot: number | string): Promise<void>;
   restoreInventory(slot: number | string): Promise<void>;
   tossAllItems(): Promise<void>;
+  tossItem(
+    itemType: number,
+    metadata: number | null,
+    count: number,
+  ): Promise<void>;
   equipArmor(): Promise<void>;
   equipGapple(): Promise<void>;
   equipFood(): Promise<void>;
@@ -55,6 +80,7 @@ declare class InventoryManager {
     offset: number,
     itemType?: string,
     sourcePos?: Vec3,
+    resolveThrow?: () => { targetPos: Vec3; offset: number } | null,
   ): Promise<void>;
   equipWeapon(): Promise<void>;
   /**
@@ -78,12 +104,7 @@ declare class CombatManager {
   lastHealth: number;
   lastDist: number | null;
   mode: number;
-  decisions: CombatDecision[];
   setupDecisions(): void;
-  getBestPearlPitch(
-    source: Vec3,
-    target: Vec3,
-  ): { pitch: number; arc: "low" | "high" } | null;
   getBestPearlOffset(
     source: Vec3,
     target: Vec3,
@@ -92,9 +113,11 @@ declare class CombatManager {
   executeDecisions(): Promise<void>;
   setMode(mode?: number): void;
   getTargetFilter(): (e: any) => boolean;
+  selectTarget(filter: (e: any) => boolean): Entity | null;
   addAlly(username: string): void;
   removeAlly(username: string): void;
   getLastDamage(): void;
+  sampleHealth(): void;
   getHealthStatus(): {
     totalHealth: number;
     healthPoints: number;
@@ -107,10 +130,8 @@ declare class CombatManager {
     needsTotem?: boolean;
   };
   doDecide(): Promise<void>;
-  decideIfToss(): Promise<void>;
   doAvoid(): void;
   doEdgeProtection(): void;
-  nudgeToCenter(target: Vec3): Promise<void>;
   updateTarget(): void;
   throwPearlAt(
     targetPos: Vec3,
@@ -124,15 +145,26 @@ declare class CombatManager {
   _enemyAboveLaunchPoint: Vec3 | null;
   /** Key for the pearl mitigation pathfinder goal. */
   _enemyAboveGoalKey: string | null;
-  getPearlMitigation(): {
+  getPearlMitigation(options?: { ignoreCooldown?: boolean }): {
     canMitigate: boolean;
     launchPos?: Vec3;
     targetPos?: Vec3;
     flightTime?: number;
     offset?: number;
+    isFallMitigation?: boolean;
+    isEnemyAbove?: boolean;
+    ticksToImpact?: number;
   };
+  hasAnyArmor(): boolean;
+  shouldEatBeforePearl(
+    flightTime: number | undefined,
+    healthPoints: number,
+    hasArmor: boolean,
+    hasGapple: boolean,
+  ): boolean;
   toggleFeature(name: string): void;
   isFeatureEnabled(name: string): boolean;
+  isAtLaunchPoint(launchPos: Vec3): boolean;
   getFeatureStatus(): string;
 }
 
@@ -214,6 +246,13 @@ declare class UtilsManager {
     toleranceRadius?: number,
     sampleStep?: number,
   ): PearlTrajectoryResult | null;
+  getPearlTopLanding(
+    source: Vec3,
+    aim: Vec3,
+    velocity?: number,
+    gravity?: number,
+    drag?: number,
+  ): PearlTopLanding | null;
   isPointInBlock(
     point: Vec3,
     block: { position: Vec3; shapes: number[][] },
@@ -248,6 +287,7 @@ declare class UtilsManager {
   ): Vec3;
   getGroundBelow(maxDepth?: number): number;
   getGroundAbove(maxDepth?: number): number;
+  getGroundTopAbove(maxDepth?: number): number;
   getFallDamage(fallDistance: number): number;
   getFallTicks(posY: number, velocityY: number, groundY: number, maxTicks?: number): number;
   clearSolidCache(): void;

@@ -5,10 +5,13 @@
 
 import mineflayer, { Bot } from "mineflayer";
 import { pathfinder } from "mineflayer-pathfinder";
-import { PVPManager } from "./pvp";
+import {
+  PVPManager,
+  attachCombat,
+  getDefaultAttackRange,
+} from "./pvp";
 import { logger, Logger } from "./logger";
 import { attachInventory } from "./inventory";
-import { attachCombat } from "./pvp";
 import { attachCommands } from "./commands";
 import { attachUtils } from "./utils";
 import { RuntimeConfig } from "./config";
@@ -194,7 +197,11 @@ export class BotRegistry {
 
       // Apply PVP movement settings using runtime config
       bot.runtimeConfig = new RuntimeConfig();
-      bot.pvp.attackRange = bot.runtimeConfig.get("COMBAT", "ATTACK_RANGE");
+      // Attack range is version-aware (server-enforced 3.0 from 1.20.5 on)
+      // unless the user explicitly overrode it via `config COMBAT.ATTACK_RANGE`.
+      bot.pvp.attackRange = bot.runtimeConfig.has("COMBAT", "ATTACK_RANGE")
+        ? bot.runtimeConfig.get("COMBAT", "ATTACK_RANGE")
+        : getDefaultAttackRange(bot.version);
       bot.pvp.followRange = bot.runtimeConfig.get("COMBAT", "FOLLOW_RANGE");
       bot.pvp.viewDistance = bot.runtimeConfig.get("COMBAT", "VIEW_DISTANCE");
 

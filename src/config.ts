@@ -35,6 +35,19 @@ export class RuntimeConfig {
   }
 
   /**
+   * Whether an explicit runtime override exists for a config value.
+   * Used to distinguish "user set this" from "defaulted from Constants",
+   * e.g. to preserve version-aware defaults (attack range) unless the user
+   * overrode them.
+   * @param category - Category name (e.g., "COMBAT", "MOVEMENT")
+   * @param key - Key within the category (e.g., "ATTACK_RANGE")
+   * @returns True when an override is registered
+   */
+  has(category: string, key: string): boolean {
+    return this._overrides.has(`${category}.${key}`);
+  }
+
+  /**
    * Remove a runtime override, reverting to the default constant.
    * @param category - Category name
    * @param key - Key within the category

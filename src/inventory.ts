@@ -67,9 +67,64 @@ class InventoryManager {
   /** True while a pearl-throw flow holds an item and is aiming/activating. */
   private _pearlThrowActive = false;
 
+  /** True while the bot holds an axe to break a target's shield. */
+  private _shieldBreakActive = false;
+
   /** Whether an eat/drink flow is currently active (e.g. gapple heal). */
   isItemUseActive(): boolean {
     return this._itemUseActive;
+  }
+
+  /**
+   * Whether a main-hand use flow is in progress (pearl throw). The attack
+   * loop gates on this so a swing cannot interrupt our own item use;
+   * offhand eats (`isItemUseActive`) do not block attacks.
+   */
+  isMainHandUseActive(): boolean {
+    return this._pearlThrowActive;
+  }
+
+  /** Whether a pearl throw is in flight. */
+  isPearlThrowActive(): boolean {
+    return this._pearlThrowActive;
+  }
+
+  /** Whether the bot is currently holding an axe for shield breaking. */
+  isShieldBreakActive(): boolean {
+    return this._shieldBreakActive;
+  }
+
+  /**
+   * Swap to the best axe in inventory to break a blocking shield (axe hits
+   * disable shields). While active, `equipWeapon` is suppressed so the axe
+   * stays in hand until {@link releaseShieldBreaker} is called.
+   */
+  async equipShieldBreaker(): Promise<void> {
+    const axes = this.bot.inventory
+      .items()
+      .filter((item: any) => item.name.endsWith("_axe"));
+    if (axes.length === 0) {
+      this._shieldBreakActive = false;
+      return;
+    }
+    this._shieldBreakActive = true;
+    const materialStats = Constants.MATERIALS.WEAPONS;
+    const best = axes.reduce((a: any, b: any) =>
+      this._computeWeaponScore(a, materialStats) >=
+      this._computeWeaponScore(b, materialStats)
+        ? a
+        : b,
+    );
+    if (this.bot.heldItem?.name === best.name) return;
+    this.logger.inventory(
+      `Shield: equipping ${best.displayName} to break target's shield...`,
+    );
+    await this._equipItem(best.name, "hand");
+  }
+
+  /** Stop holding the shield-break axe; the weapon tree re-arms next tick. */
+  releaseShieldBreaker(): void {
+    this._shieldBreakActive = false;
   }
 
   /**
@@ -239,6 +294,43 @@ class InventoryManager {
   }
 
   /**
+   * Equip the stack chosen by `pick` to a slot, resolving the stack at
+   * the moment the click happens.
+   *
+   * The slot an item sits in can change while the operation waits its
+   * turn: a queued equip may have moved or swapped it (an armor pass
+   * swapping the helmet into the source slot of the chestplate, for
+   * example). A click on a stale slot is rejected by the server
+   * ("Server rejected transaction"), and the rejected click desyncs the
+   * window — every later click fails too.
+   *
+   * The picker runs again at that moment, so the best stack is still the
+   * one that gets equipped (the inventory may have gained a better one
+   * in the meantime).
+   *
+   * @param pick - Chooses the stack to equip among the carried items
+   * @param targetSlot - Destination slot name
+   * @private
+   */
+  private async _equipPicked(
+    pick: (items: any[]) => any | undefined,
+    targetSlot: string,
+  ): Promise<void> {
+    const destSlot = this.bot.getEquipmentDestSlot(targetSlot);
+    const current = pick(this._carriedItems());
+    if (!current) {
+      this.logger.debug(
+        `Equip: no stack left to equip to ${targetSlot}`,
+        "Inventory",
+      );
+      return;
+    }
+    // Already in the destination slot: nothing to click.
+    if (current.slot === destSlot) return;
+    await this.bot.equip!(current, targetSlot as any);
+  }
+
+  /**
    * Equip an item to a specific slot with safety checks.
    * @param itemName - Item name to equip
    * @param targetSlot - Destination slot name
@@ -272,11 +364,14 @@ class InventoryManager {
       this.logger.inventory(
         `Equipping ${item.displayName} to ${targetSlot}...`,
       );
-      await this._withWindow(async () => {
-        await this.bot.equip!(item, targetSlot as any);
+      return await this._withWindow(async () => {
+        await this._equipPicked(
+          (items) => items.find((i: any) => i.name === itemName),
+          targetSlot,
+        );
         await this.bot.waitForTicks!(Constants.TIMING.EQUIP_TICKS);
+        return true;
       });
-      return true;
     } catch (error: unknown) {
       const err = error as Error;
       if (!err.message.includes("not found")) {
@@ -607,6 +702,27 @@ class InventoryManager {
   }
 
   /**
+   * Toss a single stack.
+   *
+   * Runs inside the window lock: a raw `bot.toss` issues its own click
+   * chain, and two overlapping chains make the server reject the
+   * transaction and desync the window (see {@link _withWindow}).
+   *
+   * @param itemType - Item type id
+   * @param metadata - Item metadata (null for the default variant)
+   * @param count - How many to toss
+   */
+  async tossItem(
+    itemType: number,
+    metadata: number | null,
+    count: number,
+  ): Promise<void> {
+    await this._withWindow(async () => {
+      await this.bot.toss!(itemType, metadata, count);
+    });
+  }
+
+  /**
    * Equip the best armor items for each slot based on material and
    * enchantment scores.
    *
@@ -709,10 +825,46 @@ class InventoryManager {
         this.logger.inventory(
           `Equipping ${bestItem.displayName} to ${slot} (score: ${bestScore})...`,
         );
-        await this.bot.equip!(bestItem, slot as any);
+        // Re-pick inside the window operation: an earlier equip in this
+        // pass can have swapped the stack into another slot, and the
+        // inventory may hold a better piece by now.
+        await this._equipPicked(
+          (carried) =>
+            this._bestArmor(
+              carried,
+              (slotMap as Record<string, string>)[slot],
+              materialStats,
+            ),
+          slot,
+        );
         await this.bot.waitForTicks!(Constants.TIMING.EQUIP_TICKS);
       }
     }
+  }
+
+  /**
+   * Best armor piece for a slot among the given items.
+   * @param items - Candidate items
+   * @param slotName - Armor slot name (helmet/chestplate/leggings/boots)
+   * @param materialStats - Armor stats from constants
+   * @returns The highest-scoring piece, or undefined when there is none
+   * @private
+   */
+  private _bestArmor(
+    items: any[],
+    slotName: string,
+    materialStats: any,
+  ): any | undefined {
+    const candidates = items.filter((item: any) =>
+      item.name?.endsWith(`_${slotName}`),
+    );
+    if (candidates.length === 0) return undefined;
+    return candidates.reduce((best: any, item: any) =>
+      this._computeArmorScore(item, materialStats, slotName) >
+      this._computeArmorScore(best, materialStats, slotName)
+        ? item
+        : best,
+    );
   }
 
   /**
@@ -794,7 +946,13 @@ class InventoryManager {
         `Equipping ${bestGapple.displayName} to off-hand...`,
       );
       await this._withWindow(async () => {
-        await this.bot.equip!(bestGapple, "off-hand" as any);
+        await this._equipPicked(
+          (carried) =>
+            carried
+              .filter((i: any) => i.name === bestGapple.name)
+              .sort((a: any, b: any) => (b.metadata || 0) - (a.metadata || 0))[0],
+          "off-hand",
+        );
       });
       await this.bot.waitForTicks!(Constants.TIMING.EQUIP_TICKS);
     }
@@ -991,16 +1149,27 @@ class InventoryManager {
    * Equip and throw a projectile (e.g. ender pearl) using offset-based aiming.
    * Uses a vertical offset relative to the source position for intuitive aiming.
    *
+   * The offset is the rise of the aim point above the thrower's eye: the
+   * look (and with it the launch angle) is computed from the eye, so the
+   * aim point is built from the eye position, while the trajectory itself
+   * was solved from the pearl's spawn point (1.52 above the feet). Both
+   * give the same launch angle.
+   *
    * @param targetPos - Target position to throw at
    * @param offset - Vertical offset in blocks (positive = aim above target, negative = aim below)
    * @param itemType - Item name for the projectile (default: "ender_pearl")
-   * @param sourcePos - Optional source position (defaults to bot eye level)
+   * @param sourcePos - Optional eye position (defaults to the bot's current eye)
+   * @param resolveThrow - Optional re-plan hook, called right before the
+   *   release: the bot keeps moving while the projectile is equipped, and
+   *   the offset was measured against the position the throw was solved
+   *   from. Return the aim point and offset to use, or null to abort.
    */
   async equipPearl(
     targetPos: Vec3,
     offset: number,
     itemType: string = "ender_pearl",
     sourcePos?: Vec3,
+    resolveThrow?: () => { targetPos: Vec3; offset: number } | null,
   ): Promise<void> {
     // Prevent overlapping pearl-throw flows (e.g. fire-and-forget dispatch
     // every tick while falling). Only one throw can be in flight at a time.
@@ -1046,23 +1215,56 @@ class InventoryManager {
       await this.bot.pathfinder.stop();
       await this.bot.waitForTicks!(1);
 
-      // The offset is relative to the source Y level (where the projectile
-      // is launched from). Use sourcePos if provided, otherwise fall back
-      // to the bot's eye position.
+      // Re-plan the throw for the position the bot is at now: it kept
+      // moving while the projectile was equipped, and the offset was
+      // measured against the position the throw was solved from.
+      let aimTarget = targetPos;
+      let aimOffset = offset;
+      if (resolveThrow) {
+        const resolved = resolveThrow();
+        if (!resolved) {
+          throw new Error(
+            `Cancelled ${itemType} throw: no throw from the current position`,
+          );
+        }
+        aimTarget = resolved.targetPos;
+        aimOffset = resolved.offset;
+      }
+
+      // The look — and with it the launch angle — is computed from the
+      // eye, so the aim point is built from the eye position (the
+      // thrower's current one unless the caller pinned it).
+      const eyeHeight =
+        (this.bot.entity as { eyeHeight?: number }).eyeHeight ??
+        Constants.PHYSICS.EYE_HEIGHT;
       const srcY = sourcePos
         ? sourcePos.y
-        : this.bot.entity!.position.y + this.bot.entity!.height!;
-      const aimPoint = targetPos.clone();
-      aimPoint.y = srcY + offset;
+        : this.bot.entity!.position.y + eyeHeight;
+      const aimPoint = aimTarget.clone();
+      aimPoint.y = srcY + aimOffset;
 
       // Verify the server agrees the item is held before activating: rapid
       // give/equip/clear sequences can leave the client's hand ahead of the
       // server's, and activating an (server-side) empty hand silently throws
       // nothing. Poll briefly for the held item to settle.
+      //
+      // The hand can also change under us: a weapon swap queued before this
+      // throw (the window chain was busy) lands while the projectile is being
+      // equipped. The equip itself is a no-op when the hand already holds the
+      // projectile, so nothing re-asserts it and the throw would go out with
+      // the sword in hand. Re-equip once and wait again instead of aborting.
       const countBefore = this.getItemCount(itemType);
-      for (let i = 0; i < 10; i++) {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        for (let i = 0; i < 10; i++) {
+          if (this.bot.heldItem?.name === itemType) break;
+          await this.bot.waitForTicks!(1);
+        }
         if (this.bot.heldItem?.name === itemType) break;
-        await this.bot.waitForTicks!(1);
+        this.logger.debug(
+          `Pearl: ${itemType} no longer in hand (holding ${this.bot.heldItem?.name ?? "nothing"}), re-equipping`,
+          "Inventory",
+        );
+        await this._equipItem(itemType, "hand");
       }
       if (this.bot.heldItem?.name !== itemType) {
         throw new Error(
@@ -1102,7 +1304,7 @@ class InventoryManager {
       }
       if (consumed) {
         this.logger.inventory(
-          `Tossed ${itemType} with offset ${offset.toFixed(2)} successfully`,
+          `Tossed ${itemType} with offset ${aimOffset.toFixed(2)} successfully`,
         );
       } else {
         // Left the hand without a count change (client/server inventory
@@ -1236,6 +1438,8 @@ class InventoryManager {
       );
       return;
     }
+    // Keep the shield-break axe in hand until the target stops blocking.
+    if (this._shieldBreakActive) return;
 
     const materialStats = Constants.MATERIALS.WEAPONS;
     const weapons = this.bot.inventory
@@ -1275,7 +1479,26 @@ class InventoryManager {
         `Equipping ${weapon.displayName} (#${weapon.type}) (DPS: ${bestScore.toFixed(2)}) to hand...`,
       );
       await this._withWindow(async () => {
-        await this.bot.equip!(weapon, "hand" as any);
+        await this._equipPicked(
+          (carried) =>
+            carried
+              .filter(
+                (item: any) =>
+                  item.name.endsWith("_sword") ||
+                  item.name.endsWith("_axe") ||
+                  item.name.endsWith("_pickaxe") ||
+                  item.name.endsWith("_shovel") ||
+                  item.name.endsWith("_hoe"),
+              )
+              .reduce((best: any | null, item: any) => {
+                const score = this._computeWeaponScore(item, materialStats);
+                return !best ||
+                  score > this._computeWeaponScore(best, materialStats)
+                  ? item
+                  : best;
+              }, null),
+          "hand",
+        );
         await this.bot.waitForTicks!(Constants.TIMING.EQUIP_TICKS);
       });
     }

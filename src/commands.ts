@@ -48,7 +48,7 @@ export class CommandManager {
       },
       tg: {
         description:
-          "Toggle individual combat features on/off (armor, weapon, gapple, totem, pearl, strafe, enemyAbovePearl, buff, food). Run without args to show status.",
+          "Toggle individual combat features on/off (armor, weapon, gapple, totem, pearl, strafe, enemyAbovePearl, buff, food, shieldBreak, autoBlock). Run without args to show status.",
         subcommands: {
           armor: {
             description: "Toggle armor equip",
@@ -85,6 +85,14 @@ export class CommandManager {
           food: {
             description: "Toggle food eating",
             handler: () => this.toggleFeature("food"),
+          },
+          shieldBreak: {
+            description: "Toggle swapping to an axe against a blocking shield",
+            handler: () => this.toggleFeature("shieldBreak"),
+          },
+          autoBlock: {
+            description: "Toggle shield lowering/re-raising around attacks",
+            handler: () => this.toggleFeature("autoBlock"),
           },
           "<feature>": {
             description: "Feature name to toggle",
@@ -546,7 +554,10 @@ export class CommandManager {
     }
 
     try {
-      await this.bot.toss(item.id, null, count);
+      // Through the inventory manager: a raw bot.toss issues its own click
+      // chain, and two overlapping chains make the server reject the
+      // transaction and desync the bot's window.
+      await this.bot.inventoryManager.tossItem(item.id, null, count);
       this.logger.inventory(`Tossed ${item.displayName} x${count}`);
     } catch (error: unknown) {
       const err = error instanceof Error ? error : new Error(String(error));
@@ -704,7 +715,8 @@ export class CommandManager {
 
   /**
    * Toggle an individual combat feature on/off.
-   * @param name - Feature name (armor, weapon, gapple, totem, pearl, strafe, enemyAbovePearl, buff, food)
+   * @param name - Feature name (armor, weapon, gapple, totem, pearl, strafe,
+   *   enemyAbovePearl, buff, food, shieldBreak, autoBlock)
    */
   toggleFeature(name: string): void {
     const cm = this.bot.combatManager;

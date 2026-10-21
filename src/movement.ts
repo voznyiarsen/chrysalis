@@ -609,6 +609,37 @@ export function getGroundAbove(
 // ---------------------------------------------------------------------------
 
 /**
+ * Find the Y coordinate of the top surface of the first solid block above a
+ * position.
+ *
+ * Same scan as getGroundAbove, but reports the surface a pearl can land on
+ * instead of the block's underside: a full block's top is one level above its
+ * block position, a slab's is at the top of its shape. Used for the
+ * block-above fall mitigation: the pearl has to come down onto that surface,
+ * not hit the block from below.
+ * The scan never goes above the world height (256); finding nothing
+ * returns -64.
+ */
+export function getGroundTopAbove(
+  pos: Vec3,
+  blockAt: (pos: Vec3) => any,
+  maxDepth = 5,
+): number {
+  const bottom = getGroundAbove(pos, blockAt, maxDepth);
+  if (bottom <= -64) return -64;
+  const block = blockAt(new Vec3(pos.x, bottom, pos.z));
+  if (block && block.shapes) {
+    let top = -64;
+    for (const shape of block.shapes) {
+      const shapeTop = bottom + shape[Constants.SHAPE.MAX_Y];
+      if (shapeTop > top) top = shapeTop;
+    }
+    if (top > bottom) return top;
+  }
+  return bottom + 1;
+}
+
+/**
  * Render a top-down map of the block level the bot is standing on.
  *
  * The grid is centered on the bot's current block column and shows the

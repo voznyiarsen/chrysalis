@@ -6,6 +6,95 @@ import { Constants } from "./constants";
  * Extracted from UtilsManager in src/utils.ts.
  */
 
+const EPS = 1.0e-7;
+
+/**
+ * How close (blocks) a simulated pearl flight must come to the wanted target
+ * to be usable. A pearl that lands or passes further out teleports the bot
+ * onto the side of the platform rather than the top, so the throw is a miss.
+ */
+const PEARL_LANDING_TOLERANCE = 0.6;
+
+/**
+ * How close (blocks, horizontal) a pearl must land to the wanted block for the
+ * landing to count as "on that block". Half a block is the block's own radius,
+ * so anything further lands on a neighbour (or on the ground next to it).
+ */
+const PEARL_TOP_LANDING_TOLERANCE = 0.55;
+
+/**
+ * How close (blocks, vertical) the landed surface must be to the wanted
+ * surface height. Blocks are unit cubes, so a top-face hit lands exactly on
+ * the surface; the slack absorbs float noise only.
+ */
+const PEARL_TOP_SURFACE_EPS = 0.1;
+
+/**
+ * Radius (blocks) around a landing point in which a living entity absorbs
+ * the pearl instead of letting it land.
+ */
+const PEARL_ENTITY_BLOCK_RADIUS = 0.25;
+
+/**
+ * Standard deviation of the server's launch-direction randomization, per
+ * axis of the unit direction.
+ *
+ * The vanilla throwable adds a Gaussian of this sigma to the normalized
+ * look direction before scaling it by the throw power, so a pearl never
+ * leaves the hand exactly along the aim. At 30 blocks the landing
+ * therefore scatters over roughly 0.2 blocks, which is what makes a
+ * one-block-wide platform a lottery.
+ */
+const LAUNCH_DIRECTION_SIGMA = 0.0075;
+
+/**
+ * How long a pearl flight is simulated before it counts as "gone". At the
+ * throw speed the pearl covers a little over a block per tick, so this is
+ * well past the range it can reach.
+ */
+const MAX_FLIGHT_TICKS = 100;
+
+/**
+ * How far the projectile spawns behind the thrower's eye, along the look
+ * direction. The vanilla throwable offsets the spawn point by 0.16 blocks
+ * backwards so the projectile does not start inside the thrower.
+ */
+const LAUNCH_SPAWN_BACK_OFFSET = 0.16;
+
+/**
+ * The scatter of a landing caused by the launch-direction randomization.
+ *
+ * @param distance - The flight distance in blocks
+ * @returns The 1-sigma scatter of the landing in blocks
+ */
+export function launchScatter(distance: number): number {
+  // The direction is perturbed per axis, so the landing scatters over a
+  // disc of this radius.
+  return distance * LAUNCH_DIRECTION_SIGMA * Math.SQRT2;
+}
+
+/** Pitch step (degrees) used when refining a top-surface landing. */
+const PEARL_TOP_PITCH_STEP = 0.1;
+
+/**
+ * How far from the aim the landing may be for the pitch refinement to
+ * still be worth trying. The refinement moves the landing by a fraction
+ * of a block, so a landing that is further away cannot be fixed by it.
+ */
+const REFINEMENT_REACH = 1.5;
+
+/** How many refinement steps (each +/- one pitch step) are tried. */
+const PEARL_TOP_PITCH_STEPS = 3;
+
+/**
+ * Which face of a block a pearl hit.
+ * - "top": the pearl came down onto the block's upper surface
+ * - "bottom": the pearl hit the block's underside
+ * - "side": the pearl hit a vertical face
+ * - "none": the pearl never hit a block (flew out of range)
+ */
+export type PearlHitFace = "top" | "bottom" | "side" | "none";
+
 export interface PearlTrajectoryResult {
   /** The pitch angle (degrees) to use */
   pitch: number;
@@ -16,6 +105,26 @@ export interface PearlTrajectoryResult {
   /** The actual landing point of the projectile */
   landingPoint: Vec3;
   /** Distance from the landing point to the desired target */
+  landingDist: number;
+}
+
+/**
+ * A pearl throw that lands on the upper surface of a block.
+ */
+export interface PearlTopLanding {
+  /** Pitch (degrees) that produces the landing. */
+  pitch: number;
+  /**
+   * Vertical aim offset: the throw aims at (aim.x, eye.y + offset, aim.z).
+   * The look is computed from the eye, so the offset is measured from there
+   * even though the flight itself starts at the spawn point below it.
+   */
+  offset: number;
+  /** Flight time in ticks. */
+  flightTime: number;
+  /** Where the pearl actually lands. */
+  landingPoint: Vec3;
+  /** Horizontal distance from the landing point to the aim point. */
   landingDist: number;
 }
 
@@ -47,46 +156,107 @@ function isPointInBlock(
 }
 
 /**
- * Simulate a projectile trajectory from source with given pitch and return
- * the total flight time (ticks) and landing position (first tick where
- * the projectile is within 1.0 block of the target).
- *
- * This does NOT check for obstacles; it purely computes the parabolic path.
+ * Result of simulating a pearl flight: where it landed and how.
+ */
+export interface PearlLandingInfo {
+  /** Flight time in ticks. */
+  flightTime: number;
+  /** Where the pearl entered the block it hit. */
+  landingPoint: Vec3;
+  /** Which face of the block was hit. */
+  face: PearlHitFace;
+  /** Y of the hit surface (the block's top edge for a "top" hit). */
+  surfaceY: number;
+  /** True when the pearl was falling at the moment it hit. */
+  descending: boolean;
+}
+
+/**
+ * Simulate a projectile flight and report where it lands, without treating a
+ * landing as success. A landing is the first solid block entered; with no
+ * block in the way, the flight is scored by how close it passes the target
+ * (that is where the pearl drops onto whatever surface it passes over).
  * @param source - Launch position
- * @param target - Target position (end-of-flight marker)
+ * @param target - Aim point (only used for the yaw direction)
  * @param v - Initial speed
  * @param g - Gravity per tick
  * @param p - Pitch in degrees
  * @param drag - Per-tick velocity multiplier
- * @returns { flightTime, landingPoint } or null if flight never reaches target vicinity
+ * @param blockAt - Block lookup
+ * @returns { flightTime, landingPoint, face, ... } or null if the flight is
+ *   blocked outright (the launch point is inside a block, so the pearl never
+ *   leaves).
  */
-function computeLandingInfo(
+function simulateLanding(
   source: Vec3,
   target: Vec3,
   v: number,
   g: number,
   p: number,
   drag: number,
-): { flightTime: number; landingPoint: Vec3 } | null {
+  blockAt: (pos: Vec3) => any,
+): PearlLandingInfo | null {
+  // Starting inside a solid block: the pearl collides on the first tick and
+  // teleports back where it came from. Treat it as blocked.
+  const startBlock = blockAt(source);
+  if (blocksPearl(startBlock)) return null;
+
   const yaw = Math.atan2(target.x - source.x, target.z - source.z);
-  let currPos = source.clone();
-  let currVel = new Vec3(
-    v * Math.cos((p * Math.PI) / 180) * Math.sin(yaw),
-    v * Math.sin((p * Math.PI) / 180),
-    v * Math.cos((p * Math.PI) / 180) * Math.cos(yaw),
+  const pitch = (p * Math.PI) / 180;
+  // The vanilla throwable spawns the projectile behind the thrower, along
+  // the look direction, so the flight does not start inside the player.
+  // The look direction is what the yaw and the pitch describe.
+  const look = new Vec3(
+    Math.cos(pitch) * Math.sin(yaw),
+    Math.sin(pitch),
+    Math.cos(pitch) * Math.cos(yaw),
   );
-  const maxTicks = 200;
+  const spawn = source.minus(look.scaled(LAUNCH_SPAWN_BACK_OFFSET));
+
+  let currPos = spawn.clone();
+  let currVel = look.scaled(v);
+  let closest = Infinity;
+  let closestPos = spawn.clone();
+  // The pearl covers at most a little over a block per tick, so a flight
+  // that has not landed after this many ticks is out of range: simulating
+  // it further only costs time.
+  const maxTicks = MAX_FLIGHT_TICKS;
   for (let i = 0; i < maxTicks; i++) {
-    const nextPos = currPos.plus(currVel);
-    currPos = nextPos;
+    const entry = pearlEntryPoint(currPos, currVel, blockAt);
+    if (entry) {
+      const box = blockAABB(entry.block);
+      const point = entry.point;
+      let face: PearlHitFace = "side";
+      if (Math.abs(point.y - box.max.y) < 1e-6) face = "top";
+      else if (Math.abs(point.y - box.min.y) < 1e-6) face = "bottom";
+      return {
+        flightTime: i + 1,
+        landingPoint: point,
+        face,
+        surfaceY: box.max.y,
+        descending: currVel.y < 0,
+      };
+    }
+    currPos = currPos.plus(currVel);
+    const dist = currPos.distanceTo(target);
+    if (dist < closest) {
+      closest = dist;
+      closestPos = currPos.clone();
+    }
     currVel.y = currVel.y * drag - g;
     currVel.x *= drag;
     currVel.z *= drag;
-    if (currPos.distanceTo(target) < 1.0)
-      return { flightTime: i + 1, landingPoint: currPos.clone() };
     if (currPos.y < -64) break;
   }
-  return null;
+  // No block hit: the pearl falls past the target, so the closest approach
+  // is the best estimate of where it would land.
+  return {
+    flightTime: maxTicks,
+    landingPoint: closestPos,
+    face: "none",
+    surfaceY: closestPos.y,
+    descending: currVel.y < 0,
+  };
 }
 
 /**
@@ -131,35 +301,86 @@ export function getProjectilePitch(
     let velX = v * Math.cos((p * Math.PI) / 180);
     let velY = v * Math.sin((p * Math.PI) / 180);
     for (let i = 0; i < 200; i++) {
+      const prevX = currX;
+      const prevY = currY;
       currX += velX;
       currY += velY;
       velX *= drag;
       velY = velY * drag - g;
-      if (currY <= y && velY < 0) return currX;
+      if (currY <= y && velY < 0) {
+        // Interpolate the crossing inside the tick: without it the distance
+        // jumps by a full tick of travel at every pitch step, which hides the
+        // drag's effect and makes the solved pitch jump around.
+        const span = prevY - currY;
+        const frac =
+          span > 1e-9 ? Math.min(1, Math.max(0, (prevY - y) / span)) : 0;
+        return prevX + (currX - prevX) * frac;
+      }
     }
-    return currX;
+    // The projectile never comes back down to the target's height: the
+    // distance is undefined, not "very far".
+    return Infinity;
   };
-  const refine = (p: number): number => {
-    let refinedP = p;
-    for (let i = 0; i < 5; i++) {
-      const d1 = getDistanceAtY(refinedP);
-      const err = x - d1;
-      if (Math.abs(err) < 0.1) break;
-      const delta = 0.1;
-      const d2 = getDistanceAtY(refinedP + delta);
-      const deriv = (d2 - d1) / delta;
-      refinedP += err / (deriv || 1);
+
+  /**
+   * Pitch whose descending crossing of the target height happens at the
+   * target's horizontal distance.
+   *
+   * The crossing distance is not monotonic in the pitch — a steeper throw
+   * drifts less — so the solution is bracketed by scanning the pitch space
+   * and then bisected. Two crossings exist for a target at the bot's level:
+   * the flat shot (low arc) and the steep lob (high arc). For a target
+   * above the bot only the steep lob exists: a flat throw never comes back
+   * down onto the target's height.
+   */
+  const solveCrossings = (): { low: number | null; high: number | null } => {
+    const STEP = 0.5;
+    const solutions: number[] = [];
+    let prevP: number | null = null;
+    let prevD = 0;
+    for (let p = 0; p <= 89.5 && solutions.length < 2; p += STEP) {
+      const d = getDistanceAtY(p);
+      if (!isFinite(d)) {
+        prevP = null;
+        continue;
+      }
+      if (prevP !== null && (prevD - x) * (d - x) <= 0) {
+        // Bisect the bracket down to a tenth of a degree.
+        let lo = prevP;
+        let hi = p;
+        let dLo = prevD - x;
+        for (let k = 0; k < 40; k++) {
+          const mid = (lo + hi) / 2;
+          const dMid = getDistanceAtY(mid) - x;
+          if (!isFinite(dMid)) break;
+          if (dLo < 0 === dMid < 0) {
+            lo = mid;
+            dLo = dMid;
+          } else {
+            hi = mid;
+          }
+        }
+        solutions.push((lo + hi) / 2);
+      }
+      prevP = p;
+      prevD = d;
     }
-    return refinedP;
+    return {
+      low: solutions[0] ?? null,
+      high: solutions[1] ?? null,
+    };
   };
-  return pitches.map(refine);
+
+  const solved = solveCrossings();
+  return [solved.low ?? pitches[0], solved.high ?? pitches[1]];
 }
 
 /**
  * Calculate vertical offset for aiming at a target using projectile physics.
  * This offset-based approach is more intuitive than angle-based aiming.
  *
- * @param source - Eye position (projectile origin)
+ * @param source - Projectile spawn point (the thrower's hand: eye height
+ *   minus 0.1). The returned offset is the rise of the aim point above it.
  * @param target - Target position (where you want the projectile to land)
  * @param v - Initial projectile speed (blocks per tick)
  * @param g - Gravity acceleration (blocks per tick squared)
@@ -349,7 +570,6 @@ function raycastBlocks(
   const steps = Math.ceil(len);
 
   for (let i = 1; i <= steps; i++) {
-    const t = i / steps;
     const pos = from.plus(step.scaled(i));
     const block = blockAt(pos);
     if (block && block.boundingBox !== "empty") {
@@ -368,6 +588,132 @@ function raycastBlocks(
 function isInWater(pos: Vec3, blockAt: (pos: Vec3) => any): boolean {
   const block = blockAt(pos);
   return block && block.name === "water";
+}
+
+/**
+ * Whether a block stops a pearl. Liquids are not solid: a pearl flies
+ * through water instead of landing in it.
+ * @param block - Block to check
+ */
+function blocksPearl(block: any): boolean {
+  if (!block || block.boundingBox === "empty") return false;
+  const name = block.name as string | undefined;
+  if (name === "water" || name === "flowing_water") return false;
+  return true;
+}
+
+/**
+ * Axis-aligned bounding box of a block's first shape (or the full cube).
+ * @param block - Block with .position and optional .shapes
+ * @returns AABB in world coordinates
+ */
+function blockAABB(block: { position: Vec3; shapes?: number[][] }): {
+  min: Vec3;
+  max: Vec3;
+} {
+  if (block.shapes && block.shapes.length > 0) {
+    const s = block.shapes[0];
+    return {
+      min: new Vec3(block.position.x + s[0], block.position.y + s[1], block.position.z + s[2]),
+      max: new Vec3(block.position.x + s[3], block.position.y + s[4], block.position.z + s[5]),
+    };
+  }
+  return {
+    min: block.position.clone(),
+    max: block.position.offset(1, 1, 1),
+  };
+}
+
+/**
+ * Ray-AABB slab intersection returning the entry distance, or null.
+ * @param origin - Ray origin
+ * @param dir - Normalized ray direction
+ * @param box - Box to intersect
+ * @param maxDist - Maximum distance to consider
+ * @returns Distance to the entry point, or null when there is no hit
+ */
+function rayBoxEntry(
+  origin: Vec3,
+  dir: Vec3,
+  box: { min: Vec3; max: Vec3 },
+  maxDist: number,
+): number | null {
+  let tNear = 0;
+  let tFar = maxDist;
+  for (const axis of ["x", "y", "z"] as const) {
+    const o = origin[axis];
+    const d = dir[axis];
+    if (Math.abs(d) < 1e-9) {
+      // Ray parallel to this slab: outside the slab means no hit at all.
+      if (o < box.min[axis] || o > box.max[axis]) return null;
+      continue;
+    }
+    const inv = 1 / d;
+    let t1 = (box.min[axis] - o) * inv;
+    let t2 = (box.max[axis] - o) * inv;
+    if (t1 > t2) [t1, t2] = [t2, t1];
+    tNear = Math.max(tNear, t1);
+    tFar = Math.min(tFar, t2);
+    if (tNear > tFar) return null;
+  }
+  // tNear === 0 means the ray starts inside the box (a collision already in
+  // progress), which callers treat as "path blocked" — not a landing.
+  return tNear > 1e-9 ? tNear : null;
+}
+
+/**
+ * Landed ender pearl: the point where the pearl first enters a solid block.
+ * @param source - Launch position
+ * @param vel - Velocity for the tick
+ * @param blockAt - Block lookup
+ * @returns Entry point and the block that was hit, or null when the tick
+ *   travels clear
+ */
+function pearlEntryPoint(
+  source: Vec3,
+  vel: Vec3,
+  blockAt: (pos: Vec3) => any,
+): { point: Vec3; block: any } | null {
+  const step = vel.norm();
+  if (step < 1e-9) return null;
+  const dir = vel.scaled(1 / step);
+
+  // Blocks the pearl can enter this tick: those overlapping the swept box.
+  const minX = Math.floor(Math.min(source.x, source.x + vel.x));
+  const maxX = Math.max(
+    minX,
+    Math.floor(Math.max(source.x, source.x + vel.x) - EPS),
+  );
+  const minY = Math.floor(Math.min(source.y, source.y + vel.y));
+  const maxY = Math.max(
+    minY,
+    Math.floor(Math.max(source.y, source.y + vel.y) - EPS),
+  );
+  const minZ = Math.floor(Math.min(source.z, source.z + vel.z));
+  const maxZ = Math.max(
+    minZ,
+    Math.floor(Math.max(source.z, source.z + vel.z) - EPS),
+  );
+
+  let bestT: number | null = null;
+  let bestPoint: Vec3 | null = null;
+  let bestBlock: any = null;
+  for (let x = minX; x <= maxX; x++) {
+    for (let y = minY; y <= maxY; y++) {
+      for (let z = minZ; z <= maxZ; z++) {
+        const block = blockAt(new Vec3(x, y, z));
+        if (!blocksPearl(block)) continue;
+        const t = rayBoxEntry(source, dir, blockAABB(block), step);
+        if (t !== null && (bestT === null || t < bestT)) {
+          bestT = t;
+          bestPoint = source.plus(dir.scaled(t));
+          bestBlock = block;
+        }
+      }
+    }
+  }
+  if (!bestPoint || !bestBlock) return null;
+  return { point: bestPoint, block: bestBlock };
 }
 
 /**
@@ -451,7 +797,8 @@ export function isProjectilePathClear(
  * Scoring: exact target > relaxed target; minimum flight time; miss distance within
  * tolerance; tie-break by smaller miss and larger clearance.
  *
- * @param source - Launch position (eye position of the thrower)
+ * @param source - Projectile spawn point (the thrower's hand: eye height
+ *   minus 0.1), i.e. where the flight starts.
  * @param target - Desired target position
  * @param velocity - Initial projectile speed (default: ender pearl 1.5)
  * @param gravity  - Gravity acceleration per tick (default: 0.03)
@@ -520,7 +867,10 @@ export function getBestPearlTrajectory(
       const pitch = pitches[i];
       const arc: "low" | "high" = i === 0 ? "low" : "high";
 
-      const blocked = !isProjectilePathClear(
+      // Where the pearl actually lands: first solid block it enters, or the
+      // end of the simulated path. A landing is only usable when it is close
+      // to the wanted target — striking a wall face short of it is a miss.
+      const info = simulateLanding(
         source,
         candidateTarget,
         velocity,
@@ -528,11 +878,9 @@ export function getBestPearlTrajectory(
         pitch,
         drag,
         blockAt,
-        entities,
       );
 
-      if (blocked) {
-        // Still record the blocked entry so it ranks below all clear paths
+      if (!info) {
         candidates.push({
           point: candidateTarget,
           pitch,
@@ -545,25 +893,34 @@ export function getBestPearlTrajectory(
         continue;
       }
 
-      // Compute flight time and actual landing position
-      const info = computeLandingInfo(
-        source,
-        candidateTarget,
-        velocity,
-        gravity,
-        pitch,
-        drag,
-      );
-
-      if (!info) {
-        // Shouldn't happen for a pitch that came from getProjectilePitch, but be safe
+      // A pearl that hits a wall (side or underside) leaves the bot against
+      // or below that block instead of on the surface it aimed for: the
+      // throw never reaches the wanted spot.
+      if (info.face === "bottom" || info.face === "side") {
         candidates.push({
           point: candidateTarget,
           pitch,
           arc,
           blocked: true,
           flightTime: Infinity,
-          landingPoint: candidateTarget.clone(),
+          landingPoint: info.landingPoint,
+          landingDist: Infinity,
+        });
+        continue;
+      }
+
+      // Entity collisions use the correct pearl hitbox (0.25x0.25).
+      const hitEntities = entities.filter(
+        (e: any) => e.position.distanceTo(info.landingPoint) < 0.25,
+      );
+      if (hitEntities.length > 0) {
+        candidates.push({
+          point: candidateTarget,
+          pitch,
+          arc,
+          blocked: true,
+          flightTime: Infinity,
+          landingPoint: info.landingPoint,
           landingDist: Infinity,
         });
         continue;
@@ -581,24 +938,26 @@ export function getBestPearlTrajectory(
     }
   }
 
-  // ---- 3. Rank: clear > exact target > min flight time > smaller miss ----
+  // ---- 3. Rank: usable landing > nearest to target > min flight time ----
   if (candidates.length === 0) return null;
 
   candidates.sort((a, b) => {
-    // Clear paths first
+    // Paths that reach a block/landing outrank those that fly out of range
     if (a.blocked !== b.blocked) return a.blocked ? 1 : -1;
-    // Exact target (landingDist == 0) over relaxed target
-    if (a.landingDist === 0 && b.landingDist > 0) return -1;
-    if (b.landingDist === 0 && a.landingDist > 0) return 1;
-    // Minimum flight time
-    if (a.flightTime !== b.flightTime) return a.flightTime - b.flightTime;
-    // Tie-break by smaller miss distance
-    return a.landingDist - b.landingDist;
+    // Nearest landing first: a throw that ends on the wanted spot beats a
+    // quicker throw that ends somewhere else (e.g. against the platform's
+    // side instead of on top of it).
+    if (a.landingDist !== b.landingDist) return a.landingDist - b.landingDist;
+    // Tie-break by minimum flight time
+    return a.flightTime - b.flightTime;
   });
 
   const best = candidates[0];
 
   if (best.blocked) return null;
+  // A pearl that lands more than a block away does not teleport the bot to
+  // the target — it hits the side of the platform instead. No usable throw.
+  if (best.landingDist > PEARL_LANDING_TOLERANCE) return null;
 
   return {
     pitch: best.pitch,
@@ -607,4 +966,150 @@ export function getBestPearlTrajectory(
     landingPoint: best.landingPoint.clone(),
     landingDist: best.landingDist,
   };
+}
+
+/**
+ * Find the throw that lands an ender pearl ON the upper surface of the block
+ * the aim point belongs to.
+ *
+ * This is the throw an elevated enemy needs: the pearl has to come down onto
+ * the top of the platform the enemy stands on. A throw that hits the platform
+ * from the side or from below teleports the bot against the wall instead of
+ * onto the platform, so the landing is validated on three points:
+ *
+ *   1. the pearl hits a TOP face (not a side or the underside),
+ *   2. that surface is at the aim height (the platform the enemy stands on),
+ *   3. the pearl is falling when it lands, and it lands on the aim block.
+ *
+ * The pitch comes from the drag-aware offset solver: the "high" root is the
+ * throw whose descending crossing of the aim height happens at the aim's
+ * horizontal distance, i.e. the lob that comes down onto the surface instead
+ * of passing through it. The analytic solution is then verified against the
+ * simulated flight and nudged by small pitch steps when the tick sampling
+ * puts the landing slightly off.
+ *
+ * @param source - Projectile spawn point (the thrower's hand: eye height
+ *   minus 0.1), i.e. where the flight starts.
+ * @param aim - Point on the surface the pearl must land on
+ * @param velocity - Initial projectile speed (default: ender pearl 1.5)
+ * @param gravity - Gravity acceleration per tick (default: 0.03)
+ * @param drag - Per-tick velocity multiplier (default: 0.99)
+ * @param blockAt - Function to look up a block at a given position
+ * @param entities - Entities that would absorb the pearl (may be empty)
+ * @param tolerance - Max horizontal distance from the aim (default: 0.55)
+ * @returns The landing solution, or null when no throw lands on the surface
+ */
+export function findPearlTopLanding(
+  source: Vec3,
+  aim: Vec3,
+  velocity: number = Constants.COMBAT.PROJECTILES.ender_pearl.VELOCITY,
+  gravity: number = Constants.COMBAT.PROJECTILES.ender_pearl.GRAVITY,
+  drag: number = Constants.COMBAT.PROJECTILES.ender_pearl.DRAG,
+  blockAt: (pos: Vec3) => any,
+  entities: any[] = [],
+  tolerance: number = PEARL_TOP_LANDING_TOLERANCE,
+): PearlTopLanding | null {
+  const dx = aim.x - source.x;
+  const dz = aim.z - source.z;
+  const d = Math.hypot(dx, dz);
+  // A pearl thrown straight up comes back down onto the thrower, so an aim
+  // point directly overhead cannot be reached from where the bot stands.
+  if (d < 1e-3) return null;
+
+  let offset: number;
+  try {
+    offset = getProjectileOffset(source, aim, velocity, gravity, drag, "high");
+  } catch {
+    return null;
+  }
+  if (!isFinite(offset)) return null;
+
+  const basePitch = (Math.atan2(offset, d) * 180) / Math.PI;
+  const candidates: number[] = [basePitch];
+  for (let i = 1; i <= PEARL_TOP_PITCH_STEPS; i++) {
+    candidates.push(
+      basePitch + i * PEARL_TOP_PITCH_STEP,
+      basePitch - i * PEARL_TOP_PITCH_STEP,
+    );
+  }
+
+  // The server randomizes the launch direction, so the landing scatters
+  // over roughly this radius around the simulated one. A solution whose
+  // margin is smaller than the scatter can be thrown off the target by
+  // the randomization alone.
+  const scatter = launchScatter(d);
+
+  // A landing on top of a living entity is a landing the pearl cannot use:
+  // the entity absorbs it and the thrower is not teleported. Such a landing
+  // is kept as a fallback — the server randomizes the pearl's launch
+  // direction, so the real flight can still land clear of the entity.
+  let fallback: PearlTopLanding | null = null;
+  let best: PearlTopLanding | null = null;
+
+  for (const pitch of candidates) {
+    const landing = simulateLanding(
+      source,
+      aim,
+      velocity,
+      gravity,
+      pitch,
+      drag,
+      blockAt,
+    );
+    if (!landing) continue;
+
+    // The pitch refinements only move the landing by a fraction of a
+    // block: refining a pitch that is nowhere near the target just burns
+    // simulations. Stop once the base pitch is clearly out of reach.
+    if (
+      best === null &&
+      pitch !== basePitch &&
+      landing.landingPoint.distanceTo(aim) > REFINEMENT_REACH
+    ) {
+      break;
+    }
+
+    // The pearl has to come down onto the surface, not clip its side or hit
+    // its underside.
+    if (landing.face !== "top") continue;
+    if (!landing.descending) continue;
+    if (Math.abs(landing.landingPoint.y - aim.y) > PEARL_TOP_SURFACE_EPS) {
+      continue;
+    }
+    const landingDist = Math.hypot(
+      landing.landingPoint.x - aim.x,
+      landing.landingPoint.z - aim.z,
+    );
+    if (landingDist > tolerance) continue;
+
+    const solution: PearlTopLanding = {
+      pitch,
+      offset: d * Math.tan((pitch * Math.PI) / 180),
+      flightTime: landing.flightTime,
+      landingPoint: landing.landingPoint.clone(),
+      landingDist,
+    };
+
+    // A living entity standing on the landing spot would eat the pearl.
+    if (
+      entities.some(
+        (e: any) =>
+          e.position &&
+          e.position.distanceTo(landing.landingPoint) < PEARL_ENTITY_BLOCK_RADIUS,
+      )
+    ) {
+      fallback = fallback ?? solution;
+      continue;
+    }
+
+    // Keep the solution with the largest margin, but stop as soon as the
+    // randomization cannot move the landing off the target: refining
+    // further only costs simulations.
+    if (!best || solution.landingDist < best.landingDist) {
+      best = solution;
+    }
+    if (best.landingDist + 2 * scatter <= tolerance) return best;
+  }
+
+  return best ?? fallback;
 }
