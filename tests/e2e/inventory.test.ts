@@ -190,13 +190,26 @@ async function setBotHealth(bot: Bot, health: number): Promise<void> {
   // outpacing heals and invalidating every health assertion below.
   await clearEffects(bot);
   if (health >= 20) {
-    // Heal path (harmless no-op when already full).
-    await sendCommand(
-      bot,
-      effectGiveCmd(bot.username, "instant_health", 1, 255, VERSION),
-    );
-    await pollUntil(bot, () => (bot.health ?? 0) >= 20, 60, "full health");
-    return;
+    // Heal path. The effect is retried: it is applied server-side and
+    // sometimes has no effect at all (observed on this server), and the
+    // health assertions below need the bot at full health.
+    for (let attempt = 0; attempt < 5; attempt++) {
+      if ((bot.health ?? 0) >= 20) return;
+      await sendCommand(
+        bot,
+        effectGiveCmd(bot.username, "instant_health", 1, 255, VERSION),
+      );
+      try {
+        await pollUntil(bot, () => (bot.health ?? 0) >= 20, 20, "full health");
+        return;
+      } catch {
+        logger.info(
+          `instant_health had no effect (attempt ${attempt + 1}), retrying`,
+          "Command",
+        );
+      }
+    }
+    throw new Error("setBotHealth: could not heal the bot to full health");
   }
   if (health < 10) {
     throw new Error(

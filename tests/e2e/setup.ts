@@ -190,7 +190,9 @@ export type SuiteKey =
   | "pvp"
   /** 2-bot combat-loop suite: attacker / target */
   | "pva"
-  | "pvt";
+  | "pvt"
+  /** Enemy-above pearl scenario: the elevated target */
+  | "pve";
 
 /** Hash a string to a non-negative integer (djb2). */
 export function simpleHash(str: string): number {
@@ -798,12 +800,38 @@ export async function tpBot(
   const target = new Vec3(x, y, z);
   (bot as any).physicsEnabled = false;
   try {
-    await serverCommand(bot, `tp ${bot.username} ${x} ${y} ${z}`);
-    await pollUntil(
-      bot,
-      () => bot.entity.position.distanceTo(target) < 1.0,
-      90,
-      `teleport to ${x} ${y} ${z}`,
+    // The freeze suppresses the physics tick, and mineflayer's
+    // waitForTicks is driven by that tick — it never resolves and times
+    // out after 5s. The arrival is a server packet, not a simulation, so
+    // poll on a timer instead.
+    //
+    // The teleport is retried: the server may not have registered the
+    // player yet (a bot that just spawned), and the /tp is rejected with
+    // "no entity was found" — the bot would then stay where it was and
+    // never be seen at the expected spot.
+    let lastError: unknown = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await serverCommand(bot, `tp ${bot.username} ${x} ${y} ${z}`);
+        lastError = null;
+      } catch (error) {
+        lastError = error;
+      }
+      const deadline = Date.now() + 2000;
+      while (Date.now() < deadline) {
+        if (bot.entity.position.distanceTo(target) < 1.0) {
+          // The teleport does not stop the client's own prediction: with
+          // the old velocity still in place, the first movement packet
+          // after the freeze jumps across the map and the server's
+          // anti-flight kicks the bot back to where it came from.
+          bot.entity.velocity.set(0, 0, 0);
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    }
+    throw (
+      lastError ?? new Error(`Timed out waiting for the teleport to ${x} ${y} ${z}`)
     );
   } finally {
     (bot as any).physicsEnabled = true;

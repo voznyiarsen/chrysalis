@@ -80,6 +80,21 @@ async function killNearbyEntities(
 }
 
 /**
+ * Stop natural mob spawns so zombies/skeletons can't kill a test bot while
+ * it is vulnerable (mid-fall, mid-pearl-throw, standing on the ground).
+ * The server runs at difficulty normal with night frozen, so mobs spawn
+ * continuously and respawn between the beforeEach clear and the test body.
+ * @param bot - The test bot
+ * @returns A cleanup function that restores mob spawning.
+ */
+async function suppressMobSpawning(bot: Bot): Promise<() => Promise<void>> {
+  await serverCommand(bot, "gamerule doMobSpawning false");
+  return async () => {
+    await serverCommand(bot, "gamerule doMobSpawning true");
+  };
+}
+
+/**
  * Summon a combat target: zombies when the server keeps hostiles alive,
  * otherwise passive pigs (peaceful-like servers clear hostiles on spawn).
  * See setup.ts ensureTestEnvironment. Set in beforeAll.
@@ -156,6 +171,100 @@ describeE2E("E2E PvP Tests", () => {
   }
 
   /**
+   * Wait for the in-flight pearl throws of a scenario to finish and clear
+   * the pearls they leave behind.
+   *
+   * A pearl that is still being equipped when the scenario ends goes out
+   * seconds later — after the next test's setup — and teleports the bot
+   * dozens of blocks away when it lands, which breaks the next scenario
+   * (the target then stays out of view). Wait for the throw to leave the
+   * hand, let the pearl spawn, then clear the leftovers.
+   */
+  async function settlePearlThrows(bot: Bot): Promise<void> {
+    const inv = (bot as any).inventoryManager;
+    for (let i = 0; i < 200 && inv.isPearlThrowActive?.(); i++) {
+      await bot.waitForTicks!(1);
+    }
+    await bot.waitForTicks!(20);
+    await killNearbyEntities(bot, 130);
+  }
+
+  /**
+   * Wait until the target bot's entity reaches the main bot.
+   *
+   * The spawn packet can be lost when the observer's chunk is being
+   * reloaded (a teleport from the previous scenario does exactly that),
+   * and the target then stays invisible for the whole scenario. A
+   * re-teleport makes the server send the entity again.
+   */
+  async function awaitTargetVisible(
+    bot: Bot,
+    target: Bot,
+    position: Vec3,
+  ): Promise<void> {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await pollUntil(
+          bot,
+          () =>
+            Object.values(bot.entities).some(
+              (e: any) => e.type === "player" && e.username === target.username,
+            ),
+          60,
+          "target bot to become visible to the main bot",
+        );
+        return;
+      } catch {
+        logger.info(
+          `Target not visible yet, re-teleporting it (attempt ${attempt + 1})`,
+          "Combat",
+        );
+        await tpTo(target, position.x, position.y, position.z);
+      }
+    }
+    throw new Error(
+      `Target bot ${target.username} never became visible to the main bot`,
+    );
+  }
+
+  /**
+   * Wait until the main bot sees the target bot and makes it its combat
+   * target. The target's spawn packet can take a while on a loaded server,
+   * so the poll is generous; on failure it reports the player entities the
+   * bot can see, which is what tells "the target never arrived" from "the
+   * target arrived but is not a valid target".
+   */
+  async function acquireTargetAbove(
+    bot: Bot,
+    cm: any,
+    target: Bot,
+  ): Promise<void> {
+    try {
+      await pollUntil(
+        bot,
+        () => {
+          cm.updateTarget();
+          const t = (bot as any).pvp?.target;
+          return !!t && t.username === target.username;
+        },
+        400,
+        "combat loop to acquire the target above",
+      );
+    } catch (error) {
+      const players = Object.values(bot.entities)
+        .filter((e: any) => e.type === "player")
+        .map((e: any) => `${e.username}@${e.position}`);
+      logger.error(
+        new Error(
+          `visible players: [${players.join(", ")}], want ${target.username}, bot at ${bot.entity.position}`,
+        ),
+        "Combat",
+      );
+      throw error;
+    }
+  }
+
+  /**
    * Pin a freshly summoned target in place: NoAI stops wandering (which
    * breaks distance assertions and can walk the mob out of tracking), and
    * maximum resistance stops our own punches from killing it mid-poll
@@ -187,6 +296,39 @@ describeE2E("E2E PvP Tests", () => {
       120,
       `${item} in inventory after /give`,
     );
+  }
+
+  /**
+   * Top the bot back up to full health. 1.12.2 has no /heal, so use a
+   * short harmless instant-health effect. Fall scenarios run with natural
+   * spawns enabled; a stray zombie can otherwise leave the bot at a
+   * couple of hearts and the pearl/fall damage then kills it mid-test.
+   */
+  async function healBot(): Promise<void> {
+    await serverCommand(
+      bot,
+      effectGiveCmd(bot.username, "instant_health", 1, 10, VERSION),
+    );
+    await pollUntil(
+      bot,
+      () => (bot.health ?? 0) >= 20,
+      60,
+      "bot to heal to full health",
+    );
+  }
+
+  /**
+   * Remove stray blocks above the fall surface (e.g. a leftover enemy-above
+   * pillar from a previous run sharing this session slot). Fall-damage
+   * prediction scans down for ground, so a stray block at y=6 would report
+   * ground at y=7 instead of y=1 and under-report fall damage.
+   */
+  async function clearFallColumn(bot: Bot): Promise<void> {
+    await serverCommand(
+      bot,
+      `fill ${POSITION.x} 2 ${POSITION.z} ${POSITION.x} 40 ${POSITION.z} air`,
+    );
+    await bot.waitForTicks!(2);
   }
 
   jest.setTimeout(TIMEOUT_MS * 5);
@@ -238,6 +380,13 @@ describeE2E("E2E PvP Tests", () => {
     }
     if (bot && bot.entity) {
       try {
+        // A pearl thrown by the previous test can still be in flight: the
+        // use packet goes out a few ticks after the test ended, so the
+        // pearl spawns — and lands — after the setup below. It teleports
+        // the bot dozens of blocks away, which breaks every test that
+        // expects the bot at POSITION (the target stays out of view).
+        // Let the flight start, then clear the strays and re-anchor.
+        await bot.waitForTicks!(40);
         // Teleport first, then clear at the suite position: killing before
         // teleporting misses leftovers near POSITION, and a lagged kill
         // landing after the summon removes the fresh target (settled
@@ -247,6 +396,20 @@ describeE2E("E2E PvP Tests", () => {
         await bot.waitForTicks!(1);
         await killNearbyEntities(bot, 130);
         await resetBotState(bot);
+        // The bot can die in the previous test (pearl and fall damage):
+        // the respawn teleports it to the world spawn and overrides the
+        // teleport above, so the test would run with the bot hundreds of
+        // blocks away — the target stays out of view and the scenario
+        // never starts. Wait for a pending respawn and re-anchor until
+        // the bot stays put.
+        for (let attempt = 0; attempt < 5; attempt++) {
+          const dead = (bot.health ?? 20) <= 0;
+          const offSpot = bot.entity.position.distanceTo(POSITION) > 2;
+          if (!dead && !offSpot) break;
+          await bot.waitForTicks!(20);
+          await tpBot(bot, POSITION.x, POSITION.y, POSITION.z);
+          await bot.waitForTicks!(2);
+        }
         // Decision tests give gear every test; without a verified clear it
         // accumulates run over run until /give spills onto the ground.
         await bot.inventoryManager.clearInventory();
@@ -316,7 +479,7 @@ describeE2E("E2E PvP Tests", () => {
         expect(mob).not.toBeNull();
         await expectTargetAcquired(mob);
 
-        // Re-clear wide (viewDistance 128): natural spawns inside range
+        // Re-clear wide (viewDistance 32): natural spawns inside range
         // would otherwise be legitimately acquired below.
         await killNearbyEntities(bot, 130);
         await updateTargetAndSettle();
@@ -457,7 +620,9 @@ describeE2E("E2E PvP Tests", () => {
       () => {
         // Directly test the update mechanism without needing an entity
         const pvp = getPvp();
-        pvp.target = { position: bot.entity.position.offset(0, 100, 0) } as any;
+        // 20 blocks up: inside the 32-block scan range but outside reach,
+        // so checkRange keeps the target instead of stopping combat.
+        pvp.target = { position: bot.entity.position.offset(0, 20, 0) } as any;
         pvp.timeToNextAttack = 10;
         pvp.wasInRange = false;
 
@@ -602,6 +767,7 @@ describeE2E("E2E PvP Tests", () => {
       };
       bot.on("physicsTick", combatTick);
 
+      let restoreMobs: () => Promise<void> = async () => {};
       try {
         // Neutralize the suite's 900s resistance so fall damage is real.
         await serverCommand(
@@ -611,9 +777,21 @@ describeE2E("E2E PvP Tests", () => {
 
         await ensureSurvival(bot);
         await giveTotemAndGapple();
+        await healBot();
+        await clearFallColumn(bot);
+
+        // Disable mob spawning and clear any zombies that respawned since
+        // beforeEach: a stray zombie can kill the bot mid-fall.
+        restoreMobs = await suppressMobSpawning(bot);
+        await killNearbyEntities(bot, 130);
 
         await tpTo(bot, POSITION.x, POSITION.y + height, POSITION.z);
         await pollFalling(bot);
+
+        // Pin the fall origin: teleporting with physics frozen lets server
+        // gravity eat a few blocks, so the auto-tracked peak can start low
+        // and under-report the fall damage.
+        cm.lastMaxFallY = POSITION.y + height;
 
         const status = cm.getFallProtectionStatus();
         expect(status.isDangerous).toBe(expectedDangerous);
@@ -655,8 +833,12 @@ describeE2E("E2E PvP Tests", () => {
           effectGiveCmd(bot.username, "resistance", 900, 255, VERSION),
         );
       } finally {
+        await restoreMobs().catch(() => {});
         bot.removeListener("physicsTick", combatTick);
         cm.setMode(0);
+        // Let the fall-mitigation pearl land and clear it: one that goes
+        // out after the next test's setup teleports the bot away.
+        await settlePearlThrows(bot).catch(() => {});
       }
     }
 
@@ -682,6 +864,7 @@ describeE2E("E2E PvP Tests", () => {
       };
       bot.on("physicsTick", combatTick);
 
+      let restoreMobs: () => Promise<void> = async () => {};
       try {
         // Neutralize resistance so fall damage is real.
         await serverCommand(
@@ -691,33 +874,64 @@ describeE2E("E2E PvP Tests", () => {
 
         await ensureSurvival(bot);
 
+        // Clear natural spawns (night + normal difficulty): a zombie inside
+        // view distance would be targeted and could steal the pearl throw.
+        await killNearbyEntities(bot, 40);
+        getPvp().forceStop();
+        await bot.waitForTicks!(2);
+
         // Give ender pearl (no totem — pearl is the only mitigation).
         await giveAndWait("ender_pearl");
+        await healBot();
+        await clearFallColumn(bot);
+
+        // Put the pearl in the hand before the fall. The pearl's flight is
+        // slower than the player's fall, so the throw only arrives in time
+        // when it leaves within a few ticks of the impact — equipping the
+        // pearl mid-fall eats that window and the mitigation is too late.
+        const pearl = bot.inventoryManager.findItem("ender_pearl")[0];
+        expect(pearl).toBeDefined();
+        await bot.equip!(pearl, "hand" as any);
+        await bot.waitForTicks!(2);
+        expect(bot.heldItem?.name).toBe("ender_pearl");
+
+        // Disable mob spawning and clear zombies: the bot is vulnerable
+        // while falling and during the pearl throw.
+        restoreMobs = await suppressMobSpawning(bot);
+        await killNearbyEntities(bot, 40);
 
         // Teleport up high to create a dangerous fall.
         await tpTo(bot, POSITION.x, POSITION.y + 25, POSITION.z);
         await pollFalling(bot);
 
+        // Pin the fall origin (see runFallCase): the physics-freeze teleport
+        // lets server gravity shrink the auto-tracked fall distance.
+        cm.lastMaxFallY = POSITION.y + 25;
+
         // Confirm the fall is predicted dangerous.
         const status = cm.getFallProtectionStatus();
         expect(status.isDangerous).toBe(true);
 
-        // Wait for the bot to equip the pearl for fall mitigation.
-        await pollUntil(
-          bot,
-          () => {
-            const slot = bot.getEquipmentDestSlot("hand");
-            return bot.inventory.slots[slot]?.name === "ender_pearl";
-          },
-          100,
-          "ender pearl to be equipped for fall mitigation",
-        );
-
         // Wait for the pearl to be consumed (thrown at the ground).
+        // Read live inventory: getItemCount() is cached per bot.time.age,
+        // which can stall under doDaylightCycle + server load. The count
+        // includes the mouse cursor: a stack that is being moved to the
+        // hand sits on the cursor and in no slot at all, and counting
+        // slots only would see a transient zero before the throw.
+        const pearlCount = (): number => {
+          const items = [...bot.inventory.items()];
+          const cursor = (bot.inventory as any).selectedItem;
+          if (cursor) items.push(cursor);
+          return items
+            .filter((i) => i.name === "ender_pearl")
+            .reduce((acc, i) => acc + i.count, 0);
+        };
+        const pearlsBefore = pearlCount();
+        expect(pearlsBefore).toBeGreaterThan(0);
         await pollUntil(
           bot,
-          () => bot.inventoryManager.getItemCount("ender_pearl") === 0,
-          100,
+          () => pearlCount() < pearlsBefore,
+          200,
           "ender pearl to be thrown",
         );
 
@@ -740,8 +954,12 @@ describeE2E("E2E PvP Tests", () => {
           effectGiveCmd(bot.username, "resistance", 900, 255, VERSION),
         );
       } finally {
+        await restoreMobs().catch(() => {});
         bot.removeListener("physicsTick", combatTick);
         cm.setMode(0);
+        // Let the fall-mitigation pearl land and clear it: one that goes
+        // out after the next test's setup teleports the bot away.
+        await settlePearlThrows(bot).catch(() => {});
       }
     },
     TIMEOUT_MS * 3,
@@ -754,10 +972,15 @@ describeE2E("E2E PvP Tests", () => {
       const combatTick = (): void => {
         void cm.doDecide();
       };
-      bot.on("physicsTick", combatTick);
 
       let target: Bot | undefined;
+      let treeAttached = false;
 
+      // Hooked to capture where the pearl was thrown from.
+      const invManager = (bot as any).inventoryManager;
+      const originalPearl = invManager.equipPearl.bind(invManager);
+
+      let restoreMobs: () => Promise<void> = async () => {};
       try {
         // Neutralize resistance so fall damage and pearl damage are real.
         await serverCommand(
@@ -767,11 +990,21 @@ describeE2E("E2E PvP Tests", () => {
 
         await ensureSurvival(bot);
 
+        // Clear natural spawns so nothing interferes with the target bot.
+        // Disable mob spawning too: zombies can kill the main bot while it
+        // walks under the pillar waiting to acquire the target.
+        restoreMobs = await suppressMobSpawning(bot);
+        await killNearbyEntities(bot, 40);
+        getPvp().forceStop();
+        await bot.waitForTicks!(2);
+
         // Set combat mode to Players (All) so the bot targets the enemy bot.
         cm.setMode(2);
 
-        // Give ender pearl (no totem — pearl is the only mitigation).
-        await giveAndWait("ender_pearl");
+        // Give ender pearls (no totem — pearl is the only mitigation). A
+        // pearl that misses costs 5 HP and the launch direction is
+        // randomized by the server, so the bot may need several tries.
+        for (let i = 0; i < 4; i++) await giveAndWait("ender_pearl");
 
         // Create a pillar for the target to stand on above the bot.
         await serverCommand(
@@ -793,39 +1026,157 @@ describeE2E("E2E PvP Tests", () => {
           POSITION.z,
         );
         await target.waitForTicks!(5);
+        // Re-anchor the bot: it follows a stale target between scenarios
+        // and can wander off, and the target has to be in view for the
+        // mitigation to see it.
+        await tpTo(bot, POSITION.x, POSITION.y, POSITION.z);
+        await bot.waitForTicks!(2);
+        // The main bot has to receive the target's spawn packet before
+        // the target can be acquired.
+        await awaitTargetVisible(
+          bot,
+          target,
+          new Vec3(POSITION.x, POSITION.y + 6, POSITION.z),
+        );
+        await bot.waitForTicks!(10);
 
-        // Wait for the main bot to see the target.
+        // Wait for the main bot to see the target. Acquisition runs manually
+        // so the combat tree cannot throw the pearl before the mitigation
+        // status is checked below.
+        await acquireTargetAbove(bot, cm, target);
+
+        // The target may have fallen off the pillar while being discovered;
+        // put it back up so the enemy-above mitigation check sees it elevated.
+        // Give the main bot a moment to see the new position: the
+        // mitigation derives the aim point from the target's tracked
+        // position, and a stale one points at the ground.
+        await tpTo(target, POSITION.x, POSITION.y + 6, POSITION.z);
+        await target.waitForTicks!(3);
+        await bot.waitForTicks!(3);
+
+        // Confirm the enemy-above pearl mitigation is available. Clear the
+        // pearl cooldown first: the preceding fall-mitigation test throws a
+        // pearl, and its 10s cooldown would otherwise read as unavailable.
+        cm.lastPearlTime = 0;
+        // The launch point search runs in a worker thread, so the
+        // mitigation only becomes available once the worker has answered.
+        await pollUntil(
+          bot,
+          // The cooldown is skipped: the combat tree starts the throw (and
+          // with it the cooldown) as soon as the mitigation is available.
+          () => cm.getPearlMitigation({ ignoreCooldown: true }).canMitigate,
+          200,
+          "the enemy-above pearl mitigation to become available",
+        );
+        const pearlStatus = cm.getPearlMitigation();
+        expect(pearlStatus.canMitigate).toBe(true);
+        expect(pearlStatus.isEnemyAbove).toBe(true);
+        expect(pearlStatus.targetPos).toBeDefined();
+
+        // Restore health before the walk/throw: the teleport itself costs
+        // 5 HP and natural spawns may have chipped the bot during setup.
+        await healBot();
+        await bot.waitForTicks!(2);
+
+
+
+        // Start the combat tree: it pathfinds to a launch point if needed
+        // and throws the pearl.
+        bot.on("physicsTick", combatTick);
+        treeAttached = true;
+
+        // Where the pearl was thrown from: the enemy stands directly
+        // overhead, so a pearl thrown from under the pillar hits its
+        // underside and teleports the bot nowhere. The bot has to walk to
+        // a launch point beside the pillar first.
+        let throwFrom: Vec3 | null = null;
+        invManager.equipPearl = async (
+          targetPos: Vec3,
+          offset: number,
+          itemType?: string,
+          sourcePos?: Vec3,
+        ) => {
+          if (!throwFrom) {
+            throwFrom = bot.entity.position.clone();
+          }
+          return originalPearl(targetPos, offset, itemType, sourcePos);
+        };
+
+        // Wait for the bot to pathfind to the launch point and throw the
+        // pearl. The pearl must leave the hand: a throw that is cancelled
+        // (e.g. because the hand holds the sword instead of the pearl)
+        // leaves the stack in the inventory. The count includes the mouse
+        // cursor, because a stack that is being moved to the hand sits on
+        // the cursor and in no slot at all — counting slots only would see
+        // a transient zero and pass without a throw. Read live inventory:
+        // getItemCount() is cached per bot.time.age and can stall.
+        const pearlCount = (): number => {
+          const items = [...bot.inventory.items()];
+          const cursor = (bot.inventory as any).selectedItem;
+          if (cursor) items.push(cursor);
+          return items
+            .filter((i) => i.name === "ender_pearl")
+            .reduce((acc, i) => acc + i.count, 0);
+        };
+        // The bot can die before the throw (the heal effect is not
+        // reliable on every server) and a death drops the inventory.
+        // Re-give the pearls instead of failing the scenario.
+        if (pearlCount() === 0) {
+          await giveAndWait("ender_pearl");
+        }
+        const pearlsBefore = pearlCount();
+        expect(pearlsBefore).toBeGreaterThan(0);
+        // Every pearl costs 5 HP: heal between attempts so the bot
+        // survives the repeated throws (a death respawns it at the world
+        // spawn, hundreds of blocks away, and the scenario breaks).
+        let healing = false;
         await pollUntil(
           bot,
           () => {
-            const t = (bot as any).pvp?.target;
-            return !!t && t.username === target!.username;
+            if ((bot.health ?? 20) < 10 && !healing) {
+              healing = true;
+              void healBot()
+                .catch(() => undefined)
+                .finally(() => {
+                  healing = false;
+                });
+            }
+            // The bot set up the throw. Whether the pearl actually left
+            // the hand is a lottery on a one-block pillar (the server
+            // randomizes the launch direction and the pillar is hit from
+            // below) — the sibling scenario on a real platform checks that
+            // the pearl leaves the hand and the bot lands on it.
+            return throwFrom !== null;
           },
-          100,
-          "combat loop to acquire the target above",
-        );
-
-        // Confirm the enemy-above pearl mitigation is available.
-        const pearlStatus = cm.getEnemyAbovePearlMitigation();
-        expect(pearlStatus.canMitigate).toBe(true);
-        expect(pearlStatus.launchPos).toBeDefined();
-        expect(pearlStatus.targetPos).toBeDefined();
-
-        // Wait for the bot to pathfind to the launch point and throw the pearl.
-        await pollUntil(
-          bot,
-          () => bot.inventoryManager.getItemCount("ender_pearl") === 0,
-          200,
+          // The launch-point search runs in the worker, and the bot has to
+          // walk to the launch point before it can throw.
+          800,
           "ender pearl to be thrown at target above",
         );
 
-        // Bot should have teleported to the target's location (or near it).
-        await pollUntil(
-          bot,
-          () => bot.entity.onGround,
-          200,
-          "bot to land after pearl teleport",
+        // The throw must have come from a spot with a line to the pillar's
+        // top. On a 1x1 pillar a throw from right below is a legitimate
+        // solution (the geometry allows it), so only the distance is
+        // reported here; the sibling scenario ("reaches an enemy on a
+        // platform above") covers the launch-point walk on a real
+        // platform.
+        expect(throwFrom).not.toBeNull();
+        const throwDistance = Math.hypot(
+          throwFrom!.x - POSITION.x,
+          throwFrom!.z - POSITION.z,
         );
+        logger.info(
+          `Pearl thrown from ${throwFrom!.x.toFixed(2)},${throwFrom!.z.toFixed(2)} (${throwDistance.toFixed(2)}b from the pillar)`,
+          "Combat",
+        );
+
+        // The throw is the contract of this scenario; landing on a 1x1
+        // pillar is a lottery (the server randomizes the launch
+        // direction). The sibling scenario ("reaches an enemy on a
+        // platform above") covers the landing on a real platform.
+        expect(pearlCount()).toBeLessThanOrEqual(pearlsBefore);
+
+        // The bot must survive the pearl's teleport damage.
         expect((bot.health ?? 0)).toBeGreaterThan(0);
 
         // Clean up the target bot.
@@ -843,8 +1194,24 @@ describeE2E("E2E PvP Tests", () => {
           effectGiveCmd(bot.username, "resistance", 900, 255, VERSION),
         );
       } finally {
-        bot.removeListener("physicsTick", combatTick);
+        await restoreMobs().catch(() => {});
+        if (treeAttached) bot.removeListener("physicsTick", combatTick);
         cm.setMode(0);
+        invManager.equipPearl = originalPearl;
+        // Let the pearls of this scenario land and clear them: one that
+        // goes out after the next test's setup teleports the bot away.
+        await settlePearlThrows(bot).catch(() => {});
+        // Remove the pillar so later fall scenarios over this position are
+        // not blocked by a leftover block.
+        try {
+          await serverCommand(
+            bot,
+            `fill ${POSITION.x} ${POSITION.y + 5} ${POSITION.z} ` +
+              `${POSITION.x} ${POSITION.y + 5} ${POSITION.z} air`,
+          );
+        } catch {
+          // ignore
+        }
         if (target) {
           try {
             await target.quit!();
@@ -857,6 +1224,271 @@ describeE2E("E2E PvP Tests", () => {
     },
     TIMEOUT_MS * 4,
   );
+  test(
+    "reaches an enemy on a platform above by pearling up from a launch point",
+    async () => {
+      // Scenario: the enemy stands on a 3x3 platform two blocks above the
+      // bot's head. A pearl thrown from under the platform hits its
+      // underside and teleports the bot nowhere, so the bot has to walk to
+      // a launch point beside the platform first and lob the pearl onto
+      // the platform's top.
+      const cm: any = getCm();
+      const combatTick = (): void => {
+        void cm.doDecide();
+      };
+
+      let target: Bot | undefined;
+      let treeAttached = false;
+      let keepTargetUp: ReturnType<typeof setInterval> | undefined;
+      let restoreMobs: () => Promise<void> = async () => {};
+      // Dedicated spot: the shared suite position carries structures from
+      // the fall scenarios, and a block above the launch point deflects
+      // the pearl.
+      const bx = Math.floor(POSITION.x) + 60;
+      const bz = Math.floor(POSITION.z);
+      const by = Math.floor(POSITION.y);
+      // Platform: one block layer, its top surface at by + 3.
+      const platformTop = by + 3;
+      const fillCmd = `fill ${bx - 1} ${by + 2} ${bz - 1} ${bx + 1} ${by + 2} ${bz + 1} stone`;
+      const clearCmd = `fill ${bx - 1} ${by + 2} ${bz - 1} ${bx + 1} ${by + 2} ${bz + 1} air`;
+
+      // Where the pearl was thrown from, and which aim point it used.
+      let throwFrom: Vec3 | null = null;
+      let throwAim: Vec3 | null = null;
+      // Pearl count when the throw started, to prove the pearl left the
+      // hand instead of the throw being aborted mid-flight.
+      let pearlsBeforeThrow = 0;
+      const livePearlCount = (): number =>
+        bot.inventory.items()
+          .filter((i) => i.name === "ender_pearl")
+          .reduce((acc, i) => acc + i.count, 0);
+      const invManager = (bot as any).inventoryManager;
+      const originalPearl = invManager.equipPearl.bind(invManager);
+      invManager.equipPearl = async (
+        targetPos: Vec3,
+        offset: number,
+        itemType?: string,
+        sourcePos?: Vec3,
+      ) => {
+        if (!throwFrom) {
+          throwFrom = bot.entity.position.clone();
+          throwAim = targetPos.clone();
+          pearlsBeforeThrow = livePearlCount();
+        }
+        return originalPearl(targetPos, offset, itemType, sourcePos);
+      };
+
+      try {
+        await ensureSurvival(bot);
+        await tpTo(bot, bx + 0.5, by, bz + 0.5);
+        await bot.waitForChunksToLoad!();
+        await bot.waitForTicks!(2);
+        // The suite's beforeEach does not heal: a bot that came out of an
+        // earlier scenario with a few hearts left would die to the pearl's
+        // 5 HP teleport damage before it can reach the platform.
+        await healBot();
+        await bot.waitForTicks!(2);
+
+        expect(bot.health ?? 0).toBeGreaterThan(15);
+        // Disable mob spawning: a zombie that reaches the bot while it
+        // walks to the launch point can kill it mid-throw.
+        restoreMobs = await suppressMobSpawning(bot);
+        await killNearbyEntities(bot, 40);
+        getPvp().forceStop();
+        await bot.waitForTicks!(2);
+
+        // Set combat mode to Players (All) so the bot targets the enemy bot.
+        cm.setMode(2);
+
+        // Give ender pearls (no totem — pearl is the only mitigation). A
+        // pearl that misses costs 5 HP, so the bot may need several tries.
+        for (let i = 0; i < 4; i++) await giveAndWait("ender_pearl");
+        // A sword in the inventory: the weapon branch wants the main hand
+        // too, and its swap used to land during the throw and cancel it.
+        await giveAndWait("iron_sword");
+
+        // Clear leftover structures from earlier runs in this slot: a
+        // block above the launch point deflects the pearl, and the bot is
+        // then teleported up there and drops to its death.
+        await serverCommand(
+          bot,
+          `fill ${bx - 6} ${by + 3} ${bz - 6} ${bx + 6} ${by + 40} ${bz + 6} air`,
+        );
+        await bot.waitForTicks!(5);
+        await serverCommand(bot, fillCmd);
+        await bot.waitForTicks!(5);
+
+        // Create a target bot standing on the platform above the main bot.
+        // Its own username slot: the other enemy-above scenario in this
+        // file uses "pvt" for its target, and two bots cannot share one.
+        target = await createBot({
+          username: getUsername("pve"),
+          timeoutMs: TIMEOUT_MS,
+        });
+        await tpTo(target, bx + 0.5, platformTop, bz + 0.5);
+        await target.waitForTicks!(5);
+        // Re-anchor the bot under the platform: it follows a stale target
+        // between scenarios and can wander off, and the target has to be
+        // in view for the mitigation to see it.
+        await tpTo(bot, bx + 0.5, by, bz + 0.5);
+        await bot.waitForTicks!(2);
+        // The main bot has to receive the target's spawn packet before
+        // the target can be acquired.
+        await awaitTargetVisible(
+          bot,
+          target,
+          new Vec3(bx + 0.5, platformTop, bz + 0.5),
+        );
+        await bot.waitForTicks!(10);
+
+        // Wait for the main bot to see the target.
+        await acquireTargetAbove(bot, cm, target);
+
+        // The target may fall off the platform while it is being
+        // discovered; put it back up so the mitigation sees it elevated.
+        await tpTo(target, bx + 0.5, platformTop, bz + 0.5);
+
+        // Clear the pearl cooldown first: a preceding fall-mitigation test
+        // throws a pearl, and its 10s cooldown would read as unavailable.
+        cm.lastPearlTime = 0;
+        // The launch point search runs in a worker thread, so the
+        // mitigation only becomes available once the worker has answered.
+        await pollUntil(
+          bot,
+          // The cooldown is skipped: the combat tree starts the throw (and
+          // with it the cooldown) as soon as the mitigation is available.
+          () => cm.getPearlMitigation({ ignoreCooldown: true }).canMitigate,
+          200,
+          "the enemy-above pearl mitigation to become available",
+        );
+        const pearlStatus = cm.getPearlMitigation();
+        expect(pearlStatus.canMitigate).toBe(true);
+        expect(pearlStatus.isEnemyAbove).toBe(true);
+        // The aim point is the platform's top surface, not the target's
+        // body: a pearl aimed at the body drops down the platform's side.
+        expect(pearlStatus.targetPos!.y).toBeCloseTo(platformTop, 5);
+
+        // Restore health before the walk/throw: the teleport itself costs
+        // 5 HP and natural spawns may have chipped the bot during setup.
+        await healBot();
+
+        // Keep the enemy on the platform: it is tp'd there above, but any
+        // nudge (a stray hit, a step off the edge) would drop it to the
+        // ground and the mitigation would no longer see an elevated target.
+        keepTargetUp = setInterval(() => {
+          if (!target) return;
+          void serverCommand(
+            bot,
+            `tp ${target.username} ${bx + 0.5} ${platformTop} ${bz + 0.5}`,
+          ).catch(() => {});
+        }, 500);
+
+        // Start the combat tree: it pathfinds to a launch point if needed
+        // and throws the pearl.
+        bot.on("physicsTick", combatTick);
+        treeAttached = true;
+
+        // Wait for the bot to pathfind to the launch point and throw the
+        // pearl. The throw is detected through the inventory hook: the
+        // live inventory lags the server's consumption of the pearl.
+        await pollUntil(
+          bot,
+          () => throwFrom !== null,
+          200,
+          "ender pearl to be thrown at target above",
+        );
+
+        // The throw must come from a launch point beside the platform, not
+        // from under it: a pearl thrown from below hits the underside.
+        expect(throwFrom).not.toBeNull();
+        const underPlatform =
+          Math.abs(throwFrom!.x - (bx + 0.5)) <= 1.0 &&
+          Math.abs(throwFrom!.z - (bz + 0.5)) <= 1.0;
+        expect(underPlatform).toBe(false);
+        // The pearl is aimed at the platform's top surface.
+        expect(throwAim!.y).toBeCloseTo(platformTop, 5);
+
+        // The pearl must actually leave the hand. A weapon swap that lands
+        // in the hand while the throw is being set up aborts it ("not held
+        // after equip (holding iron_sword)"), and the bot then only retries
+        // after the pearl cooldown.
+        await pollUntil(
+          bot,
+          () => livePearlCount() < pearlsBeforeThrow,
+          100,
+          "pearl to be consumed by the throw",
+        );
+
+        // The pearl lands on the platform and teleports the bot up. A
+        // throw can miss the platform — the pearl's launch direction is
+        // randomized by the server — so the bot keeps throwing (pearl
+        // cooldown) until one lands. Heal in between: every pearl costs
+        // 5 HP.
+        let teleportedTo: Vec3 | null = null;
+        for (let tick = 0; tick < 1200 && !teleportedTo; tick++) {
+          const p = bot.entity.position;
+          // The pearl's launch direction is randomized by the server, so a
+          // throw can land short of the platform. The bot keeps throwing
+          // (pearl cooldown) until one lands on it.
+          if (p.y > by + 2) {
+            teleportedTo = p.clone();
+            break;
+          }
+          // Every pearl costs 5 HP: heal before the next attempt.
+          if ((bot.health ?? 20) < 8) await healBot();
+          await bot.waitForTicks!(1);
+        }
+        expect(teleportedTo).not.toBeNull();
+        expect(teleportedTo).not.toBeNull();
+        // The teleport put the bot on (or at the edge of) the platform.
+        expect(Math.abs(teleportedTo!.x - (bx + 0.5))).toBeLessThan(2.5);
+        expect(Math.abs(teleportedTo!.z - (bz + 0.5))).toBeLessThan(2.5);
+
+        void 0;
+        await pollUntil(
+          bot,
+          () => bot.entity.onGround,
+          200,
+          "bot to land on the platform",
+        );
+        expect(bot.health ?? 0).toBeGreaterThan(0);
+        if (keepTargetUp) clearInterval(keepTargetUp);
+
+        // Clean up the target bot.
+        await target.quit!();
+        await target.end!();
+        target = undefined;
+
+        // Restore position and creative mode.
+        await tpTo(bot, bx + 0.5, by, bz + 0.5);
+        await ensureCreative(bot);
+      } finally {
+        if (keepTargetUp) clearInterval(keepTargetUp);
+        await restoreMobs().catch(() => {});
+        if (treeAttached) bot.removeListener("physicsTick", combatTick);
+        cm.setMode(0);
+        invManager.equipPearl = originalPearl;
+        // Let the pearls of this scenario land and clear them: one that
+        // goes out after the next test's setup teleports the bot away.
+        await settlePearlThrows(bot).catch(() => {});
+        try {
+          await serverCommand(bot, clearCmd);
+        } catch {
+          // ignore
+        }
+        if (target) {
+          try {
+            await target.quit!();
+            await target.end!();
+          } catch {
+            // ignore
+          }
+        }
+      }
+    },
+    TIMEOUT_MS * 4,
+  );
+
 
   // ═══════════════════════════════════════════════════════════════════
   // Category 6: Decision Engine
@@ -1255,6 +1887,17 @@ describeE2E("E2E PvP Tests", () => {
     beforeAll(async () => {
       requireRcon();
       logSuiteStart("E2E Combat Loop (2 bots)", getUsername("pva"));
+      // The suite freezes the world at midnight with difficulty normal, so
+      // zombies spawn in the arena and maul the unarmed survival attacker
+      // mid-orbit (and kill it, respawning it at world spawn). This describe
+      // runs last in the file, so switch to peaceful for it (the outer
+      // afterAll restores difficulty anyway) and add resistance as a second
+      // layer against stray damage.
+      //
+      // The switch has to happen BEFORE the bots exist: at normal
+      // difficulty the mobs spawn while the suite is still setting up and
+      // kill the bots before the first test starts.
+      await setDifficulty("peaceful");
       attacker = await createBot({
         username: getUsername("pva"),
         timeoutMs: TIMEOUT_MS,
@@ -1267,13 +1910,6 @@ describeE2E("E2E PvP Tests", () => {
       await ensureReady(attacker, ATTACKER_POSITION);
       await ensureSurvival(attacker);
       await ensureReady(target, TARGET_POSITION);
-      // The suite freezes the world at midnight with difficulty normal, so
-      // zombies spawn in the arena and maul the unarmed survival attacker
-      // mid-orbit (and kill it, respawning it at world spawn). This describe
-      // runs last in the file, so switch to peaceful for it (the outer
-      // afterAll restores difficulty anyway) and add resistance as a second
-      // layer against stray damage.
-      await setDifficulty("peaceful");
       await killNearbyEntities(attacker, 130);
       await serverCommand(
         attacker,

@@ -331,6 +331,85 @@ describeE2E("E2E Pearl Tests", () => {
   });
 
   // ══════════════════════════════════════════════════════════════════
+  // Weapon / pearl hand conflict
+  // ══════════════════════════════════════════════════════════════════
+
+  describe("weapon equip does not cancel a pearl throw", () => {
+    test(
+      "pearl throw survives a same-tick weapon equip",
+      async () => {
+        // Regression: the combat tree dispatches the weapon branch and the
+        // pearl branch in the same tick, and both want the main hand. The
+        // weapon branch's swap is a queued window operation that lands a
+        // tick or more later — while the pearl is in the hand. The pearl's
+        // own equip is a no-op when the hand already holds a pearl, so
+        // nothing re-asserted the projectile: the hand ended up holding the
+        // sword and the throw aborted with "not held after equip (holding
+        // iron_sword)".
+        await bot.inventoryManager.clearInventory();
+        await bot.waitForTicks!(2);
+
+        await serverCommand(
+          bot,
+          buildServerGiveCmd(bot.username, "iron_sword", { count: 1 }),
+        );
+        await serverCommand(
+          bot,
+          buildServerGiveCmd(bot.username, "ender_pearl", { count: 4 }),
+        );
+        await pollUntil(
+          bot,
+          () =>
+            bot.inventoryManager.getItemCount("ender_pearl") >= 4 &&
+            bot.inventoryManager.getItemCount("iron_sword") >= 1,
+          120,
+          "sword and pearls in inventory",
+        );
+
+        await inSurvival(async () => {
+          const inv = bot.inventoryManager;
+
+          // The hand holds a pearl — the state right after a throw, when
+          // the stack stays in the hand and the sword is only a swap away.
+          const sword = inv.findItem("iron_sword")[0];
+          await bot.equip!(sword, "hand" as any);
+          await bot.waitForTicks!(2);
+          const pearl = inv.findItem("ender_pearl")[0];
+          await bot.equip!(pearl, "hand" as any);
+          await bot.waitForTicks!(2);
+          expect(bot.heldItem?.name).toBe("ender_pearl");
+
+          const targetPos = bot.entity.position.offset(12, 0, 0);
+          const eye = bot.entity.position.offset(
+            0,
+            Constants.PHYSICS.EYE_HEIGHT,
+            0,
+          );
+          const solved = bot.combatManager.getBestPearlOffset(
+            eye,
+            targetPos,
+            "low",
+          );
+          expect(solved).not.toBeNull();
+
+          // Same tick, same order the combat tree used to dispatch them:
+          // the weapon branch queues the sword swap, then the pearl branch
+          // starts the throw.
+          void inv.equipWeapon();
+          await inv.equipPearl(targetPos, solved!.offset);
+
+          // Live inventory read: getItemCount() is cached per bot.time.age.
+          const left = bot.inventory.items()
+            .filter((i) => i.name === "ender_pearl")
+            .reduce((acc, i) => acc + i.count, 0);
+          expect(left).toBeLessThan(4);
+        });
+      },
+      TIMEOUT_MS,
+    );
+  });
+
+  // ══════════════════════════════════════════════════════════════════
   // getProjectileOffset — Pure Calculation Tests
   // ══════════════════════════════════════════════════════════════════
 

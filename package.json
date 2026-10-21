@@ -7,7 +7,7 @@
     "build": "tsc",
     "start": "node dist/src/index.js",
     "test": "node --no-deprecation -r dotenv/config node_modules/jest/bin/jest.js",
-    "test:e2e": "node --no-deprecation -r dotenv/config node_modules/jest/bin/jest.js tests/e2e --runInBand",
+    "test:e2e": "npm run build && node --no-deprecation -r dotenv/config node_modules/jest/bin/jest.js tests/e2e --runInBand",
     "lint": "eslint .",
     "format": "prettier --write ."
   },
